@@ -1,3 +1,4 @@
+/** biome-ignore-all lint/suspicious/noExplicitAny: ignore type safety */
 /**
  * ByCC HTTP 클라이언트 — 프로젝트에 복사해서 사용. 의존성: zod
  * BYCC_URL 환경변수로 서버 주소 설정 (기본: http://localhost:44900)
@@ -55,7 +56,9 @@ export async function generateByCC<T extends z.ZodType | undefined = undefined>(
     try {
       return { ...rest, json: z.parse(returnType, JSON.parse(text)) } as any;
     } catch (e) {
-      throw new Error(`ByCC JSON 파싱/검증 실패: ${(e as Error).message}\nRaw: ${text.slice(0, 200)}`);
+      throw new Error(
+        `ByCC JSON 파싱/검증 실패: ${(e as Error).message}\nRaw: ${text.slice(0, 200)}`,
+      );
     }
   }
 
