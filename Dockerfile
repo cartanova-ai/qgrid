@@ -19,9 +19,7 @@ ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=44900
 
-COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/packages/api ./packages/api
+COPY --from=builder /app /app
 
 EXPOSE 44900
 CMD ["pnpm", "-C", "packages/api", "start"]

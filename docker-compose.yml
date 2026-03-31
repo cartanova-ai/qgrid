@@ -1,18 +1,34 @@
+# ByCC 로컬 개발용 docker-compose
+# 배포 환경에서는 별도 compose 파일을 사용하세요
+#
+# 사용법:
+#   docker compose up -d --build
+#
+# 토큰 등록:
+#   브라우저에서 http://localhost:44900 접속 → Tokens 페이지에서 추가
+#   또는 ~/.bycc/bycc-tokens.json 직접 편집
+#
+# macOS에서는 host.docker.internal로 호스트의 postgres에 접속합니다
+# Linux에서는 DB_HOST=localhost + network_mode: host 사용
+
 services:
   bycc:
     build: .
     ports:
       - "44900:44900"
     volumes:
+      # 토큰 파일을 호스트에서 읽기 전용으로 마운트
       - ~/.bycc:/root/.bycc:ro
     environment:
-      NODE_ENV: production
+      NODE_ENV: development
       HOST: "0.0.0.0"
       PORT: "44900"
-      # DB는 사용하지 않지만 Sonamu 시작 시 연결 필수입니다
-      # 팀 공용 postgres 또는 로컬 postgres 주소를 지정
-      DB_HOST: ${DB_HOST:-localhost}
-      DB_PORT: ${DB_PORT:-5432}
+      LR: remote
+      # ByCC는 DB를 사용하지 않지만 Sonamu 프레임워크가 시작 시 연결을 필수로 요구합니다
+      # 팀 공용 postgres에 빈 DB(bycc)를 만들어 연결하면 됩니다
+      # .env 파일이나 환경변수로 오버라이드 가능
+      DB_HOST: ${DB_HOST:-host.docker.internal} # macOS: host.docker.internal, Linux: localhost
+      DB_PORT: ${DB_PORT:-5444}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-1234}
       DB_NAME: ${DB_NAME:-bycc}
