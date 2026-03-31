@@ -1,0 +1,52 @@
+# @generated
+# 직접 수정하지 마세요.
+
+POST {{baseUrl}}/api/bycc/query
+Content-Type: application/json
+
+{
+  "prompt": "PROMPT",
+  "system": "SYSTEM",
+  "timeout": 0
+}
+
+###
+
+GET {{baseUrl}}/api/bycc/stats
+	?
+Content-Type: application/json
+
+###
+
+POST {{baseUrl}}/api/bycc/addToken
+Content-Type: application/json
+
+{
+  "token": "TOKEN"
+}
+
+###
+
+POST {{baseUrl}}/api/bycc/updateToken
+Content-Type: application/json
+
+{
+  "masked": "MASKED",
+  "name": "NAME",
+  "token": "TOKEN"
+}
+
+###
+
+POST {{baseUrl}}/api/bycc/removeToken
+Content-Type: application/json
+
+{
+  "masked": "MASKED"
+}
+
+###
+
+GET {{baseUrl}}/api/bycc/health
+	?
+Content-Type: application/json

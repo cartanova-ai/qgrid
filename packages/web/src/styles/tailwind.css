@@ -9,3 +9,33 @@
 
 /* node_modules 내의 react-components 패키지 */
 @source "../../node_modules/@sonamu-kit/react-components/dist/**/*.js";
+
+/* SocratsAI Design System — Custom Palette */
+@theme {
+  --color-sand-50: #F6F3EE;
+  --color-sand-100: #F0ECE4;
+  --color-sand-200: #E3DACC;
+  --color-sand-300: #D4C9B8;
+  --color-sand-400: #BFB5A3;
+  --color-sand-500: #9E9688;
+  --color-sand-600: #786F63;
+  --color-sand-700: #564E44;
+  --color-sand-800: #3D362F;
+  --color-sand-900: #2C2418;
+
+  --color-sienna-50: #F5EDE6;
+  --color-sienna-100: #F0E2D7;
+  --color-sienna-200: #E8CCBA;
+  --color-sienna-300: #DBB09A;
+  --color-sienna-400: #D97757;
+  --color-sienna-500: #C4643D;
+  --color-sienna-600: #A84E2E;
+  --color-sienna-700: #7E3A22;
+
+  --color-sage-50: #EFF1EA;
+  --color-sage-100: #E4E8DB;
+  --color-sage-300: #B3BFA0;
+  --color-sage-400: #788C5D;
+  --color-sage-500: #637549;
+  --color-sage-600: #4D5B39;
+}

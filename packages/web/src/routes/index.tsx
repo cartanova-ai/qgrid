@@ -1,21 +1,19 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { HealthCard } from "@/components/bycc/HealthCard";
+import { ByccService } from "@/services/services.generated";
 
 export const Route = createFileRoute("/")({
-  component: HomePage,
+  component: Dashboard,
 });
 
-function HomePage() {
-  return (
-    <div>
-      <h1 className="text-2xl font-bold mb-4">Welcome to Sonamu</h1>
-      <p className="text-gray-600">Start building your application.</p>
+function Dashboard() {
+  const { data, isLoading, isError } = ByccService.useHealth();
 
-      {/* TODO: 사용자용 콘텐츠 추가 */}
-      <div className="mt-8">
-        <p className="text-sm text-gray-500">
-          This is the user-facing home page. Customize it as needed.
-        </p>
-      </div>
+  return (
+    <div className="space-y-5 max-w-300 mx-auto -translate-x-4">
+      <h1 className="text-xl font-medium text-sand-900 tracking-tight">Dashboard</h1>
+
+      <HealthCard data={data} isLoading={isLoading} isError={isError} />
     </div>
   );
 }
