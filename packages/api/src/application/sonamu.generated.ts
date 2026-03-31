@@ -7,4 +7,3 @@
 /** biome-ignore-all format: generated는 무시 */
 
 import {  } from "sonamu";
-import { z } from 'zod';
