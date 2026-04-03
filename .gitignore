@@ -62,8 +62,8 @@ Thumbs.db
 # Slack Confirm
 .slack-confirm-*
 
-# Tokens (sensitive)
-bycc-tokens.json
+# Tokens & usage data (sensitive)
+data/
 
 # Claude
 .claude/skills/sonamu
