@@ -6,7 +6,7 @@
 #
 # 토큰 등록:
 #   브라우저에서 http://localhost:44900 접속 → Tokens 페이지에서 추가
-#   또는 ~/.bycc/bycc-tokens.json 직접 편집
+#   또는 data/bycc-tokens.json 직접 편집
 #
 # macOS에서는 host.docker.internal로 호스트의 postgres에 접속합니다
 # Linux에서는 DB_HOST=localhost + network_mode: host 사용
@@ -18,7 +18,7 @@ services:
       - "44900:44900"
     volumes:
       # 토큰 + 사용량 파일 (bycc-tokens.json, bycc-usage.json)
-      - ~/.bycc:/root/.bycc
+      - ./data:/app/data
     environment:
       NODE_ENV: development
       HOST: "0.0.0.0"

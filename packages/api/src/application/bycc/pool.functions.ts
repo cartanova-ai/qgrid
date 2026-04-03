@@ -5,7 +5,7 @@
  * - Map<token, Worker[]>로 토큰별 워커 관리 (원본 토큰이 키)
  * - least-queue-depth 라우팅
  * - 투명한 쿼터 failover (QuotaError 시 다른 토큰으로 자동 재시도)
- * - 토큰 파일(~/.bycc/bycc-tokens.json) 영속성까지 책임
+ * - 토큰 파일(data/bycc-tokens.json) 영속성까지 책임
  */
 import type { CliResult, PoolConfig, QueryInput, TokenStats } from "./bycc.types";
 import { QuotaError } from "./bycc.types";
