@@ -4,21 +4,6 @@
 #   브라우저에서 http://localhost:44900 접속 → "Login with Claude" 또는 Tokens 페이지에서 추가
 
 services:
-  db:
-    image: postgres:18
-    ports:
-      - "${DB_PORT:-5444}:5432"
-    environment:
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-1234}
-    volumes:
-      - ./packages/api/database/fixtures:/docker-entrypoint-initdb.d
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 3s
-      timeout: 3s
-      retries: 10
-
   bycc:
     build: .
     ports:
@@ -30,12 +15,9 @@ services:
       HOST: "0.0.0.0"
       PORT: "44900"
       LR: remote
-      DB_HOST: db
-      DB_PORT: "5432"
+      DB_HOST: host.docker.internal
+      DB_PORT: ${DB_PORT:-5444}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-1234}
       DB_NAME: ${DB_NAME:-bycc}
-    depends_on:
-      db:
-        condition: service_healthy
     restart: unless-stopped
