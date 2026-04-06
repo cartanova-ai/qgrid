@@ -69,6 +69,7 @@ class ClaudePool {
 
     if (candidates.length === 0) return null;
 
+    // 햔제 찰; 증 + 대기 큐 합계가 가장 적은 워커에 배정
     return candidates.reduce((best, w) => (w.getQueueDepth() < best.getQueueDepth() ? w : best));
   }
 
