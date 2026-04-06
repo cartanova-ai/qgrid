@@ -4,9 +4,9 @@ Anthropic API 키(토큰 과금) 대신 **구독 정액제 크레딧**으로 LLM
 
 ---
 
-## 수동 SDK
+## SDK
 
-`packages/api/src/sdk/bycc.ts`를 프로젝트에 복사해서 사용합니다. (의존성: `zod`)
+`packages/api/src/sdk/@bycc/index.ts`를 프로젝트에 복사해서 사용합니다. (의존성: `zod`)
 
 ```typescript
 import { generateByCC } from "./bycc";
@@ -30,47 +30,30 @@ json.questions // string[]
 
 ## 시작하기
 
-### 1. 클론 + 설치
+### Docker (권장)
 
 ```bash
 git clone git@github.com:CartaNova-AI/ByCC.git
 cd ByCC
-pnpm install
-```
-
-### 2. 토큰 발급
-
-각 팀원이 자기 Claude Max/Team 계정에서 long-lived 토큰 발급:
-
-```bash
-claude setup-token
-```
-
-### 3. DB 준비
-
-ByCC는 요청 로그를 PostgreSQL에 저장합니다. DB 구조가 필요합니다:
-
-```bash
-cd packages/api
-bash database/init.sh
-```
-
-이 스크립트가 `bycc`, `bycc_fixture`, `bycc_test` 3개 DB를 생성합니다.
-기본 설정: `localhost:5444`, user: `postgres`, password: `1234` (`.env`에서 변경)
-
-### 4. 서버 시작
-
-```bash
-# 개발 모드
-pnpm -C packages/api sonamu dev
-
-# Docker
 docker compose up -d --build
 ```
 
-### 5. 토큰 등록
+PostgreSQL + ByCC 서버가 시작됩니다. DB 생성은 자동.
 
-브라우저에서 `http://localhost:44900` 접속 → Tokens 페이지에서 추가.
+### 로컬 개발
+
+```bash
+pnpm install
+cp packages/api/.env.example packages/api/.env  # DB 설정 수정
+bash packages/api/database/fixtures/init.sh      # DB 3개 생성 (bycc, bycc_fixture, bycc_test)
+pnpm -C packages/api sonamu dev
+```
+
+### 토큰 등록
+
+브라우저에서 `http://localhost:44900` 접속 → **"Login with Claude"** 로 OAuth 로그인 (권장)
+
+또는 수동: Tokens 페이지 → Add Token → `claude setup-token`으로 발급한 토큰 붙여넣기
 
 ---
 
@@ -82,7 +65,7 @@ docker compose up -d --build
   res: { text, usage, durationMs, costUsd }
 
 ByCC 서버
-  ├── ClaudePool (멀티 토큰 프로세스 풀) (N개 지원 예정)
+  ├── ClaudePool (멀티 토큰 프로세스 풀)
   │     ├── Worker A-0 (token=계정A) → claude CLI 프로세스
   │     ├── Worker A-1 (token=계정A) → claude CLI 프로세스
   │     ├── Worker B-0 (token=계정B) → claude CLI 프로세스
@@ -90,49 +73,41 @@ ByCC 서버
   └── PostgreSQL → request_logs 테이블 (요청별 토큰 상세 기록)
 ```
 
-- N개 계정 토큰을 등록하면 쿼터를 풀링
-- 가장 여유있는 워커에 요청을 배정 (least-queue-depth)
-- 한 토큰이 쿼터 소진되면 자동으로 다른 토큰으로 failover (호출자는 모름)
+- N개 계정 토큰 등록 → 쿼터 풀링
+- least-queue-depth 라우팅 (가장 여유있는 워커에 배정)
+- 쿼터 소진 시 자동 failover (호출자는 모름)
 - 프로세스당 500콜 후 자동 재시작 (1M 컨텍스트 한계 방지)
 - 매 요청의 토큰 사용량(input/output/cache read/cache write)을 DB에 기록
 
 ## 대시보드
 
-`http://localhost:44900` 접속 시 대시보드 확인 가능:
+`http://localhost:44900` 접속:
 
 - **Service Health** — 서비스 상태, 워커 수, 활성 토큰 수
+- **Usage** — 토큰별 5시간/7일 쿼터 사용률 (Anthropic API 실시간 조회, OAuth 토큰 필요)
 - **Request Log** — 요청별 query, input/output/cache 토큰, cache hit rate
-- **Request Detail** — 상세 페이지에서 전체 prompt + response + 토큰 breakdown
+- **Request Detail** — 전체 prompt + response + 토큰 breakdown
 
----
+## API
 
-## 배포
-
-앱의 docker-compose에 bycc 서비스를 추가:
-
-```yaml
-services:
-  api:
-    environment:
-      BYCC_URL: http://bycc:44900
-
-  bycc:
-    build: ./ByCC
-    volumes:
-      - ./data:/app/data
-    environment:
-      DB_HOST: your-postgres-host
-      DB_PORT: 5432
-      DB_USER: postgres
-      DB_PASSWORD: your-password
-      DB_NAME: bycc
-```
+| 엔드포인트 | 메서드 | 설명 |
+|---|---|---|
+| `/api/bycc/query` | POST | LLM 쿼리 (prompt, system?, timeout?) |
+| `/api/bycc/stats` | GET | 토큰별 상태 |
+| `/api/bycc/addToken` | POST | 토큰 추가 (수동) |
+| `/api/bycc/updateToken` | POST | 토큰 수정 |
+| `/api/bycc/removeToken` | POST | 토큰 제거 |
+| `/api/bycc/oauthLogin` | POST | OAuth 로그인 (브라우저) |
+| `/api/bycc/usage` | GET | 쿼터 사용률 (tokenName?) |
+| `/api/bycc/health` | GET | 헬스체크 |
+| `/api/requestLog/findMany` | GET | 요청 로그 목록 |
+| `/api/requestLog/findById` | GET | 요청 로그 상세 |
 
 ---
 
 ## 주의사항
 
-- **쿼터 리셋**: Claude Max 5시간 rolling window. 소진된 토큰은 웹 UI에서 수동 재활성화
+- **쿼터 리셋**: Claude 5시간 rolling window. 소진된 토큰은 자동 failover
 - **PostgreSQL 필수**: 요청 로그 저장 + Sonamu 프레임워크 시작 시 DB 연결 필수
 - **토큰 파일**: `data/bycc-tokens.json`에 저장 (`.gitignore` 처리됨)
-- **macOS Docker**: `DB_HOST`가 기본 `host.docker.internal` (호스트 머신의 localhost를 가리킴). Linux에서는 `network_mode: host` 사용
+- **OAuth 토큰**: 8시간 만료, 자동 refresh. Usage API 조회에는 OAuth 토큰 필요 (setup-token으로는 불가)
