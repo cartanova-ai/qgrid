@@ -30,6 +30,7 @@
       "length": 100
     },
     { "name": "query", "type": "string", "desc": "prompt 전문" },
+    { "name": "response", "desc": "llm 응답 전문", "type": "string" },
     { "name": "input_tokens", "type": "integer", "desc": "입력 토큰" },
     { "name": "output_tokens", "type": "integer", "desc": "출력 토큰" },
     { "name": "cache_read_tokens", "type": "integer", "desc": "캐시 읽기 토큰" },
@@ -44,6 +45,7 @@
         "created_at",
         "token_name",
         "query",
+        "response",
         "input_tokens",
         "output_tokens",
         "cache_read_tokens",

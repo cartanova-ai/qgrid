@@ -13,6 +13,7 @@ export const requestLogSubsetQueries = {
       created_at: "request_logs.created_at",
       token_name: "request_logs.token_name",
       query: "request_logs.query",
+      response: "request_logs.response",
       input_tokens: "request_logs.input_tokens",
       output_tokens: "request_logs.output_tokens",
       cache_read_tokens: "request_logs.cache_read_tokens",

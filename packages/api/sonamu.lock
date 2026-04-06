@@ -1,7 +1,7 @@
 [
   {
     "path": "src/application/bycc/bycc.frame.ts",
-    "checksum": "66e78b14c661381d7f58882a88112e0af52049e2"
+    "checksum": "4818304a785aedc2e50b8cc333f97eddb7a2dcb4"
   },
   {
     "path": "src/application/bycc/bycc.types.ts",
@@ -21,7 +21,7 @@
   },
   {
     "path": "src/application/request-log/request-log.entity.json",
-    "checksum": "5af216218f8d1008ed4158e33f27001f10723365"
+    "checksum": "cccfa25b235e9bb78e09ebe93594f8809dc812ef"
   },
   {
     "path": "src/application/request-log/request-log.model.ts",
@@ -33,7 +33,7 @@
   },
   {
     "path": "src/application/sonamu.generated.ts",
-    "checksum": "c7faefd6b1644d0fb6408bcdf602cfb31c4d560e"
+    "checksum": "053c88eee9ef73591e57d97cb92981f022b9886a"
   },
   {
     "path": "src/i18n/en.ts",
@@ -45,7 +45,7 @@
   },
   {
     "path": "src/i18n/sd.generated.ts",
-    "checksum": "bb089664c5f9a117490e514f7067292100ce33ed"
+    "checksum": "429462d871e4fe63166d9134a67a5ab91e6a41b2"
   },
   {
     "path": "src/sonamu.config.ts",

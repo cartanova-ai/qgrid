@@ -28,6 +28,7 @@ class ByccFrameClass extends BaseFrameClass {
       {
         token_name: tokenEntry?.name ?? "Unknown",
         query: system ? `[System]\n${system}\n\n[User]\n${prompt}` : prompt,
+        response: result.text,
         input_tokens: result.usage.input_tokens,
         output_tokens: result.usage.output_tokens,
         cache_read_tokens: result.usage.cache_read_input_tokens,

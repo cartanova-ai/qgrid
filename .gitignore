@@ -3,6 +3,8 @@ node_modules/
 
 docs/
 
+.claude
+
 # Production builds
 dist/
 web-dist/

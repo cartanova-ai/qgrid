@@ -84,6 +84,20 @@ function RequestDetail({ id }: { id: number }) {
         </div>
       </div>
 
+      {/* Response */}
+      {data.response && (
+        <div>
+          <span className="text-[10px] uppercase tracking-wider text-sand-500 font-medium">
+            Response
+          </span>
+          <div className="mt-1.5 rounded-lg bg-sand-50 px-4 py-3">
+            <pre className="text-sm text-sand-800 whitespace-pre-wrap break-words font-mono leading-relaxed">
+              {data.response}
+            </pre>
+          </div>
+        </div>
+      )}
+
       {/* Token Breakdown */}
       <div>
         <span className="text-[10px] uppercase tracking-wider text-sand-500 font-medium">

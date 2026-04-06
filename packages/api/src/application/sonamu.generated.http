@@ -33,6 +33,7 @@ Content-Type: application/json
       "created_at": "2000-01-01",
       "token_name": "TOKEN_NAME",
       "query": "QUERY",
+      "response": "RESPONSE",
       "input_tokens": 0,
       "output_tokens": 0,
       "cache_read_tokens": 0,
