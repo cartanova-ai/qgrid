@@ -27,7 +27,7 @@ services:
       # ByCC는 DB를 사용하지 않지만 Sonamu 프레임워크가 시작 시 연결을 필수로 요구합니다
       # 팀 공용 postgres에 빈 DB(bycc)를 만들어 연결하면 됩니다
       # .env 파일이나 환경변수로 오버라이드 가능
-      DB_HOST: ${DB_HOST:-host.docker.internal} # macOS: host.docker.internal, Linux: localhost
+      DB_HOST: ${DB_HOST} # macOS: host.docker.internal, Linux: localhost
       DB_PORT: ${DB_PORT:-5444}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-1234}
