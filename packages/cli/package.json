@@ -1,0 +1,24 @@
+{
+  "name": "@qgrid/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "qgrid": "./dist/cli.js"
+  },
+  "files": ["dist", "bundle"],
+  "scripts": {
+    "bundle": "cd ../api && pnpm build && cd ../cli && mkdir -p bundle && cp -r ../api/dist ./bundle/dist && cp -r ../api/web-dist ./bundle/web-dist",
+    "build": "tsup",
+    "prepublishOnly": "pnpm run bundle && pnpm run build"
+  },
+  "dependencies": {
+    "commander": "^13.0.0"
+  },
+  "devDependencies": {
+    "tsup": "catalog:",
+    "typescript": "catalog:"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -5,9 +5,8 @@
  * - Map<token, Worker[]>로 토큰별 워커 관리 (원본 토큰이 키)
  * - least-queue-depth 라우팅
  * - 투명한 쿼터 failover (QuotaError 시 다른 토큰으로 자동 재시도)
- * - DB(tokens 테이블) 기반 토큰 관리
+ * - 워커 관리만 담당 (DB 의존 없음)
  */
-import { TokenModel } from "../token/token.model";
 import type { CliResult, PoolConfig, QueryInput, TokenStats } from "./bycc.types";
 import { QuotaError } from "./bycc.types";
 import { Worker, type WorkerConfig } from "./worker.functions";
@@ -35,25 +34,10 @@ class ClaudePool {
     });
   }
 
-  async addToken(token: string, name?: string): Promise<void> {
-    await TokenModel.save([{ token, name, active: true }]);
-    this.createWorkers(token);
-  }
-
-  async removeToken(token: string): Promise<boolean> {
-    if (!this.workers.has(token)) return false;
-
-    const entry = await TokenModel.findByToken("A", token);
-    if (entry) await TokenModel.del([entry.id]);
-    this.destroyWorkers(token);
-    return true;
-  }
-
-  async getStats(): Promise<TokenStats[]> {
-    const entries = await TokenModel.findActive("A");
+  getStats(tokenNames?: Map<string, string | null>): TokenStats[] {
     return [...this.workers.keys()].map((token) => ({
       token,
-      name: entries.find((e) => e.token === token)?.name ?? undefined,
+      name: tokenNames?.get(token) ?? undefined,
       requests: this.requestCounts.get(token) ?? 0,
       active: !this.quotaExhausted.has(token),
     }));
@@ -66,7 +50,6 @@ class ClaudePool {
 
     if (candidates.length === 0) return null;
 
-    // 햔제 찰; 증 + 대기 큐 합계가 가장 적은 워커에 배정
     return candidates.reduce((best, w) => (w.getQueueDepth() < best.getQueueDepth() ? w : best));
   }
 
@@ -135,24 +118,15 @@ class ClaudePool {
   }
 }
 
-// DB에서 인증토큰 로드
+// Pool 싱글턴 관리
 let pool: ClaudePool | null = null;
-let initPromise: Promise<ClaudePool> | null = null;
 
-export async function initPool(): Promise<ClaudePool> {
-  const entries = await TokenModel.findActive("A");
-  const tokens = entries.map((e) => e.token);
+export function initPool(tokens: string[]): ClaudePool {
   pool = new ClaudePool({ tokens });
   return pool;
 }
 
-export async function getPool(): Promise<ClaudePool> {
-  if (pool) return pool;
-  if (!initPromise) {
-    initPromise = initPool().catch((e) => {
-      initPromise = null;
-      throw e;
-    });
-  }
-  return initPromise;
+export function getPool(): ClaudePool {
+  if (!pool) throw new Error("Pool not initialized. Call initPool() first.");
+  return pool;
 }

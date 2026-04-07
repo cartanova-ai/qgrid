@@ -191,7 +191,10 @@ export default defineConfig({
       onStart: async () => {
         const { initPool } = await import("./application/bycc/pool.functions");
         try {
-          const pool = await initPool();
+          const { TokenModel } = await import("./application/token/token.model");
+          const entries = await TokenModel.findActive("A");
+          const tokens = entries.map((e) => e.token);
+          const pool = initPool(tokens);
           console.log(
             `🌲 Server listening on http://${host}:${port} (${pool.workers.size} tokens loaded)`,
           );
@@ -199,6 +202,7 @@ export default defineConfig({
           console.warn(
             `⚠️ Pool init failed (tokens table may not exist yet): ${(e as Error).message}`,
           );
+          initPool([]);
           console.log(`🌲 Server listening on http://${host}:${port} (no tokens)`);
         }
       },

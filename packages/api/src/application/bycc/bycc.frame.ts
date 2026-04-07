@@ -39,7 +39,7 @@ class ByccFrameClass extends BaseFrameClass {
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async query(prompt: string, system?: string, timeout?: number): Promise<CliResult> {
-    const pool = await getPool();
+    const pool = getPool();
     const result = await pool.query({ system, prompt }, timeout);
 
     // 로그 기록 실패해도 쿼리 결과는 반환
@@ -65,14 +65,16 @@ class ByccFrameClass extends BaseFrameClass {
 
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
   async stats(): Promise<TokenStats[]> {
-    const pool = await getPool();
-    return pool.getStats();
+    const pool = getPool();
+    const entries = await TokenModel.findActive("A");
+    const tokenNames = new Map(entries.map((e) => [e.token, e.name]));
+    return pool.getStats(tokenNames);
   }
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async addToken(token: string, name?: string): Promise<{ added: boolean }> {
-    const pool = await getPool();
-    await pool.addToken(token, name);
+    await TokenModel.save([{ token, name }]);
+    getPool().createWorkers(token);
     return { added: true };
   }
 
@@ -82,7 +84,7 @@ class ByccFrameClass extends BaseFrameClass {
     name?: string,
     newToken?: string,
   ): Promise<{ updated: boolean }> {
-    const pool = await getPool();
+    const pool = getPool();
     const entry = await TokenModel.findByToken("A", token);
     if (!entry) return { updated: false };
 
@@ -103,15 +105,19 @@ class ByccFrameClass extends BaseFrameClass {
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async removeToken(token: string): Promise<{ removed: boolean }> {
-    const pool = await getPool();
-    const removed = await pool.removeToken(token);
-    return { removed };
+    const pool = getPool();
+    if (!pool.workers.has(token)) return { removed: false };
+
+    const entry = await TokenModel.findByToken("A", token);
+    if (entry) await TokenModel.del([entry.id]);
+    pool.destroyWorkers(token);
+    return { removed: true };
   }
 
   // OAuth 로그인 — 임시 콜백 서버를 띄우고 auth URL 반환
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async oauthLogin(name: string): Promise<OAuthLoginResult> {
-    const pool = await getPool();
+    const pool = getPool();
     const { codeVerifier, codeChallenge, state } = generatePKCE();
 
     // 임시 콜백 서버
@@ -186,7 +192,7 @@ class ByccFrameClass extends BaseFrameClass {
   // 토큰 사용량 조회 (OAuth usage API)
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
   async usage(tokenName?: string): Promise<UsageResponse> {
-    const pool = await getPool();
+    const pool = getPool();
     const allTokens = await TokenModel.findActive("A");
     const entry = tokenName
       ? allTokens.find((e) => e.name === tokenName && e.refresh_token)
@@ -219,7 +225,7 @@ class ByccFrameClass extends BaseFrameClass {
 
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
   async health(): Promise<HealthResponse> {
-    const pool = await getPool();
+    const pool = getPool();
     return {
       status: "ok",
       workers: [...pool.workers.values()].flat().length,
