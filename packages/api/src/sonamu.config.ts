@@ -188,8 +188,19 @@ export default defineConfig({
       prefix: "",
     },
     lifecycle: {
-      onStart: () => {
-        console.log(`🌲 Server listening on http://${host}:${port}`);
+      onStart: async () => {
+        const { initPool } = await import("./application/bycc/pool.functions");
+        try {
+          const pool = await initPool();
+          console.log(
+            `🌲 Server listening on http://${host}:${port} (${pool.workers.size} tokens loaded)`,
+          );
+        } catch (e) {
+          console.warn(
+            `⚠️ Pool init failed (tokens table may not exist yet): ${(e as Error).message}`,
+          );
+          console.log(`🌲 Server listening on http://${host}:${port} (no tokens)`);
+        }
       },
       onShutdown: () => {
         console.log("graceful shutdown");

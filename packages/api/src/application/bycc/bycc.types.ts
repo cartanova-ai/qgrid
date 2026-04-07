@@ -95,7 +95,6 @@ export const HealthResponse = z.object({
   status: z.string(),
   workers: z.number(),
   activeTokens: z.number(),
-  tokenDir: z.string(),
 });
 export type HealthResponse = z.infer<typeof HealthResponse>;
 

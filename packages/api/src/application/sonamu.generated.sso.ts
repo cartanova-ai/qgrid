@@ -3,7 +3,12 @@
  * 직접 수정하지 마세요.
  */
 import type { DatabaseSchemaExtend, PuriLoaderQueries, PuriWrapper } from "sonamu";
-import type { RequestLogBaseSchema, RequestLogSubsetKey } from "./sonamu.generated";
+import type {
+  RequestLogBaseSchema,
+  RequestLogSubsetKey,
+  TokenBaseSchema,
+  TokenSubsetKey,
+} from "./sonamu.generated";
 
 // SubsetQuery: RequestLog
 export const requestLogSubsetQueries = {
@@ -28,10 +33,32 @@ export const requestLogLoaderQueries = {
   A: [],
 } as const satisfies PuriLoaderQueries<RequestLogSubsetKey>;
 
+// SubsetQuery: Token
+export const tokenSubsetQueries = {
+  A: (qbWrapper: PuriWrapper<DatabaseSchemaExtend>) => {
+    return qbWrapper.from("tokens").select({
+      id: "tokens.id",
+      created_at: "tokens.created_at",
+      token: "tokens.token",
+      name: "tokens.name",
+      refresh_token: "tokens.refresh_token",
+      expires_at: "tokens.expires_at",
+      account_uuid: "tokens.account_uuid",
+      active: "tokens.active",
+    });
+  },
+};
+
+// LoaderQuery: Token
+export const tokenLoaderQueries = {
+  A: [],
+} as const satisfies PuriLoaderQueries<TokenSubsetKey>;
+
 // DatabaseSchema
 declare module "sonamu" {
   export interface DatabaseSchemaExtend {
     request_logs: RequestLogBaseSchema;
+    tokens: TokenBaseSchema;
   }
 
   export interface DatabaseForeignKeys {}

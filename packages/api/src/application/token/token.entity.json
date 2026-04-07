@@ -1,0 +1,76 @@
+{
+  "id": "Token",
+  "table": "tokens",
+  "title": "Token",
+  "props": [
+    {
+      "name": "id",
+      "type": "integer",
+      "desc": "ID"
+    },
+    {
+      "name": "created_at",
+      "type": "date",
+      "desc": "등록일시",
+      "dbDefault": "CURRENT_TIMESTAMP"
+    },
+    {
+      "name": "token",
+      "type": "string",
+      "desc": "access_token"
+    },
+    {
+      "name": "name",
+      "type": "string",
+      "nullable": true,
+      "desc": "토큰 이름"
+    },
+    {
+      "name": "refresh_token",
+      "type": "string",
+      "nullable": true,
+      "desc": "refresh_token"
+    },
+    {
+      "name": "expires_at",
+      "type": "bigInteger",
+      "nullable": true,
+      "desc": "만료 시각 (epoch ms)"
+    },
+    {
+      "name": "account_uuid",
+      "type": "string",
+      "nullable": true,
+      "desc": "Anthropic 계정 UUID"
+    },
+    {
+      "name": "active",
+      "type": "boolean",
+      "desc": "활성 여부",
+      "dbDefault": "true"
+    }
+  ],
+  "indexes": [],
+  "subsets": {
+    "A": {
+      "fields": [
+        "id",
+        "created_at",
+        "token",
+        "name",
+        "refresh_token",
+        "expires_at",
+        "account_uuid",
+        "active"
+      ]
+    }
+  },
+  "enums": {
+    "TokenOrderBy": {
+      "values": { "id-desc": "ID최신순" }
+    },
+    "TokenSearchField": {
+      "values": { "id": "ID", "name": "이름" }
+    }
+  }
+}

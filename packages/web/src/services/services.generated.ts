@@ -22,7 +22,12 @@ import {
   UsageResponse,
 } from "./bycc/bycc.types";
 import { RequestLogListParams, RequestLogSaveParams } from "./request-log/request-log.types";
-import { RequestLogSubsetKey, RequestLogSubsetMapping } from "./sonamu.generated";
+import {
+  RequestLogSubsetKey,
+  RequestLogSubsetMapping,
+  TokenSubsetKey,
+  TokenSubsetMapping,
+} from "./sonamu.generated";
 import {
   type EventHandlers,
   type FilterQuery,
@@ -32,6 +37,90 @@ import {
   toFormData,
   useSSEStream,
 } from "./sonamu.shared";
+import { TokenListParams, TokenSaveParams } from "./token/token.types";
+
+export namespace TokenService {
+  export async function getToken<T extends TokenSubsetKey>(
+    subset: T,
+    id: number,
+  ): Promise<TokenSubsetMapping[T]> {
+    return fetch({
+      method: "GET",
+      url: `/api/token/findById?${qs.stringify({ subset, id })}`,
+    });
+  }
+
+  export const getTokenQueryOptions = <T extends TokenSubsetKey>(subset: T, id: number) =>
+    queryOptions({
+      queryKey: ["Token", "getToken", subset, id],
+      queryFn: () => getToken(subset, id),
+    });
+
+  export const useToken = <T extends TokenSubsetKey>(
+    subset: T,
+    id: number,
+    options?: { enabled?: boolean },
+  ) =>
+    useQuery({
+      ...getTokenQueryOptions(subset, id),
+      ...options,
+    });
+
+  export async function getTokens<T extends TokenSubsetKey, LP extends TokenListParams>(
+    subset: T,
+    rawParams?: LP,
+  ): Promise<ListResult<LP, TokenSubsetMapping[T]>> {
+    return fetch({
+      method: "GET",
+      url: `/api/token/findMany?${qs.stringify({ subset, rawParams })}`,
+    });
+  }
+
+  export const getTokensQueryOptions = <T extends TokenSubsetKey, LP extends TokenListParams>(
+    subset: T,
+    rawParams?: LP,
+  ) =>
+    queryOptions({
+      queryKey: ["Token", "getTokens", subset, rawParams],
+      queryFn: () => getTokens(subset, rawParams),
+    });
+
+  export const useTokens = <T extends TokenSubsetKey, LP extends TokenListParams>(
+    subset: T,
+    rawParams?: LP,
+    options?: { enabled?: boolean },
+  ) =>
+    useQuery({
+      ...getTokensQueryOptions(subset, rawParams),
+      ...options,
+    });
+
+  export async function save(spa: TokenSaveParams[]): Promise<number[]> {
+    return fetch({
+      method: "POST",
+      url: `/api/token/save`,
+      data: { spa },
+    });
+  }
+
+  export const useSaveMutation = () =>
+    useMutation({
+      mutationFn: (params: { spa: TokenSaveParams[] }) => save(params.spa),
+    });
+
+  export async function del(ids: number[]): Promise<number> {
+    return fetch({
+      method: "POST",
+      url: `/api/token/del`,
+      data: { ids },
+    });
+  }
+
+  export const useDelMutation = () =>
+    useMutation({
+      mutationFn: (params: { ids: number[] }) => del(params.ids),
+    });
+}
 
 export namespace RequestLogService {
   export async function getRequestLog<T extends RequestLogSubsetKey>(
@@ -261,4 +350,14 @@ export const RequestLogAsyncIdConfig: AsyncIdConfig<
 > = {
   placeholderKey: "entity.RequestLog",
   useList: RequestLogService.useRequestLogs,
+};
+
+// AsyncIdConfig: Token
+export const TokenAsyncIdConfig: AsyncIdConfig<
+  TokenSubsetKey,
+  TokenSubsetMapping,
+  TokenListParams
+> = {
+  placeholderKey: "entity.Token",
+  useList: TokenService.useTokens,
 };

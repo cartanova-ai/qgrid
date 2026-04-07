@@ -18,7 +18,19 @@ function createSSRQuery(
 }
 
 import { RequestLogListParams } from "./request-log/request-log.types";
-import { RequestLogSubsetKey } from "./sonamu.generated";
+import { RequestLogSubsetKey, TokenSubsetKey } from "./sonamu.generated";
+import { TokenListParams } from "./token/token.types";
+
+export namespace TokenService {
+  export const getToken = <T extends TokenSubsetKey>(subset: T, id: number): SSRQuery =>
+    createSSRQuery("TokenModel", "findById", [subset, id], ["Token", "getToken"]);
+
+  export const getTokens = <T extends TokenSubsetKey, LP extends TokenListParams>(
+    subset: T,
+    rawParams?: LP,
+  ): SSRQuery =>
+    createSSRQuery("TokenModel", "findMany", [subset, rawParams], ["Token", "getTokens"]);
+}
 
 export namespace RequestLogService {
   export const getRequestLog = <T extends RequestLogSubsetKey>(subset: T, id: number): SSRQuery =>

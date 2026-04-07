@@ -1,6 +1,58 @@
 # @generated
 # 직접 수정하지 마세요.
 
+GET {{baseUrl}}/api/token/findById
+	?subset=A
+	&id=0
+Content-Type: application/json
+
+###
+
+GET {{baseUrl}}/api/token/findMany
+	?subset=A
+	&rawParams[num]=24
+	&rawParams[page]=1
+	&rawParams[search]=id
+	&rawParams[keyword]=KEYWORD
+	&rawParams[orderBy]=id-desc
+	&rawParams[queryMode]=both
+	&rawParams[id]=0
+	&rawParams[sonamuFilter]=unknown-custom
+Content-Type: application/json
+
+###
+
+POST {{baseUrl}}/api/token/save
+Content-Type: application/json
+
+{
+  "spa": [
+    {
+      "id": 0,
+      "created_at": "2000-01-01",
+      "token": "TOKEN",
+      "name": null,
+      "refresh_token": null,
+      "expires_at": null,
+      "account_uuid": null,
+      "active": false
+    }
+  ]
+}
+
+###
+
+POST {{baseUrl}}/api/token/del
+Content-Type: application/json
+
+{
+  "ids": [
+    0
+  ]
+}
+
+###
+
 GET {{baseUrl}}/api/requestLog/findById
 	?subset=A
 	&id=0

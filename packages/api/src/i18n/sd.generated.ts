@@ -224,6 +224,18 @@ const entityLabels = {
   "enum.RequestLogSearchField.id": "ID",
   "enum.RequestLogSearchField.token_name": "토큰이름",
   "enum.RequestLogSearchField.query": "쿼리",
+  "entity.Token": "Token",
+  "entity.Token.id": "ID",
+  "entity.Token.created_at": "등록일시",
+  "entity.Token.token": "access_token",
+  "entity.Token.name": "토큰 이름",
+  "entity.Token.refresh_token": "refresh_token",
+  "entity.Token.expires_at": "만료 시각 (epoch ms)",
+  "entity.Token.account_uuid": "Anthropic 계정 UUID",
+  "entity.Token.active": "활성 여부",
+  "enum.TokenOrderBy.id-desc": "ID최신순",
+  "enum.TokenSearchField.id": "ID",
+  "enum.TokenSearchField.name": "이름",
 } as const;
 
 // defaultLocale의 dictionary를 기준으로 키 추출
