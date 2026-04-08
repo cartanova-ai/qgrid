@@ -37,8 +37,8 @@ json.questions // string[]
 ### 로컬 개발
 
 ```bash
-git clone git@github.com:CartaNova-AI/ByCC.git
-cd ByCC
+git clone https://github.com/cartanova-ai/Qgrid.git
+cd Qgrid
 pnpm install
 cp packages/api/.env.example packages/api/.env  # DB 설정 수정
 pnpm -C packages/api sonamu dev
