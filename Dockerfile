@@ -28,7 +28,7 @@ ENV HOST=0.0.0.0
 ENV PORT=44900
 
 COPY --from=builder /app /app
-COPY schema.sql /app/schema.sql
+COPY schema/ /app/schema/
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
