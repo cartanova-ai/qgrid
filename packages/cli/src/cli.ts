@@ -1,152 +1,152 @@
-#!/usr/bin/env node
+import { execSync } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { Command } from "commander";
 
-const program = new Command();
+const QGRID_DIR = join(homedir(), ".qgrid");
+const COMPOSE_FILE = join(QGRID_DIR, "docker-compose.yml");
+const IMAGE = "ghcr.io/cartanova-ai/qgrid:latest";
 
-program.name("qgrid").version("0.1.0").description("Qgrid — LLM subscription token proxy server");
-
-import { execSync } from "node:child_process";
-
-function checkCommand(cmd: string): boolean {
+function ensureDocker(): void {
   try {
-    execSync(`${cmd} --version`, { stdio: "ignore" });
-    return true;
+    execSync("docker --version", { stdio: "ignore" });
   } catch {
-    return false;
+    console.error("Error: Docker not found.");
+    console.error("Install: https://docs.docker.com/get-docker/");
+    process.exit(1);
   }
 }
 
-program
-  .command("init")
-  .description("initialize (.env + docker-compose.yml)")
-  .action(async () => {
-    const { existsSync, writeFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
+function ensureQgridDir(): void {
+  if (!existsSync(QGRID_DIR)) {
+    mkdirSync(QGRID_DIR, { recursive: true });
+  }
+}
 
-    // 사전 체크 (파일 생성 전에)
-    const nodeVersion = Number.parseInt(process.versions.node.split(".")[0], 10);
-    if (nodeVersion < 20) {
-      console.log(`⚠ Node.js ${process.versions.node} detected. >= 20 required.`);
-    }
-    if (!checkCommand("claude")) {
-      console.log("⚠ claude CLI not found (install: npm i -g @anthropic-ai/claude-code)");
-    }
-    if (!checkCommand("docker")) {
-      console.log("⚠ Docker not found (optional: you can use an external database instead)");
-    }
-    console.log("");
+function generateCompose(opts: {
+  port: string;
+  dbHost?: string;
+  dbPort: string;
+  dbUser: string;
+  dbPassword: string;
+}): string {
+  const env = [
+    `      DB_HOST: "${opts.dbHost ?? "postgres"}"`,
+    `      DB_PORT: "${opts.dbHost ? opts.dbPort : "5432"}"`,
+    `      DB_USER: "${opts.dbUser}"`,
+    `      DB_PASSWORD: "${opts.dbPassword}"`,
+    `      DB_NAME: "qgrid"`,
+    `      HOST: "0.0.0.0"`,
+    `      PORT: "${opts.port}"`,
+  ].join("\n");
 
-    const cwd = process.cwd();
+  let compose = `services:
+  qgrid:
+    image: ${IMAGE}
+    ports:
+      - "${opts.port}:${opts.port}"
+    environment:
+${env}
+    restart: unless-stopped`;
 
-    // .env
-    const envPath = join(cwd, ".env");
-    if (existsSync(envPath)) {
-      console.log("  .env already exists, skipping");
-    } else {
-      writeFileSync(
-        envPath,
-        `# Qgrid Server
-PORT=44900 # you can change this if needed
+  if (!opts.dbHost) {
+    // 로컬 모드: PostgreSQL도 같이 띄움
+    compose += `
+    depends_on:
+      postgres:
+        condition: service_healthy
 
-# Qgrid Database (used by default, or you can connect to an external DB)
-# Database
-DB_HOST=localhost
-DB_PORT=5432
-DB_USER=postgres
-DB_PASSWORD=postgres
-DB_NAME=db_name
-`,
-      );
-      console.log("✓ .env created");
-    }
-
-    // docker-compose.yml
-    const composePath = join(cwd, "docker-compose.yml");
-    if (existsSync(composePath)) {
-      console.log("  docker-compose.yml already exists, skipping");
-    } else {
-      writeFileSync(
-        composePath,
-        `services:
   postgres:
     image: postgres:18
     ports:
-      - "\${DB_PORT:-5432}:5432"
+      - "${opts.dbPort}:5432"
     environment:
-      POSTGRES_USER: \${DB_USER:-postgres}
-      POSTGRES_PASSWORD: \${DB_PASSWORD:-postgres}
-      POSTGRES_DB: \${DB_NAME:-qgrid}
+      POSTGRES_USER: ${opts.dbUser}
+      POSTGRES_PASSWORD: ${opts.dbPassword}
+      POSTGRES_DB: qgrid
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 3s
+      retries: 5
     volumes:
-      - qgrid-data:/var/lib/postgresql/data
+      - qgrid-data:/var/lib/postgresql
 
 volumes:
-  qgrid-data:
-`,
-      );
-      console.log("✓ docker-compose.yml created");
-    }
+  qgrid-data:`;
+  }
 
-    // Next steps
-    console.log("");
-    console.log("Next steps:");
-    console.log("  1. Edit .env if you have an existing database");
-    console.log("  2. docker compose up -d");
-    console.log("  3. qgrid start");
-  });
+  return `${compose}\n`;
+}
+
+const program = new Command();
+program.name("qgrid").version("0.1.0").description("Qgrid — LLM subscription token proxy server");
 
 program
   .command("start")
-  .description("start the Qgrid server")
-  .option("-p, --port <port>", "server port (overrides .env PORT)")
-  .action(async (opts) => {
-    const { existsSync, readFileSync } = await import("node:fs");
-    const { join, dirname } = await import("node:path");
-    const { fileURLToPath } = await import("node:url");
+  .description("Start Qgrid server (+ PostgreSQL if no --db-host)")
+  .option("--port <port>", "server port", "44900")
+  .option("--db-host <host>", "external DB host (skip local PostgreSQL)")
+  .option("--db-port <port>", "DB port", "44901")
+  .option("--db-user <user>", "DB user", "postgres")
+  .option("--db-password <password>", "DB password", "postgres")
+  .action((opts) => {
+    ensureDocker();
+    ensureQgridDir();
 
-    // .env 로드
-    const envPath = join(process.cwd(), ".env");
-    if (existsSync(envPath)) {
-      const envContent = readFileSync(envPath, "utf-8");
-      for (const line of envContent.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith("#")) continue;
-        const eqIdx = trimmed.indexOf("=");
-        if (eqIdx === -1) continue;
-        const key = trimmed.slice(0, eqIdx).trim();
-        const value = trimmed.slice(eqIdx + 1).trim();
-        if (!process.env[key]) {
-          process.env[key] = value;
-        }
-      }
-    }
+    const compose = generateCompose(opts);
+    writeFileSync(COMPOSE_FILE, compose);
 
-    // CLI 옵션이 .env보다 우선
-    if (opts.port) {
-      process.env.PORT = opts.port;
-    }
+    console.log(
+      opts.dbHost
+        ? "Starting Qgrid server (external DB)..."
+        : "Starting Qgrid server + PostgreSQL...",
+    );
 
-    // claude CLI 사전 체크
-    if (!checkCommand("claude")) {
-      console.error("Error: claude CLI not found.");
-      console.error("Install: npm i -g @anthropic-ai/claude-code");
+    try {
+      execSync(`docker compose -f "${COMPOSE_FILE}" up -d`, { stdio: "inherit" });
+      console.log(`\n✓ Qgrid is running at http://localhost:${opts.port}`);
+    } catch {
+      console.error("Failed to start. Check Docker is running.");
       process.exit(1);
     }
+  });
 
-    // bundle 안의 빌드된 서버 실행
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const serverEntry = join(__dirname, "..", "bundle", "dist", "index.js");
+program
+  .command("stop")
+  .description("Stop Qgrid server")
+  .action(() => {
+    ensureDocker();
 
-    if (!existsSync(serverEntry)) {
-      console.error(`Error: Server bundle not found at ${serverEntry}`);
-      console.error("Run `pnpm run bundle` first, or reinstall @qgrid/cli.");
-      process.exit(1);
+    if (!existsSync(COMPOSE_FILE)) {
+      console.log("Qgrid is not running.");
+      return;
     }
 
     try {
-      await import(serverEntry);
-    } catch (e) {
-      console.error("Failed to start server:", (e as Error).stack ?? (e as Error).message);
+      execSync(`docker compose -f "${COMPOSE_FILE}" down`, { stdio: "inherit" });
+      console.log("✓ Qgrid stopped.");
+    } catch {
+      console.error("Failed to stop.");
       process.exit(1);
+    }
+  });
+
+program
+  .command("status")
+  .description("Show Qgrid server status")
+  .action(() => {
+    ensureDocker();
+
+    if (!existsSync(COMPOSE_FILE)) {
+      console.log("Qgrid is not running.");
+      return;
+    }
+
+    try {
+      execSync(`docker compose -f "${COMPOSE_FILE}" ps`, { stdio: "inherit" });
+    } catch {
+      console.log("Qgrid is not running.");
     }
   });
 
