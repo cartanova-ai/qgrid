@@ -33,44 +33,54 @@ export async function generateText<T extends z.ZodType | undefined = undefined>(
   returnType?: T;
   timeout?: number;
   serverUrl?: string;
+  maxAttempts: number;
 }): Promise<T extends z.ZodType ? QgridTypedResponse<z.infer<T>> : QgridResponse> {
   const { prompt, system, returnType } = params;
   const url = params.serverUrl ?? process.env.QGRID_URL ?? "http://localhost:44900";
   const timeout = params.timeout ?? 300_000;
+  const maxAttempts = params.maxAttempts ?? 3;
 
   const systemWithSchema = returnType
     ? `${system ?? ""}\n\n반드시 다음 JSON Schema에 맞게 JSON으로만 응답하세요. 다른 텍스트 없이:\n${getJsonSchemaString(returnType)}`
     : system;
 
-  const res = await fetch(`${url}/api/qgrid/query`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, system: systemWithSchema }),
-    signal: AbortSignal.timeout(timeout),
-  });
+  let lastError: Error | null = null;
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    const message = err.error ?? err.message ?? res.statusText;
-    if (res.status === 429) throw new QgridError("QUOTA_EXHAUSTED", 429, message);
-    if (res.status === 503) throw new QgridError("SERVER_UNAVAILABLE", 503, message);
-    throw new QgridError("REQUEST_FAILED", res.status, message);
-  }
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const res = await fetch(`${url}/api/qgrid/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, system: systemWithSchema }),
+      signal: AbortSignal.timeout(timeout),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      const message = err.error ?? err.message ?? res.statusText;
+      if (res.status === 429) throw new QgridError("QUOTA_EXHAUSTED", 429, message);
+      if (res.status === 503) throw new QgridError("SERVER_UNAVAILABLE", 503, message);
+      throw new QgridError("REQUEST_FAILED", res.status, message);
+    }
 
-  const { text, ...rest } = await res.json();
-  if (returnType) {
+    const { text, ...rest } = await res.json();
+    if (!returnType) {
+      return { ...rest, data: text } as any;
+    }
+
     try {
       return { ...rest, data: z.parse(returnType, JSON.parse(text)) } as any;
     } catch (e) {
-      throw new QgridError(
-        "PARSE_FAILED",
-        200,
-        `JSON 파싱/검증 실패: ${(e as Error).message}\nRaw: ${text.slice(0, 200)}`,
-      );
+      lastError = e as Error;
+      if (attempt < maxAttempts) {
+        console.warn(`[qgrid] JSON 파싱 실패 (attempt ${attempt}/${maxAttempts}), 재시도...`);
+      }
     }
   }
 
-  return { ...rest, data: text } as any;
+  throw new QgridError(
+    "PARSE_FAILED",
+    200,
+    `JSON 파싱/검증 실패 (${maxAttempts}회 시도): ${lastError?.message}`,
+  );
 }
 
 export type { QgridBase, QgridResponse, QgridTypedResponse, QgridUsage } from "./types";
