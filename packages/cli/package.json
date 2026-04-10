@@ -6,13 +6,11 @@
     "qgrid": "./dist/cli.js"
   },
   "files": [
-    "dist",
-    "bundle"
+    "dist"
   ],
   "scripts": {
-    "bundle": "cd ../api && pnpm build && cd ../cli && mkdir -p bundle && cp -r ../api/dist ./bundle/dist && cp -r ../api/web-dist ./bundle/web-dist",
     "build": "tsup",
-    "prepublishOnly": "pnpm run bundle && pnpm run build"
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "commander": "^13.0.0"
