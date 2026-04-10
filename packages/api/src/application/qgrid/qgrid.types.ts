@@ -57,11 +57,10 @@ export type TokenStats = z.infer<typeof TokenStats>;
 
 // ─── OAuth ───
 
-export const OAuthLoginResult = z.object({
-  token: z.string(),
-  name: z.string(),
+export const OAuthStartResult = z.object({
+  authUrl: z.string(),
 });
-export type OAuthLoginResult = z.infer<typeof OAuthLoginResult>;
+export type OAuthStartResult = z.infer<typeof OAuthStartResult>;
 
 const RateLimit = z
   .object({

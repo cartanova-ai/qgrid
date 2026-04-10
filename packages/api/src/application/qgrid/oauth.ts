@@ -38,12 +38,12 @@ export function generatePKCE(): { codeVerifier: string; codeChallenge: string; s
   return { codeVerifier, codeChallenge, state };
 }
 
-export function buildAuthUrl(codeChallenge: string, state: string, port: number): string {
+export function buildAuthUrl(codeChallenge: string, state: string, redirectUri: string): string {
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.append("code", "true");
   url.searchParams.append("client_id", CLIENT_ID);
   url.searchParams.append("response_type", "code");
-  url.searchParams.append("redirect_uri", `http://localhost:${port}/callback`);
+  url.searchParams.append("redirect_uri", redirectUri);
   url.searchParams.append("scope", ALL_SCOPES.join(" "));
   url.searchParams.append("code_challenge", codeChallenge);
   url.searchParams.append("code_challenge_method", "S256");
@@ -64,7 +64,7 @@ export async function exchangeCodeForTokens(
   code: string,
   codeVerifier: string,
   state: string,
-  port: number,
+  redirectUri: string,
 ): Promise<OAuthTokens> {
   const res = await fetch(TOKEN_URL, {
     method: "POST",
@@ -72,7 +72,7 @@ export async function exchangeCodeForTokens(
     body: JSON.stringify({
       grant_type: "authorization_code",
       code,
-      redirect_uri: `http://localhost:${port}/callback`,
+      redirect_uri: redirectUri,
       client_id: CLIENT_ID,
       code_verifier: codeVerifier,
       state,
@@ -138,7 +138,7 @@ export async function fetchUsage(accessToken: string): Promise<UsageResponse | n
   const cacheKey = accessToken.slice(-10);
   const cached = usageCache[cacheKey];
   if (cached && Date.now() - cached.cachedAt < USAGE_API_CACHE_TTL) {
-    console.log(`${cacheKey} usage API cache hitted: `, cached);
+    console.log(`${cacheKey} usage API cache hit: `, cached);
 
     return cached.data;
   }

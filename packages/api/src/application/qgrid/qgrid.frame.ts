@@ -1,18 +1,4 @@
-/**
- * Qgrid Frame — Sonamu HTTP API 엔드포인트.
- *
- * POST   /api/qgrid/query       — LLM 쿼리 (system?, prompt)
- * GET    /api/qgrid/stats       — 토큰별 상태
- * POST   /api/qgrid/addToken    — 토큰 추가 (수동)
- * POST   /api/qgrid/updateToken — 토큰 수정
- * POST   /api/qgrid/removeToken — 토큰 제거
- * POST   /api/qgrid/oauthLogin  — OAuth 로그인 (브라우저)
- * GET    /api/qgrid/usage       — 쿼터 사용률 (Anthropic API)
- * GET    /api/qgrid/health      — 헬스체크
- */
-import { exec } from "node:child_process";
-import http from "node:http";
-import type { AddressInfo } from "node:net";
+import type { FastifyReply } from "fastify";
 import { api, BaseFrameClass } from "sonamu";
 import { RequestLogModel } from "../request-log/request-log.model";
 import { TokenModel } from "../token/token.model";
@@ -27,10 +13,13 @@ import { getPool } from "./pool";
 import type {
   CliResult,
   HealthResponse,
-  OAuthLoginResult,
+  OAuthStartResult,
   TokenStats,
   UsageResponse,
 } from "./qgrid.types";
+
+// PKCE 세션 메모리 저장 (state → { codeVerifier, name, redirectUri })
+const pendingOAuth = new Map<string, { codeVerifier: string; name: string; redirectUri: string }>();
 
 class QgridFrameClass extends BaseFrameClass {
   constructor() {
@@ -47,7 +36,7 @@ class QgridFrameClass extends BaseFrameClass {
       .then((tokenEntry) => {
         RequestLogModel.save([
           {
-            token_name: tokenEntry?.name ?? "Unknown",
+            token_name: tokenEntry?.name ?? "Unknown Key",
             query: system ? `[System]\n${system}\n\n[User]\n${prompt}` : prompt,
             response: result.text,
             input_tokens: result.usage.input_tokens,
@@ -114,79 +103,64 @@ class QgridFrameClass extends BaseFrameClass {
     return { removed: true };
   }
 
-  // OAuth 로그인 — 임시 콜백 서버를 띄우고 auth URL 반환
+  // OAuth 로그인: authUrl 생성 (프론트에서 이 API 호출 후 authUrl로 리다이렉트)
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
-  async oauthLogin(name: string): Promise<OAuthLoginResult> {
-    const pool = getPool();
+  async oauthStart(name: string): Promise<OAuthStartResult> {
     const { codeVerifier, codeChallenge, state } = generatePKCE();
 
-    // 임시 콜백 서버
-    const { port, code } = await new Promise<{ port: number; code: string }>((resolve, reject) => {
-      let listenPort = 0;
-      const server = http.createServer((req, res) => {
-        const url = new URL(req.url ?? "", `http://localhost`);
-        if (url.pathname !== "/callback") {
-          res.writeHead(404);
-          res.end();
-          return;
-        }
+    const serverPort = process.env.PORT ?? "44900";
+    const redirectUri = `http://localhost:${serverPort}/callback`;
+    const authUrl = buildAuthUrl(codeChallenge, state, redirectUri);
 
-        const authCode = url.searchParams.get("code");
-        const receivedState = url.searchParams.get("state");
+    // PKCE를 메모리에 저장 (5분 TTL)
+    pendingOAuth.set(state, { codeVerifier, name, redirectUri });
+    setTimeout(() => pendingOAuth.delete(state), 300_000);
 
-        if (!authCode || receivedState !== state) {
-          res.writeHead(400);
-          res.end("Invalid callback");
-          reject(new Error("Invalid OAuth callback"));
-          return;
-        }
+    return { authUrl };
+  }
 
-        res.writeHead(200, { "Content-Type": "text/html" });
-        res.end("<h1>Login successful!</h1><p>You can close this tab and return to Qgrid.</p>");
-        resolve({ port: listenPort, code: authCode });
-        server.close();
-      });
-
-      server.listen(0, "localhost", () => {
-        const addrInfo = server.address() as AddressInfo;
-        listenPort = addrInfo.port;
-        const authUrl = buildAuthUrl(codeChallenge, state, listenPort);
-
-        exec(`open "${authUrl}"`);
-      });
-
-      // 5분 타임아웃
-      setTimeout(() => {
-        server.close();
-        reject(new Error("OAuth login timed out"));
-      }, 300_000);
-    });
-
-    // code → token 교환
-    const tokens = await exchangeCodeForTokens(code, codeVerifier, state, port);
-
-    // 같은 계정의 이전 토큰이 있으면 교체
-    if (tokens.accountUuid) {
-      const oldEntries = await TokenModel.findByAccountUuid("A", tokens.accountUuid);
-      for (const old of oldEntries) {
-        pool.destroyWorkers(old.token);
-        await TokenModel.del([old.id]);
-      }
+  // OAuth 콜백 처리 — sonamu.config.ts의 custom 라우트에서 호출됨
+  async handleOAuthCallback(code: string, state: string, reply: FastifyReply): Promise<void> {
+    const pool = getPool();
+    const pending = pendingOAuth.get(state);
+    if (!pending) {
+      return reply.redirect("/?oauth=error&reason=invalid_state");
     }
+    pendingOAuth.delete(state);
 
-    // 새 토큰 저장 + pool에 등록
-    await TokenModel.save([
-      {
-        token: tokens.accessToken,
-        name,
-        refresh_token: tokens.refreshToken,
-        expires_at: tokens.expiresAt ? BigInt(tokens.expiresAt) : null,
-        account_uuid: tokens.accountUuid,
-      },
-    ]);
-    pool.createWorkers(tokens.accessToken);
+    try {
+      const tokens = await exchangeCodeForTokens(
+        code,
+        pending.codeVerifier,
+        state,
+        pending.redirectUri,
+      );
 
-    return { token: tokens.accessToken, name };
+      // 같은 계정의 이전 토큰이 있으면 교체
+      if (tokens.accountUuid) {
+        const oldEntries = await TokenModel.findByAccountUuid("A", tokens.accountUuid);
+        for (const old of oldEntries) {
+          pool.destroyWorkers(old.token);
+          await TokenModel.del([old.id]);
+        }
+      }
+
+      // 새 토큰 저장 + pool에 등록
+      await TokenModel.save([
+        {
+          token: tokens.accessToken,
+          name: pending.name,
+          refresh_token: tokens.refreshToken,
+          expires_at: tokens.expiresAt ? BigInt(tokens.expiresAt) : null,
+          account_uuid: tokens.accountUuid,
+        },
+      ]);
+      pool.createWorkers(tokens.accessToken);
+
+      return reply.redirect(`/?oauth=success&name=${encodeURIComponent(pending.name)}`);
+    } catch (e) {
+      return reply.redirect(`/?oauth=error&reason=${encodeURIComponent((e as Error).message)}`);
+    }
   }
 
   // 토큰 사용량 조회 (OAuth usage API)

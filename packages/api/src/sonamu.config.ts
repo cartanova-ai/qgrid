@@ -79,8 +79,23 @@ export default defineConfig({
         root: path.join(import.meta.dirname, "/../", "public"),
         prefix: "/api/public",
       },
-      custom: (_server) => {
-        // nothing yet
+      custom: (server) => {
+        // OAuth 콜백 — Anthropic이 /callback으로 리다이렉트
+        server.get("/callback", async (request, reply) => {
+          const { code, state } = request.query as { code?: string; state?: string };
+          if (!code || !state) {
+            return reply.redirect("/?oauth=error&reason=missing_params");
+          }
+          // Frame의 oauthCallback으로 위임
+          try {
+            const { QgridFrame } = await import("./application/qgrid/qgrid.frame");
+            await QgridFrame.handleOAuthCallback(code, state, reply);
+          } catch (e) {
+            return reply.redirect(
+              `/?oauth=error&reason=${encodeURIComponent((e as Error).message)}`,
+            );
+          }
+        });
       },
     },
     apiConfig: {
