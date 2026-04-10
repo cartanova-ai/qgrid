@@ -1,7 +1,7 @@
 [
   {
     "path": "src/application/qgrid/qgrid.frame.ts",
-    "checksum": "8bd9f9ace9d8c4f699fb4b0607a2f9ece64490d4"
+    "checksum": "379753e0fbf008bb6fbb72b7f9191aea27af83de"
   },
   {
     "path": "src/application/qgrid/qgrid.types.ts",
@@ -49,6 +49,6 @@
   },
   {
     "path": "src/sonamu.config.ts",
-    "checksum": "51d2a31b34f3a71a8a12693772d86ea6a6fbea81"
+    "checksum": "f5345c8b15ae63bf3fc08c81bcf3848644130ea5"
   }
 ]

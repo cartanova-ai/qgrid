@@ -23,6 +23,26 @@ export default defineConfig({
         password: process.env.DB_PASSWORD ?? "postgres",
       },
     },
+    environments: {
+      production: {
+        connection: {
+          host: process.env.DEV0_DB_HOST,
+          port: Number(process.env.DEV0_DB_PORT),
+          database: process.env.DATABASE_NAME,
+          user: process.env.DEV0_DB_USER,
+          password: process.env.DEV0_DB_PASSWORD,
+        },
+      },
+      fixture: {
+        connection: {
+          host: process.env.DEV0_DB_HOST,
+          port: Number(process.env.DEV0_DB_PORT),
+          database: process.env.DATABASE_NAME,
+          user: process.env.DEV0_DB_USER,
+          password: process.env.DEV0_DB_PASSWORD,
+        },
+      },
+    },
   },
   api: {
     dir: "api",
