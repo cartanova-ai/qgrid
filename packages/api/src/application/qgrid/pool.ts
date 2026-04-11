@@ -34,10 +34,10 @@ class ClaudePool {
     });
   }
 
-  getStats(tokenNames?: Map<string, string | null>): TokenStats[] {
+  getStats(tokenNames?: Map<string, string>): TokenStats[] {
     return [...this.workers.keys()].map((token) => ({
       token,
-      name: tokenNames?.get(token) ?? undefined,
+      name: tokenNames?.get(token) ?? "Unknown Key",
       requests: this.requestCounts.get(token) ?? 0,
       active: !this.quotaExhausted.has(token),
     }));

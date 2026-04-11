@@ -61,7 +61,7 @@ class QgridFrameClass extends BaseFrameClass {
   }
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
-  async addToken(token: string, name?: string): Promise<{ added: boolean }> {
+  async addToken(token: string, name: string): Promise<{ added: boolean }> {
     await TokenModel.save([{ token, name }]);
     getPool().createWorkers(token);
     return { added: true };
