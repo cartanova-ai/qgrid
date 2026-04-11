@@ -103,6 +103,34 @@ class QgridFrameClass extends BaseFrameClass {
     return { removed: true };
   }
 
+  /**
+   *
+   * @param id token_id
+   * 토큰 활성화/비활성화 토글 (pool 워커 생성/제거 & DB의 active 필드 업데이트)
+   *
+   * @returns 토큰 활성화 여부
+   */
+  @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
+  async toggleToken(id: number): Promise<{ active: boolean }> {
+    const pool = getPool();
+    const entry = await TokenModel.findOne("A", { id });
+    if (!entry) return { active: false };
+
+    const newActive = !entry.active;
+    await TokenModel.save([{ id, token: entry.token, active: newActive, name: entry.name }]);
+
+    // 토큰의 새로운 상태가 활성화면/비활성화면
+    if (newActive) {
+      // 워커 생성
+      pool.createWorkers(entry.token);
+    } else {
+      // 워커 제거
+      pool.destroyWorkers(entry.token);
+    }
+
+    return { active: newActive };
+  }
+
   // OAuth 로그인: authUrl 생성 (프론트에서 이 API 호출 후 authUrl로 리다이렉트)
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async oauthStart(name: string): Promise<OAuthStartResult> {

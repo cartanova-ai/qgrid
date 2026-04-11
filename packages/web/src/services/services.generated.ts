@@ -290,6 +290,19 @@ export namespace QgridService {
       mutationFn: (params: { token: string }) => removeToken(params.token),
     });
 
+  export async function toggleToken(id: number): Promise<{ active: boolean }> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/toggleToken`,
+      data: { id },
+    });
+  }
+
+  export const useToggleTokenMutation = () =>
+    useMutation({
+      mutationFn: (params: { id: number }) => toggleToken(params.id),
+    });
+
   export async function oauthStart(name: string): Promise<OAuthStartResult> {
     return fetch({
       method: "POST",

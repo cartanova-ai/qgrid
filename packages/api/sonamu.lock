@@ -1,7 +1,7 @@
 [
   {
     "path": "src/application/qgrid/qgrid.frame.ts",
-    "checksum": "4483f6b6538e7487026ba73ecaafc60da882cb06"
+    "checksum": "eb3e982f40bea105054a2b422dba8c454f924a12"
   },
   {
     "path": "src/application/qgrid/qgrid.types.ts",
