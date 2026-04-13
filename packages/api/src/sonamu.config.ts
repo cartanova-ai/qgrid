@@ -15,13 +15,13 @@ const port = Number(process.env.PORT ?? 44900);
 export default defineConfig({
   projectName: process.env.PROJECT_NAME ?? "SonamuProject",
   database: {
-    name: process.env.DB_NAME ?? "qgrid",
+    name: process.env.QGRID_DB_NAME ?? "qgrid",
     defaultOptions: {
       connection: {
-        host: process.env.DB_HOST ?? "localhost",
-        port: Number(process.env.DB_PORT ?? 44901),
-        user: process.env.DB_USER ?? "postgres",
-        password: process.env.DB_PASSWORD ?? "postgres",
+        host: process.env.QGRID_DB_HOST ?? "localhost",
+        port: Number(process.env.QGRID_DB_PORT ?? 44901),
+        user: process.env.QGRID_DB_USER ?? "postgres",
+        password: process.env.QGRID_DB_PASSWORD ?? "postgres",
       },
     },
     environments: {
