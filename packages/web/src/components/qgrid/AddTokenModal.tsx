@@ -2,12 +2,13 @@ import { Input } from "@sonamu-kit/react-components/components";
 import { useTypeForm } from "@sonamu-kit/react-components/lib";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { QgridService } from "@/services/services.generated";
-import { TokenSaveParams } from "@/services/token/token.types";
 import EyeIcon from "~icons/lucide/eye";
 import EyeOffIcon from "~icons/lucide/eye-off";
 import KeyIcon from "~icons/lucide/key-round";
 import PlusIcon from "~icons/lucide/plus";
+
+import { QgridService } from "@/services/services.generated";
+import { TokenSaveParams } from "@/services/token/token.types";
 
 export function AddTokenModal() {
   const [open, setOpen] = useState(false);

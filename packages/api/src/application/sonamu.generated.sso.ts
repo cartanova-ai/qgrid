@@ -3,6 +3,7 @@
  * 직접 수정하지 마세요.
  */
 import type { DatabaseSchemaExtend, PuriLoaderQueries, PuriWrapper } from "sonamu";
+
 import type {
   RequestLogBaseSchema,
   RequestLogSubsetKey,

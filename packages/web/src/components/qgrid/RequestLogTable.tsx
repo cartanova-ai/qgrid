@@ -1,8 +1,9 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
+import ChevronRightIcon from "~icons/lucide/chevron-right";
+
 import { QgridService, RequestLogService } from "@/services/services.generated";
 import type { RequestLogSubsetMapping } from "@/services/sonamu.generated";
-import ChevronRightIcon from "~icons/lucide/chevron-right";
 
 type RequestLog = RequestLogSubsetMapping["A"];
 

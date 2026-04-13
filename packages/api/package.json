@@ -1,10 +1,10 @@
 {
   "name": "qgrid-api",
   "version": "0.0.1",
+  "description": "Sonamu API server",
+  "license": "MIT",
   "type": "module",
   "main": "index.js",
-  "license": "MIT",
-  "description": "Sonamu API server",
   "scripts": {
     "dev": "sonamu dev",
     "build": "sonamu build",

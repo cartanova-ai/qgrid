@@ -2,8 +2,9 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { z } from "zod";
-import { RequestLogService } from "@/services/services.generated";
 import ArrowLeftIcon from "~icons/lucide/arrow-left";
+
+import { RequestLogService } from "@/services/services.generated";
 
 const showSearchSchema = z.object({
   id: z.number(),

@@ -1,5 +1,6 @@
 import type { FastifyReply } from "fastify";
 import { api, BaseFrameClass } from "sonamu";
+
 import { RequestLogModel } from "../request-log/request-log.model";
 import { TokenModel } from "../token/token.model";
 import type { RefreshTokenParams } from "../token/token.types";

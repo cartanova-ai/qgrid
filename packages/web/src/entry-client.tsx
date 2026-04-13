@@ -1,7 +1,9 @@
 import { hydrate, QueryClient } from "@tanstack/react-query";
 import { createRouter, RouterProvider } from "@tanstack/react-router";
 import ReactDOM from "react-dom/client";
+
 import { routeTree } from "./routeTree.gen";
+
 import "./styles/tailwind.css";
 import { dateReviver } from "./services/sonamu.shared";
 

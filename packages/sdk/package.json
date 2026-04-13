@@ -1,29 +1,29 @@
 {
   "name": "@qgrid/sdk",
   "version": "0.1.0",
+  "files": [
+    "dist"
+  ],
   "type": "module",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
   },
-  "types": "./dist/index.d.ts",
-  "files": [
-    "dist"
-  ],
   "scripts": {
     "build": "tsdown && mv dist/index-*.d.ts dist/index.d.ts 2>/dev/null || true",
     "dev": "tsdown --watch"
-  },
-  "peerDependencies": {
-    "zod": "^3.23.0 || ^4.0.0"
   },
   "devDependencies": {
     "@types/node": "catalog:",
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "zod": "^3.23.0 || ^4.0.0"
   },
   "engines": {
     "node": ">=20"

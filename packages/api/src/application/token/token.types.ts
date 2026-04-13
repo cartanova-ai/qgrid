@@ -1,4 +1,5 @@
 import type { z } from "zod";
+
 import { TokenBaseListParams, TokenBaseSchema } from "../sonamu.generated";
 
 // Token - ListParams

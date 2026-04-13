@@ -2,16 +2,17 @@ import { Input } from "@sonamu-kit/react-components/components";
 import { useTypeForm } from "@sonamu-kit/react-components/lib";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { maskToken } from "@/services/qgrid/qgrid.types";
-import { QgridService } from "@/services/services.generated";
-import type { TokenSubsetMapping } from "@/services/sonamu.generated";
-import { TokenSaveParams } from "@/services/token/token.types";
 import CheckIcon from "~icons/lucide/check";
 import CopyIcon from "~icons/lucide/copy";
 import EyeIcon from "~icons/lucide/eye";
 import EyeOffIcon from "~icons/lucide/eye-off";
 import PencilIcon from "~icons/lucide/pencil";
 import TrashIcon from "~icons/lucide/trash-2";
+
+import { maskToken } from "@/services/qgrid/qgrid.types";
+import { QgridService } from "@/services/services.generated";
+import type { TokenSubsetMapping } from "@/services/sonamu.generated";
+import { TokenSaveParams } from "@/services/token/token.types";
 
 type Token = TokenSubsetMapping["A"];
 

@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
 import { Command } from "commander";
 
 const QGRID_DIR = join(homedir(), ".qgrid");

@@ -1,13 +1,13 @@
 {
   "name": "@qgrid/cli",
   "version": "0.1.0",
-  "type": "module",
   "bin": {
     "qgrid": "./dist/cli.js"
   },
   "files": [
     "dist"
   ],
+  "type": "module",
   "scripts": {
     "build": "tsdown",
     "prepublishOnly": "pnpm run build"

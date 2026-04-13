@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { QgridService, TokenService } from "@/services/services.generated";
-import type { TokenSubsetMapping } from "@/services/sonamu.generated";
 import ChevronLeftIcon from "~icons/lucide/chevron-left";
 import ChevronRightIcon from "~icons/lucide/chevron-right";
+
+import { QgridService, TokenService } from "@/services/services.generated";
+import type { TokenSubsetMapping } from "@/services/sonamu.generated";
 
 function barColor(pct: number): string {
   if (pct >= 95) return "bg-red-500";

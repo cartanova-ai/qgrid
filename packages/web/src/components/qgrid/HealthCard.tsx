@@ -1,7 +1,8 @@
-import type { HealthResponse } from "@/services/qgrid/qgrid.types";
 import ActivityIcon from "~icons/lucide/activity";
 import CpuIcon from "~icons/lucide/cpu";
 import KeyRoundIcon from "~icons/lucide/key-round";
+
+import type { HealthResponse } from "@/services/qgrid/qgrid.types";
 
 interface HealthCardProps {
   data: HealthResponse | undefined;

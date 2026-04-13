@@ -4,6 +4,7 @@
  * QGRID_URL 환경변수로 서버 주소 설정 (기본: http://localhost:44900)
  */
 import { z } from "zod";
+
 import type { QgridResponse, QgridTypedResponse } from "./types";
 
 export class QgridError extends Error {
