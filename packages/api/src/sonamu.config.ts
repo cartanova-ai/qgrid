@@ -201,6 +201,23 @@ export default defineConfig({
     },
     lifecycle: {
       onStart: async () => {
+        // DB 마이그레이션 자동 실행 (테이블 없으면 생성)
+        try {
+          const { TokenModel } = await import("./application/token/token.model");
+          const knex = TokenModel.getDB("w");
+          const migrationsDir = path.join(import.meta.dirname, "../src/migrations");
+          const [batch, log] = await knex.migrate.latest({
+            directory: migrationsDir,
+          });
+          if (log.length > 0) {
+            console.log(`✓ Migration: ${log.length} applied (batch ${batch})`);
+            log.forEach((name: string) => console.log(`  ✓ ${name}`));
+          }
+        } catch (e) {
+          console.warn(`⚠ Migration skipped: ${(e as Error).message}`);
+        }
+
+        // Pool 초기화
         const { initPool } = await import("./application/qgrid/pool");
         try {
           const { TokenModel } = await import("./application/token/token.model");
@@ -211,9 +228,7 @@ export default defineConfig({
             `🌲 Server listening on http://${host}:${port} (${pool.workers.size} tokens loaded)`,
           );
         } catch (e) {
-          console.warn(
-            `⚠️ Pool init failed (tokens table may not exist yet): ${(e as Error).message}`,
-          );
+          console.warn(`⚠ Pool init failed: ${(e as Error).message}`);
           initPool([]);
           console.log(`🌲 Server listening on http://${host}:${port} (no tokens)`);
         }
