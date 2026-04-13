@@ -3,7 +3,6 @@ name: Build and Publish
 on:
   push:
     branches: [main]
-    tags: ["v*"]
 
 permissions:
   id-token: write # Required for npm trusted publisher (OIDC)
@@ -30,26 +29,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build SDK
-        run: pnpm -C packages/sdk build
+      - name: Build
+        run: pnpm build
 
-      - name: Build CLI
-        run: pnpm -C packages/cli build
-
-      # npm publish (tag push 시에만)
-      - name: Publish SDK
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: pnpm -C packages/sdk publish --access public --no-git-checks
+      # npm publish (버전 안 바뀌면 스킵)
+      - name: Publish packages
+        run: pnpm publish:packages
         env:
           NPM_CONFIG_PROVENANCE: true
 
-      - name: Publish CLI
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: pnpm -C packages/cli publish --access public --no-git-checks
-        env:
-          NPM_CONFIG_PROVENANCE: true
-
-      # Docker image (main push + tag push)
+      # Docker image
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -65,7 +54,6 @@ jobs:
           tags: |
             type=ref,event=branch
             type=sha
-            type=semver,pattern={{version}}
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker
