@@ -2,7 +2,7 @@ import path from "path";
 
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
-import react from "@vitejs/plugin-react-swc";
+import react from "@vitejs/plugin-react";
 import dotenv from "dotenv";
 import Icons from "unplugin-icons/vite";
 import { defineConfig } from "vite";
@@ -44,9 +44,13 @@ export default defineConfig(({ command, isSsrBuild }) => ({
       output: isSsrBuild
         ? {}
         : {
-            manualChunks: {
-              "vendor-react": ["react", "react-dom"],
-              "vendor-tanstack": ["@tanstack/react-query", "@tanstack/react-router"],
+            manualChunks(id) {
+              if (id.includes("node_modules/react-dom") || id.includes("node_modules/react/")) {
+                return "vendor-react";
+              }
+              if (id.includes("@tanstack/react-query") || id.includes("@tanstack/react-router")) {
+                return "vendor-tanstack";
+              }
             },
           },
     },
