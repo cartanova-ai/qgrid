@@ -200,7 +200,7 @@ catalog:
   "tailwind-merge": ^3.4.0
   "tailwindcss": ^4.0.0
   "ts-node": ^10.9.2
-  "tsdown": ^0.12.5
+  "tsdown": ^0.12.9
   "tsicli": ^1.0.5
   "tsup": ^8.1.0
   "tsx": ^4.20.6

@@ -13,15 +13,15 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch"
+    "build": "tsdown && mv dist/index-*.d.ts dist/index.d.ts 2>/dev/null || true",
+    "dev": "tsdown --watch"
   },
   "peerDependencies": {
     "zod": "^3.23.0 || ^4.0.0"
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "tsup": "catalog:",
+    "tsdown": "catalog:",
     "typescript": "catalog:",
     "zod": "catalog:"
   },
