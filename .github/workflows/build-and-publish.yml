@@ -7,7 +7,6 @@ on:
 permissions:
   id-token: write # Required for npm trusted publisher (OIDC)
   contents: read
-  packages: write # Required for GHCR Docker push
 
 jobs:
   build-and-publish:
@@ -38,29 +37,3 @@ jobs:
         run: pnpm publish:packages
         env:
           NPM_CONFIG_PROVENANCE: true
-
-      # Docker image
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/cartanova-ai/qgrid
-          tags: |
-            type=ref,event=branch
-            type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and push Docker
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
