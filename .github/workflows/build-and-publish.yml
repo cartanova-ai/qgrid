@@ -1,0 +1,77 @@
+name: Build and Publish
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  id-token: write # Required for npm trusted publisher (OIDC)
+  contents: read
+  packages: write # Required for GHCR Docker push
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "25"
+          cache: "pnpm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build SDK
+        run: pnpm -C packages/sdk build
+
+      - name: Build CLI
+        run: pnpm -C packages/cli build
+
+      # npm publish (tag push 시에만)
+      - name: Publish SDK
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: pnpm -C packages/sdk publish --access public --no-git-checks
+        env:
+          NPM_CONFIG_PROVENANCE: true
+
+      - name: Publish CLI
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: pnpm -C packages/cli publish --access public --no-git-checks
+        env:
+          NPM_CONFIG_PROVENANCE: true
+
+      # Docker image (main push + tag push)
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/cartanova-ai/qgrid
+          tags: |
+            type=ref,event=branch
+            type=sha
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
