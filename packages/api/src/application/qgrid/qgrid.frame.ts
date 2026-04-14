@@ -34,32 +34,25 @@ class QgridFrameClass extends BaseFrameClass {
     const result = await pool.query({ system, prompt }, timeout);
 
     // 로그 기록 실패해도 쿼리 결과는 반환
-    TokenModel.findByToken("A", pool.lastUsedToken)
-      .then((tokenEntry) => {
-        RequestLogModel.save([
-          {
-            token_name: tokenEntry?.name ?? "Unknown Key",
-            query: system ? `[System]\n${system}\n\n[User]\n${prompt}` : prompt,
-            response: result.text,
-            input_tokens: result.usage.input_tokens,
-            output_tokens: result.usage.output_tokens,
-            cache_read_tokens: result.usage.cache_read_input_tokens,
-            cache_creation_tokens: result.usage.cache_creation_input_tokens,
-            duration_ms: result.durationMs,
-          },
-        ]);
-      })
-      .catch((e) => console.error("requestLog save failed:", e));
+    RequestLogModel.save([
+      {
+        token_name: pool.getLastUsedWorkerName(),
+        query: system ? `[System]\n${system}\n\n[User]\n${prompt}` : prompt,
+        response: result.text,
+        input_tokens: result.usage.input_tokens,
+        output_tokens: result.usage.output_tokens,
+        cache_read_tokens: result.usage.cache_read_input_tokens,
+        cache_creation_tokens: result.usage.cache_creation_input_tokens,
+        duration_ms: result.durationMs,
+      },
+    ]).catch((e) => console.error("requestLog save failed:", e));
 
     return result;
   }
 
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
   async stats(): Promise<TokenStats[]> {
-    const pool = getPool();
-    const entries = await TokenModel.findActive("A");
-    const tokenNames = new Map(entries.map((e) => [e.token, e.name]));
-    return pool.getStats(tokenNames);
+    return getPool().getStats();
   }
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
@@ -71,7 +64,7 @@ class QgridFrameClass extends BaseFrameClass {
         ...(refreshToken && refreshToken.length > 0 ? { refresh_token: refreshToken } : {}),
       },
     ]);
-    getPool().createWorkers(token);
+    getPool().createWorkers(token, name);
     return { added: true };
   }
 
@@ -99,7 +92,7 @@ class QgridFrameClass extends BaseFrameClass {
 
     if (hasNewToken) {
       pool.destroyWorkers(token);
-      pool.createWorkers(newToken);
+      pool.createWorkers(newToken, name ?? entry.name);
     }
     return { updated: true };
   }
@@ -134,7 +127,7 @@ class QgridFrameClass extends BaseFrameClass {
     // 토큰의 새로운 상태가 활성화면/비활성화면
     if (newActive) {
       // 워커 생성
-      pool.createWorkers(entry.token);
+      pool.createWorkers(entry.token, entry.name);
     } else {
       // 워커 제거
       pool.destroyWorkers(entry.token);
@@ -195,7 +188,7 @@ class QgridFrameClass extends BaseFrameClass {
           account_uuid: tokens.accountUuid,
         },
       ]);
-      pool.createWorkers(tokens.accessToken);
+      pool.createWorkers(tokens.accessToken, pending.name);
 
       return reply.redirect(`/?oauth=success&name=${encodeURIComponent(pending.name)}`);
     } catch (e) {
@@ -257,7 +250,7 @@ class QgridFrameClass extends BaseFrameClass {
       },
     ]);
     pool.destroyWorkers(token.token);
-    pool.createWorkers(refreshed.accessToken);
+    pool.createWorkers(refreshed.accessToken, token.name);
     return refreshed.accessToken;
   }
 

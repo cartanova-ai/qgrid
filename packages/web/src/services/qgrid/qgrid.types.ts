@@ -29,7 +29,7 @@ export type CliResult = z.infer<typeof CliResult>;
 // ─── Pool Config ───
 
 export const PoolConfig = z.object({
-  tokens: z.array(z.string()),
+  tokens: z.array(z.object({ token: z.string(), name: z.string() })),
   size: z.number().optional(),
   model: z.string().optional(),
   timeout: z.number().optional(),

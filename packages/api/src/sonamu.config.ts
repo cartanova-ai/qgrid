@@ -222,7 +222,7 @@ export default defineConfig({
         try {
           const { TokenModel } = await import("./application/token/token.model");
           const entries = await TokenModel.findActive("A");
-          const tokens = entries.map((e) => e.token);
+          const tokens = entries.map((e) => ({ token: e.token, name: e.name }));
           const pool = initPool(tokens);
           console.log(
             `🌲 Server listening on http://${host}:${port} (${pool.workers.size} tokens loaded)`,

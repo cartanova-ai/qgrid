@@ -78,9 +78,9 @@ class RequestLogModelClass extends BaseModelClass<
       qb.whereIn("request_logs.id", asArray(params.id));
     }
 
-    // token_name filter (toFilter)
+    // token_name filter — prefix 매칭 (DongSeon → DongSeon-1, DongSeon-2, ...)
     if (params.token_name) {
-      qb.where("request_logs.token_name", params.token_name);
+      qb.where("request_logs.token_name", "like", `${params.token_name}-%`);
     }
 
     // search-keyword

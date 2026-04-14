@@ -13,9 +13,11 @@ import { Worker, type WorkerConfig } from "./worker";
 
 export class ClaudePool {
   workers = new Map<string, Worker[]>();
+  tokenNames = new Map<string, string>();
   quotaExhausted = new Set<string>();
   requestCounts = new Map<string, number>();
   lastUsedToken = "";
+  lastUsedWorkerIndex = 0;
   size: number;
   model: string;
   timeout: number;
@@ -29,15 +31,20 @@ export class ClaudePool {
     this.cwd = config.cwd ?? "/tmp/qgrid";
     this.maxCalls = config.maxCalls ?? 500;
 
-    config.tokens.forEach((token) => {
-      this.createWorkers(token);
+    config.tokens.forEach(({ token, name }) => {
+      this.createWorkers(token, name);
     });
   }
 
-  getStats(tokenNames?: Map<string, string>): TokenStats[] {
+  getLastUsedWorkerName(): string {
+    const baseName = this.tokenNames.get(this.lastUsedToken) ?? "Unknown";
+    return `${baseName}-${this.lastUsedWorkerIndex}`;
+  }
+
+  getStats(): TokenStats[] {
     return [...this.workers.keys()].map((token) => ({
       token,
-      name: tokenNames?.get(token) ?? "Unknown Key",
+      name: this.tokenNames.get(token) ?? "Unknown",
       requests: this.requestCounts.get(token) ?? 0,
       active: !this.quotaExhausted.has(token),
     }));
@@ -69,6 +76,8 @@ export class ClaudePool {
       try {
         const result = await worker.query(input, timeoutMs);
         this.lastUsedToken = worker.tokenId;
+        const tokenWorkers = this.workers.get(worker.tokenId);
+        this.lastUsedWorkerIndex = tokenWorkers ? tokenWorkers.indexOf(worker) + 1 : 0;
         this.requestCounts.set(worker.tokenId, (this.requestCounts.get(worker.tokenId) ?? 0) + 1);
 
         return result;
@@ -89,9 +98,10 @@ export class ClaudePool {
     });
   }
 
-  createWorkers(token: string): void {
+  createWorkers(token: string, name: string): void {
     if (this.workers.has(token)) return;
 
+    this.tokenNames.set(token, name);
     const workerConfig: WorkerConfig = {
       token,
       model: this.model,
@@ -99,7 +109,6 @@ export class ClaudePool {
       cwd: this.cwd,
       maxCalls: this.maxCalls,
     };
-
     const workers = Array.from({ length: this.size }, () => new Worker(workerConfig));
     this.workers.set(token, workers);
     this.requestCounts.set(token, 0);
@@ -113,6 +122,7 @@ export class ClaudePool {
       w.kill();
     });
     this.workers.delete(token);
+    this.tokenNames.delete(token);
     this.quotaExhausted.delete(token);
     this.requestCounts.delete(token);
   }
@@ -121,7 +131,7 @@ export class ClaudePool {
 // Pool 싱글턴 관리
 let pool: ClaudePool | null = null;
 
-export function initPool(tokens: string[]): ClaudePool {
+export function initPool(tokens: { token: string; name: string }[]): ClaudePool {
   pool = new ClaudePool({ tokens });
   return pool;
 }
