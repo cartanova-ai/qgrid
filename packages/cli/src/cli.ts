@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,36 +19,32 @@ function checkCommand(cmd: string): boolean {
 }
 
 program
-  .command("start")
-  .description("Start Qgrid server")
-  .option("-p, --port <port>", "server port (overrides .env)")
+  .name("qgrid")
+  .version("1.1.0")
+  .description("Qgrid — LLM subscription token proxy server")
+  .option("--db <url>", "PostgreSQL connection URL (e.g. postgres://user:pw@host:port/dbname)")
+  .option("-p, --port <port>", "server port")
   .action(async (opts) => {
     const __dirname = dirname(fileURLToPath(import.meta.url));
 
-    // .env에서 QGRID_ prefix 환경변수만 로드
-    const envPath = join(process.cwd(), ".env");
-    if (existsSync(envPath)) {
-      const envContent = readFileSync(envPath, "utf-8");
-      for (const line of envContent.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith("#")) continue;
-        const eqIdx = trimmed.indexOf("=");
-        if (eqIdx === -1) continue;
-        const key = trimmed.slice(0, eqIdx).trim();
-        const value = trimmed.slice(eqIdx + 1).trim();
-        if (key.startsWith("QGRID_") && !process.env[key]) {
-          process.env[key] = value;
-        }
-      }
+    // --db URL 파싱 → QGRID_DB_* 환경변수로 변환
+    if (opts.db) {
+      const url = new URL(opts.db);
+      process.env.QGRID_DB_HOST = url.hostname;
+      process.env.QGRID_DB_PORT = url.port || "5432";
+      process.env.QGRID_DB_USER = url.username;
+      process.env.QGRID_DB_PASSWORD = url.password;
+      process.env.QGRID_DB_NAME = url.pathname.slice(1); // remove leading /
     }
 
-    // CLI 옵션이 .env보다 우선
     if (opts.port) {
       process.env.PORT = opts.port;
     }
 
     // claude CLI 사전 체크
-    if (!checkCommand("claude")) {
+    try {
+      execSync("claude --version", { stdio: "ignore" });
+    } catch {
       console.error("Error: claude CLI not found.");
       console.error("Install: npm i -g @anthropic-ai/claude-code");
       process.exit(1);
@@ -58,9 +54,10 @@ program
     process.env.LR = "remote";
     const bundlePath = join(__dirname, "..", "bundle");
     const serverEntry = join(bundlePath, "dist", "index.js");
+
     if (!existsSync(serverEntry)) {
       console.error(`Error: Server bundle not found at ${serverEntry}`);
-      console.error("Run `pnpm run bundle` first, or reinstall @qgrid/cli.");
+      console.error("Reinstall: npm i -g @cartanova/qgrid-cli");
       process.exit(1);
     }
 
