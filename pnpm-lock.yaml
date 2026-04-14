@@ -21,6 +21,9 @@ catalogs:
     '@types/node':
       specifier: 25.0.7
       version: 25.0.7
+    '@types/pg':
+      specifier: ^8.20.0
+      version: 8.20.0
     react-markdown:
       specifier: ^9.1.0
       version: 9.1.0
@@ -254,6 +257,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 25.0.7
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.20.0
       tsdown:
         specifier: 'catalog:'
         version: 0.12.9(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(typescript@5.9.3)
@@ -3130,6 +3136,9 @@ packages:
 
   '@types/pegjs@0.10.6':
     resolution: {integrity: sha512-eLYXDbZWXh2uxf+w8sXS8d6KSoXTswfps6fvCUuVAGN8eRpfe7h9eSRydxiSJvo9Bf+GzifsDOr9TMQlmJdmkw==}
+
+  '@types/pg@8.20.0':
+    resolution: {integrity: sha512-bEPFOaMAHTEP1EzpvHTbmwR8UsFyHSKsRisLIHVMXnpNefSbGA1bD6CVy+qKjGSqmZqNqBDV2azOBo8TgkcVow==}
 
   '@types/pluralize@0.0.33':
     resolution: {integrity: sha512-JOqsl+ZoCpP4e8TDke9W79FDcSgPAR0l6pixx2JHkhnRjvShyYiAYw2LVsnA7K08Y6DeOnaU6ujmENO4os/cYg==}
@@ -9682,6 +9691,12 @@ snapshots:
   '@types/normalize-package-data@2.4.4': {}
 
   '@types/pegjs@0.10.6': {}
+
+  '@types/pg@8.20.0':
+    dependencies:
+      '@types/node': 25.0.7
+      pg-protocol: 1.13.0
+      pg-types: 2.2.0
 
   '@types/pluralize@0.0.33': {}
 
