@@ -105,15 +105,21 @@ function TokenUsage({ token }: { token: TokenSubsetMapping["A"] }) {
   );
 }
 
+const PAGE_SIZE = 6; // 2×3
+
 export function UsageCard() {
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [page, setPage] = useState(0);
   const { data, isLoading } = TokenService.useTokens("A");
 
   if (isLoading) {
     return (
-      <div className="rounded-lg bg-sand-50 px-5 py-4 animate-pulse">
-        <div className="h-3 w-20 bg-sand-200 rounded mb-3" />
-        <div className="h-2 w-full bg-sand-200 rounded-full" />
+      <div className="grid grid-cols-2 gap-3">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={`skel-${i}`} className="rounded-lg bg-sand-50 px-4 py-3 animate-pulse">
+            <div className="h-3 w-16 bg-sand-200 rounded mb-3" />
+            <div className="h-2 w-full bg-sand-200 rounded-full" />
+          </div>
+        ))}
       </div>
     );
   }
@@ -128,51 +134,53 @@ export function UsageCard() {
     );
   }
 
-  const safeIndex = Math.min(currentIndex, tokens.length - 1);
-  const token = tokens[safeIndex];
-  const hasPrev = safeIndex > 0;
-  const hasNext = safeIndex < tokens.length - 1;
+  const totalPages = Math.ceil(tokens.length / PAGE_SIZE);
+  const safePage = Math.min(page, totalPages - 1);
+  const pageTokens = tokens.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
 
   return (
-    <div className="rounded-lg bg-sand-50 px-5 py-3">
-      {/* Header with navigation */}
-      <div className="flex items-center justify-between mb-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-sand-800">{token.name ?? "Unnamed"}</span>
-          <span
-            className={`text-[10px] px-1.5 py-0.5 rounded-full ${token.active ? "bg-sage-100 text-sage-600" : "bg-sand-200 text-sand-500"}`}
-          >
-            {token.active ? "Active" : "Inactive"}
-          </span>
-        </div>
-
-        {tokens.length > 1 && (
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              className="p-0.5 rounded text-sand-400 hover:text-sand-600 disabled:opacity-30 transition-colors"
-              disabled={!hasPrev}
-              onClick={() => setCurrentIndex(safeIndex - 1)}
-            >
-              <ChevronLeftIcon className="size-4" />
-            </button>
-            <span className="text-[10px] text-sand-400 tabular-nums">
-              {safeIndex + 1} / {tokens.length}
-            </span>
-            <button
-              type="button"
-              className="p-0.5 rounded text-sand-400 hover:text-sand-600 disabled:opacity-30 transition-colors"
-              disabled={!hasNext}
-              onClick={() => setCurrentIndex(safeIndex + 1)}
-            >
-              <ChevronRightIcon className="size-4" />
-            </button>
+    <div>
+      <div className="grid grid-cols-2 gap-3">
+        {pageTokens.map((token) => (
+          <div key={token.id} className="rounded-lg bg-sand-50 px-4 py-3">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-sm font-medium text-sand-800 truncate">
+                {token.name ?? "Unnamed"}
+              </span>
+              <span
+                className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${token.active ? "bg-sage-100 text-sage-600" : "bg-sand-200 text-sand-500"}`}
+              >
+                {token.active ? "Active" : "Inactive"}
+              </span>
+            </div>
+            <TokenUsage token={token} />
           </div>
-        )}
+        ))}
       </div>
 
-      {/* Usage bars */}
-      <TokenUsage token={token} />
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2 mt-3">
+          <button
+            type="button"
+            className="p-0.5 rounded text-sand-400 hover:text-sand-600 disabled:opacity-30 transition-colors"
+            disabled={safePage === 0}
+            onClick={() => setPage(safePage - 1)}
+          >
+            <ChevronLeftIcon className="size-4" />
+          </button>
+          <span className="text-[10px] text-sand-400 tabular-nums">
+            {safePage + 1} / {totalPages}
+          </span>
+          <button
+            type="button"
+            className="p-0.5 rounded text-sand-400 hover:text-sand-600 disabled:opacity-30 transition-colors"
+            disabled={safePage === totalPages - 1}
+            onClick={() => setPage(safePage + 1)}
+          >
+            <ChevronRightIcon className="size-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
