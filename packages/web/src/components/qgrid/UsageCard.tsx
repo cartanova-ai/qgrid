@@ -105,7 +105,7 @@ function TokenUsage({ token }: { token: TokenSubsetMapping["A"] }) {
   );
 }
 
-const PAGE_SIZE = 6; // 2×3
+const PAGE_SIZE = 10; // 2×5
 
 export function UsageCard() {
   const [page, setPage] = useState(0);
