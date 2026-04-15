@@ -46,6 +46,7 @@ export const tokenSubsetQueries = {
       expires_at: "tokens.expires_at",
       account_uuid: "tokens.account_uuid",
       active: "tokens.active",
+      ord: "tokens.ord",
     });
   },
 };

@@ -1,9 +1,23 @@
-import { useState } from "react";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { SortableContext, useSortable, rectSortingStrategy, arrayMove } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import ChevronLeftIcon from "~icons/lucide/chevron-left";
 import ChevronRightIcon from "~icons/lucide/chevron-right";
+import GripVerticalIcon from "~icons/lucide/grip-vertical";
 
 import { QgridService, TokenService } from "@/services/services.generated";
 import type { TokenSubsetMapping } from "@/services/sonamu.generated";
+
+type Token = TokenSubsetMapping["A"];
 
 function barColor(pct: number): string {
   if (pct >= 95) return "bg-red-500";
@@ -45,7 +59,7 @@ function UsageRow({
   );
 }
 
-function TokenUsage({ token }: { token: TokenSubsetMapping["A"] }) {
+function TokenUsage({ token }: { token: Token }) {
   const { data, isLoading } = QgridService.useUsage(token.name);
   if (isLoading) {
     return (
@@ -105,11 +119,100 @@ function TokenUsage({ token }: { token: TokenSubsetMapping["A"] }) {
   );
 }
 
-const PAGE_SIZE = 10; // 2×5
+function SortableTokenCard({ token }: { token: Token }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: String(token.id),
+    transition: {
+      duration: 200,
+      easing: "ease",
+    },
+  });
+
+  const style = {
+    transform: CSS.Translate.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 10 : undefined,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className="rounded-lg bg-sand-50 px-4 py-3 select-none cursor-grab active:cursor-grabbing touch-none"
+    >
+      <div className="flex items-center gap-2 mb-2">
+        <GripVerticalIcon className="size-3.5 text-sand-300 shrink-0" />
+        <span className="text-sm font-medium text-sand-800 truncate">
+          {token.name ?? "Unnamed"}
+        </span>
+        <span
+          className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${token.active ? "bg-sage-100 text-sage-600" : "bg-sand-200 text-sand-500"}`}
+        >
+          {token.active ? "Active" : "Inactive"}
+        </span>
+      </div>
+      <TokenUsage token={token} />
+    </div>
+  );
+}
+
+const PAGE_SIZE = 8;
 
 export function UsageCard() {
   const [page, setPage] = useState(0);
-  const { data, isLoading } = TokenService.useTokens("A");
+  const { data, isLoading } = TokenService.useTokens("A", { orderBy: "ord-asc" });
+  const queryClient = useQueryClient();
+  const reorderMutation = TokenService.useReorderMutation();
+
+  const [localTokens, setLocalTokens] = useState<Token[]>([]);
+
+  useEffect(() => {
+    if (data?.rows) setLocalTokens(data.rows);
+  }, [data?.rows]);
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const activeId = Number(active.id);
+    const overId = Number(over.id);
+    const oldIndex = localTokens.findIndex((t) => t.id === activeId);
+    const newIndex = localTokens.findIndex((t) => t.id === overId);
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    const reordered = arrayMove(localTokens, oldIndex, newIndex);
+    setLocalTokens(reordered);
+
+    const queryKey = TokenService.getTokensQueryOptions("A", {
+      orderBy: "ord-asc" as const,
+    }).queryKey;
+    const prev = queryClient.getQueryData(queryKey);
+
+    queryClient.setQueryData(queryKey, (old: typeof prev) =>
+      old ? { ...old, rows: reordered } : old,
+    );
+
+    reorderMutation.mutate(
+      { ids: reordered.map((t) => t.id) },
+      {
+        onError: () => {
+          queryClient.setQueryData(queryKey, prev);
+          if (data?.rows) setLocalTokens(data.rows);
+        },
+        onSettled: () => {
+          Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["Token"] }),
+            queryClient.invalidateQueries({ queryKey: ["Qgrid"] }),
+          ]);
+        },
+      },
+    );
+  };
 
   if (isLoading) {
     return (
@@ -124,9 +227,7 @@ export function UsageCard() {
     );
   }
 
-  const tokens = data?.rows ?? [];
-
-  if (tokens.length === 0) {
+  if (localTokens.length === 0) {
     return (
       <div className="rounded-lg bg-sand-50 px-5 py-4">
         <p className="text-sand-400 text-sm">No tokens registered</p>
@@ -134,29 +235,21 @@ export function UsageCard() {
     );
   }
 
-  const totalPages = Math.ceil(tokens.length / PAGE_SIZE);
+  const totalPages = Math.ceil(localTokens.length / PAGE_SIZE);
   const safePage = Math.min(page, totalPages - 1);
-  const pageTokens = tokens.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+  const pageTokens = localTokens.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
 
   return (
     <div>
-      <div className="grid grid-cols-2 gap-3">
-        {pageTokens.map((token) => (
-          <div key={token.id} className="rounded-lg bg-sand-50 px-4 py-3">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-sm font-medium text-sand-800 truncate">
-                {token.name ?? "Unnamed"}
-              </span>
-              <span
-                className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${token.active ? "bg-sage-100 text-sage-600" : "bg-sand-200 text-sand-500"}`}
-              >
-                {token.active ? "Active" : "Inactive"}
-              </span>
-            </div>
-            <TokenUsage token={token} />
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={pageTokens.map((t) => String(t.id))} strategy={rectSortingStrategy}>
+          <div className="grid grid-cols-2 gap-3">
+            {pageTokens.map((token) => (
+              <SortableTokenCard key={token.id} token={token} />
+            ))}
           </div>
-        ))}
-      </div>
+        </SortableContext>
+      </DndContext>
 
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-2 mt-3">

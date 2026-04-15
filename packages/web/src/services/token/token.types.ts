@@ -18,6 +18,7 @@ export const TokenSaveParams = TokenBaseSchema.partial({
   expires_at: true,
   account_uuid: true,
   active: true,
+  ord: true,
 });
 export type TokenSaveParams = z.infer<typeof TokenSaveParams>;
 

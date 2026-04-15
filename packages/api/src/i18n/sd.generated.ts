@@ -233,7 +233,9 @@ const entityLabels = {
   "entity.Token.expires_at": "만료 시각 (epoch ms)",
   "entity.Token.account_uuid": "Anthropic 계정 UUID",
   "entity.Token.active": "활성 여부",
+  "entity.Token.ord": "정렬 순서",
   "enum.TokenOrderBy.id-desc": "ID최신순",
+  "enum.TokenOrderBy.ord-asc": "순서순",
   "enum.TokenSearchField.id": "ID",
   "enum.TokenSearchField.name": "이름",
 } as const;

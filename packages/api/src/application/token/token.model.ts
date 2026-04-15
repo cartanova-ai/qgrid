@@ -49,7 +49,7 @@ class TokenModelClass extends BaseModelClass<
       num: 24,
       page: 1,
       search: "id" as const,
-      orderBy: "id-desc" as const,
+      orderBy: "ord-asc" as const,
       ...rawParams,
     } satisfies TokenListParams;
 
@@ -76,6 +76,9 @@ class TokenModelClass extends BaseModelClass<
     if (params.orderBy) {
       if (params.orderBy === "id-desc") {
         qb.orderBy("tokens.id", "desc");
+      } else if (params.orderBy === "ord-asc") {
+        qb.orderBy("tokens.ord", "asc");
+        qb.orderBy("tokens.id", "asc");
       } else {
         exhaustive(params.orderBy);
       }
@@ -145,6 +148,17 @@ class TokenModelClass extends BaseModelClass<
     return wdb.transaction(async (trx) => {
       return trx.ubUpsert("tokens");
     });
+  }
+
+  @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
+  async reorder(ids: number[]): Promise<{ done: boolean }> {
+    const wdb = this.getPuri("w");
+    await wdb.transaction(async (trx) => {
+      for (let i = 0; i < ids.length; i++) {
+        await trx.table("tokens").where("id", ids[i]!).update({ ord: i });
+      }
+    });
+    return { done: true };
   }
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })

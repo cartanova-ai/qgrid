@@ -18,9 +18,9 @@ export type RequestLogSearchField = z.infer<typeof RequestLogSearchField>;
 export const RequestLogSearchFieldLabel = { id: "ID", token_name: "토큰이름", query: "쿼리" };
 
 // Enums: Token
-export const TokenOrderBy = z.enum(["id-desc"]).describe("TokenOrderBy");
+export const TokenOrderBy = z.enum(["id-desc", "ord-asc"]).describe("TokenOrderBy");
 export type TokenOrderBy = z.infer<typeof TokenOrderBy>;
-export const TokenOrderByLabel = { "id-desc": "ID최신순" };
+export const TokenOrderByLabel = { "id-desc": "ID최신순", "ord-asc": "순서순" };
 export const TokenSearchField = z.enum(["id", "name"]).describe("TokenSearchField");
 export type TokenSearchField = z.infer<typeof TokenSearchField>;
 export const TokenSearchFieldLabel = { id: "ID", name: "이름" };
@@ -52,6 +52,7 @@ export const TokenBaseSchema = z.object({
   expires_at: z.bigint().nullable(),
   account_uuid: z.string().nullable(),
   active: z.boolean(),
+  ord: z.int(),
 });
 export type TokenBaseSchema = z.infer<typeof TokenBaseSchema> & {
   readonly __hasDefault__: readonly [
@@ -60,6 +61,7 @@ export type TokenBaseSchema = z.infer<typeof TokenBaseSchema> & {
     "expires_at",
     "account_uuid",
     "active",
+    "ord",
     "id",
   ];
 };
@@ -126,6 +128,7 @@ export const TokenSubsetA = z.object({
   expires_at: z.bigint().nullable(),
   account_uuid: z.string().nullable(),
   active: z.boolean(),
+  ord: z.int(),
 });
 export type TokenSubsetA = z.infer<typeof TokenSubsetA>;
 export type TokenSubsetMapping = {

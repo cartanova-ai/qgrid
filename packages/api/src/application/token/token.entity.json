@@ -15,7 +15,8 @@
       "desc": "만료 시각 (epoch ms)"
     },
     { "name": "account_uuid", "type": "string", "nullable": true, "desc": "Anthropic 계정 UUID" },
-    { "name": "active", "type": "boolean", "desc": "활성 여부", "dbDefault": "true" }
+    { "name": "active", "type": "boolean", "desc": "활성 여부", "dbDefault": "true" },
+    { "name": "ord", "type": "integer", "desc": "정렬 순서", "dbDefault": "0" }
   ],
   "indexes": [],
   "subsets": {
@@ -27,11 +28,12 @@
       "refresh_token",
       "expires_at",
       "account_uuid",
-      "active"
+      "active",
+      "ord"
     ]
   },
   "enums": {
-    "TokenOrderBy": { "id-desc": "ID최신순" },
+    "TokenOrderBy": { "id-desc": "ID최신순", "ord-asc": "순서순" },
     "TokenSearchField": { "id": "ID", "name": "이름" }
   }
 }

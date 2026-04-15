@@ -36,8 +36,20 @@ Content-Type: application/json
       "refresh_token": null,
       "expires_at": null,
       "account_uuid": null,
-      "active": false
+      "active": false,
+      "ord": 0
     }
+  ]
+}
+
+###
+
+POST {{baseUrl}}/api/token/reorder
+Content-Type: application/json
+
+{
+  "ids": [
+    0
   ]
 }
 

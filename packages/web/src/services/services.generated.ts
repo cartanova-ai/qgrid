@@ -108,6 +108,19 @@ export namespace TokenService {
       mutationFn: (params: { spa: TokenSaveParams[] }) => save(params.spa),
     });
 
+  export async function reorder(ids: number[]): Promise<{ done: boolean }> {
+    return fetch({
+      method: "POST",
+      url: `/api/token/reorder`,
+      data: { ids },
+    });
+  }
+
+  export const useReorderMutation = () =>
+    useMutation({
+      mutationFn: (params: { ids: number[] }) => reorder(params.ids),
+    });
+
   export async function del(ids: number[]): Promise<number> {
     return fetch({
       method: "POST",
