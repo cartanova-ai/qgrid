@@ -9,6 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@dnd-kit/core": "catalog:",
+    "@dnd-kit/sortable": "catalog:",
+    "@dnd-kit/utilities": "catalog:",
     "@sonamu-kit/react-components": "^0.2.3",
     "@tailwindcss/typography": "catalog:",
     "@tanstack/react-query": "^5.90.12",
