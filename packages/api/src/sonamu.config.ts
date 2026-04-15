@@ -25,22 +25,22 @@ export default defineConfig({
       },
     },
     environments: {
-      production: {
-        connection: {
-          host: process.env.DEV0_DB_HOST,
-          port: Number(process.env.DEV0_DB_PORT),
-          database: process.env.DATABASE_NAME,
-          user: process.env.DEV0_DB_USER,
-          password: process.env.DEV0_DB_PASSWORD,
-        },
-      },
       fixture: {
         connection: {
           host: process.env.DEV0_DB_HOST,
           port: Number(process.env.DEV0_DB_PORT),
-          database: process.env.DATABASE_NAME,
+          database: process.env.QGRID_DB_NAME + "_fixture",
           user: process.env.DEV0_DB_USER,
           password: process.env.DEV0_DB_PASSWORD,
+        },
+      },
+      test: {
+        connection: {
+          host: "0.0.0.0",
+          port: 54321,
+          database: "qgrid_test",
+          user: "postgres",
+          password: "postgres",
         },
       },
     },
