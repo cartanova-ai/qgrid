@@ -146,39 +146,41 @@ function mapUsage(usage: QgridUsage): AiGenerateTextResult["usage"] {
   };
 }
 
-/**
- * output/experimental_output 파라미터에서 zod schema를 추출.
- * 우리 OutputDefinition이면 .schema로 직접 접근,
- * ai-sdk Output이면 schema 추출 불가 → undefined 반환.
- */
 function extractSchema(output: unknown): z.ZodType | undefined {
   if (!output || typeof output !== "object") return undefined;
-  // 우리 OutputDefinition: { type: "object", schema: ZodType }
-  if ("type" in output && "schema" in output && (output as any).type === "object") {
-    return (output as OutputDefinition<unknown>).schema as z.ZodType;
-  }
-  return undefined;
+  if (!("type" in output) || !("schema" in output)) return undefined;
+  const def = output as OutputDefinition<unknown>;
+  if (def.type === "text" || !def.schema) return undefined;
+  return def.schema as z.ZodType;
 }
 
-/**
- * ai-sdk 호환 generateText.
- * ai-sdk의 generateText와 동일한 파라미터를 받되, 내부적으로 qgrid 서버를 통해 처리.
- * model, tools, providerOptions 등은 무시됨.
- *
- * 구조화 출력은 Output.object({ schema })를 @cartanova/qgrid-sdk에서 import하여 사용.
- */
-export async function generateText(
-  params: Omit<AiGenerateTextParams, "model" | "output" | "experimental_output"> & {
-    model?: AiGenerateTextParams["model"];
-    output?: OutputDefinition<unknown> | AiGenerateTextParams["output"];
-    experimental_output?: OutputDefinition<unknown> | AiGenerateTextParams["experimental_output"];
-    serverUrl?: string;
-    maxAttempts?: number;
-  },
-): Promise<Pick<AiGenerateTextResult, "text" | "usage" | "finishReason" | "output">> {
-  const { prompt, system } = extractPromptAndSystem(params);
+type BaseParams = Omit<AiGenerateTextParams, "model" | "output" | "experimental_output"> & {
+  model?: AiGenerateTextParams["model"];
+  serverUrl?: string;
+  maxAttempts?: number;
+};
 
-  const schema = extractSchema(params.output) ?? extractSchema(params.experimental_output);
+type GenerateTextResponse<T> = {
+  text: string;
+  usage: AiGenerateTextResult["usage"];
+  finishReason: AiGenerateTextResult["finishReason"];
+  output: T;
+};
+
+// OutputDefinition → T 추론
+export async function generateText<T>(
+  params: BaseParams & { output: OutputDefinition<T> },
+): Promise<GenerateTextResponse<T>>;
+
+// output 없음 → string
+export async function generateText(params: BaseParams): Promise<GenerateTextResponse<string>>;
+
+// implementation
+export async function generateText(
+  params: BaseParams & { output?: OutputDefinition<any> },
+): Promise<GenerateTextResponse<any>> {
+  const { prompt, system } = extractPromptAndSystem(params);
+  const schema = extractSchema(params.output);
   const rest = { serverUrl: params.serverUrl, maxAttempts: params.maxAttempts };
 
   if (schema) {
