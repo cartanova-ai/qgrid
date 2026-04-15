@@ -29,7 +29,7 @@
   },
   {
     "path": "src/application/token/token.model.ts",
-    "checksum": "ebea9903496291bb850d0a0104aa291c34135d51"
+    "checksum": "e2afd50df1330a8734b94c54a8ed8ad67dc9dfe6"
   },
   {
     "path": "src/application/token/token.types.ts",

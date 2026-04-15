@@ -1,13 +1,11 @@
 /**
  * ClaudePool — 멀티 토큰 프로세스 풀.
  *
- * 2-layer 아키텍처: ClaudePool → Worker (flat)
- * - Map<token, Worker[]>로 토큰별 워커 관리 (원본 토큰이 키)
- * - least-queue-depth 라우팅
- * - 투명한 쿼터 failover (QuotaError 시 다른 토큰으로 자동 재시도)
- * - 워커 관리만 담당 (DB 의존 없음)
+ * 2-layer 라우팅: 토큰 선택 (least-total-depth + round-robin) → 워커 선택
+ * - Map<token, Worker[]>로 토큰별 워커 관리
+ * - 토큰 간 quota 균등 소진
  */
-import type { CliResult, PoolConfig, QueryInput, TokenStats } from "./qgrid.types";
+import { type CliResult, type PoolConfig, type QueryInput, type TokenStats } from "./qgrid.types";
 import { QuotaError } from "./qgrid.types";
 import { Worker, type WorkerConfig } from "./worker";
 
@@ -50,20 +48,35 @@ export class ClaudePool {
     }));
   }
 
-  private rrIndex = 0;
+  private tokenRrIndex = 0;
+  private workerRrIndexes = new Map<string, number>();
 
   selectWorker(): Worker | null {
-    const candidates = [...this.workers.entries()]
-      .filter(([token]) => !this.quotaExhausted.has(token))
-      .flatMap(([, workers]) => workers);
+    const availableTokens = [...this.workers.entries()].filter(
+      ([token]) => !this.quotaExhausted.has(token),
+    );
 
-    if (candidates.length === 0) return null;
+    if (availableTokens.length === 0) return null;
 
-    const minDepth = Math.min(...candidates.map((w) => w.getQueueDepth()));
-    const idle = candidates.filter((w) => w.getQueueDepth() === minDepth);
-    const picked = idle[this.rrIndex % idle.length];
-    this.rrIndex++;
-    return picked ?? null;
+    // 1단계: 토큰별 총 큐 depth가 가장 낮은 토큰 선택
+    const tokenDepths = availableTokens.map(([token, workers]) => ({
+      token,
+      workers,
+      totalDepth: workers.reduce((sum, w) => sum + w.getQueueDepth(), 0),
+    }));
+    const minTokenDepth = Math.min(...tokenDepths.map((t) => t.totalDepth));
+    const idleTokens = tokenDepths.filter((t) => t.totalDepth === minTokenDepth);
+    const selected = idleTokens[this.tokenRrIndex % idleTokens.length]!;
+    this.tokenRrIndex++;
+
+    // 2단계: 토큰 내에서 least-depth 워커, 동률이면 round-robin
+    const minDepth = Math.min(...selected.workers.map((w) => w.getQueueDepth()));
+    const idleWorkers = selected.workers.filter((w) => w.getQueueDepth() === minDepth);
+    const wrIdx = this.workerRrIndexes.get(selected.token) ?? 0;
+    const picked = idleWorkers[wrIdx % idleWorkers.length]!;
+    this.workerRrIndexes.set(selected.token, wrIdx + 1);
+
+    return picked;
   }
 
   async query(input: QueryInput, timeoutMs?: number): Promise<CliResult> {
