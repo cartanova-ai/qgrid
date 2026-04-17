@@ -1,22 +1,52 @@
 #!/usr/bin/env node
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Command } from "commander";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
+
 const program = new Command();
 program
   .name("qgrid")
-  .version("1.1.0")
+  .version(pkg.version)
   .description("Qgrid — LLM subscription token proxy server")
   .option("--db <url>", "PostgreSQL connection URL (e.g. postgres://user:pw@host:port/dbname)")
   .option("-p, --port <port>", "server port")
+  .option("--skip-update", "skip auto-update check")
   .action(async (opts) => {
-    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const serverPort = opts.port ?? process.env.PORT ?? "44900";
 
-    // --db URL 파싱 → QGRID_DB_* 환경변수로 변환
+    // check if server port is in use, if so, kill the process using it
+    try {
+      const pid = execSync(`lsof -ti :${serverPort}`, { encoding: "utf-8" }).trim();
+      if (pid) {
+        console.log(`⚡ Port ${serverPort} in use (PID ${pid}), killing...`);
+        execSync(`kill -9 ${pid}`, { stdio: "ignore" });
+      }
+    } catch {
+      // 포트 미사용 — 정상
+    }
+
+    // check latest version and self-update
+    if (!opts.skipUpdate) {
+      const latest = execSync("npm view @cartanova/qgrid-cli version", {
+        encoding: "utf-8",
+      }).trim();
+      if (latest !== pkg.version) {
+        console.log(`@@Updating qgrid-cli: ${pkg.version} → ${latest}@@`);
+        execSync("npm i -g @cartanova/qgrid-cli@latest", { stdio: "inherit" });
+        console.log("@@Updated. Restarting...\n@@");
+        const args = process.argv.slice(2).concat("--skip-update");
+        execSync(`qgrid ${args.join(" ")}`, { stdio: "inherit" });
+        process.exit(0);
+      }
+    }
+
+    //  parse --db postgres://user:password@host:port/dbname & set env vars
     if (opts.db) {
       const m = opts.db.match(/^postgres(?:ql)?:\/\/([^:]+):(.+)@([^:]+):(\d+)\/(.+)$/);
       if (!m) {
@@ -34,7 +64,7 @@ program
       process.env.PORT = opts.port;
     }
 
-    // claude CLI 사전 체크
+    // ClaudeCode pre-check
     try {
       execSync("claude --version", { stdio: "ignore" });
     } catch {
