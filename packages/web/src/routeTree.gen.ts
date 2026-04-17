@@ -10,12 +10,18 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TokensRouteImport } from './routes/tokens'
+import { Route as LogsRouteImport } from './routes/logs'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as RequestsShowRouteImport } from './routes/requests/show'
 
 const TokensRoute = TokensRouteImport.update({
   id: '/tokens',
   path: '/tokens',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LogsRoute = LogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -31,30 +37,34 @@ const RequestsShowRoute = RequestsShowRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/logs': typeof LogsRoute
   '/tokens': typeof TokensRoute
   '/requests/show': typeof RequestsShowRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/logs': typeof LogsRoute
   '/tokens': typeof TokensRoute
   '/requests/show': typeof RequestsShowRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/logs': typeof LogsRoute
   '/tokens': typeof TokensRoute
   '/requests/show': typeof RequestsShowRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/tokens' | '/requests/show'
+  fullPaths: '/' | '/logs' | '/tokens' | '/requests/show'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/tokens' | '/requests/show'
-  id: '__root__' | '/' | '/tokens' | '/requests/show'
+  to: '/' | '/logs' | '/tokens' | '/requests/show'
+  id: '__root__' | '/' | '/logs' | '/tokens' | '/requests/show'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  LogsRoute: typeof LogsRoute
   TokensRoute: typeof TokensRoute
   RequestsShowRoute: typeof RequestsShowRoute
 }
@@ -66,6 +76,13 @@ declare module '@tanstack/react-router' {
       path: '/tokens'
       fullPath: '/tokens'
       preLoaderRoute: typeof TokensRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/logs': {
+      id: '/logs'
+      path: '/logs'
+      fullPath: '/logs'
+      preLoaderRoute: typeof LogsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -87,6 +104,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  LogsRoute: LogsRoute,
   TokensRoute: TokensRoute,
   RequestsShowRoute: RequestsShowRoute,
 }

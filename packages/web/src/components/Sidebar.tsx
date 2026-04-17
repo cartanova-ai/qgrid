@@ -1,5 +1,6 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import type React from "react";
+import FileTextIcon from "~icons/lucide/file-text";
 import HomeIcon from "~icons/lucide/home";
 import KeyRoundIcon from "~icons/lucide/key-round";
 
@@ -12,6 +13,7 @@ interface MenuItemProps {
 const menuItems: MenuItemProps[] = [
   { title: "Dashboard", path: "/", icon: HomeIcon },
   { title: "Tokens", path: "/tokens", icon: KeyRoundIcon },
+  { title: "Request Logs", path: "/logs", icon: FileTextIcon },
 ];
 
 interface SidebarProps {

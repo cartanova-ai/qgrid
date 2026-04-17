@@ -33,9 +33,16 @@ function trimQuery(q: string, maxLen = 30): string {
   return q.length > maxLen ? `${q.slice(0, maxLen)}...` : q;
 }
 
-export function RequestLogTable() {
+interface RequestLogTableProps {
+  page?: number;
+  onPageChange?: (page: number) => void;
+}
+
+export function RequestLogTable({ page: externalPage, onPageChange }: RequestLogTableProps = {}) {
   const navigate = useNavigate();
-  const [page, setPage] = useState(1);
+  const [internalPage, setInternalPage] = useState(1);
+  const page = externalPage ?? internalPage;
+  const setPage = onPageChange ?? setInternalPage;
   const [tokenFilter, setTokenFilter] = useState("");
 
   const { data: tokensData } = TokenService.useTokens("A");
@@ -165,7 +172,7 @@ export function RequestLogTable() {
                 type="button"
                 className="p-1 rounded text-sand-400 hover:text-sand-600 disabled:opacity-30 transition-colors"
                 disabled={page === 1}
-                onClick={() => setPage((p) => p - 1)}
+                onClick={() => setPage(page - 1)}
               >
                 <ChevronLeftIcon className="size-4" />
               </button>
@@ -176,7 +183,7 @@ export function RequestLogTable() {
                 type="button"
                 className="p-1 rounded text-sand-400 hover:text-sand-600 disabled:opacity-30 transition-colors"
                 disabled={page === totalPages}
-                onClick={() => setPage((p) => p + 1)}
+                onClick={() => setPage(page + 1)}
               >
                 <ChevronRightIcon className="size-4" />
               </button>

@@ -10,8 +10,6 @@ import { SortableContext, useSortable, rectSortingStrategy, arrayMove } from "@d
 import { CSS } from "@dnd-kit/utilities";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import ChevronLeftIcon from "~icons/lucide/chevron-left";
-import ChevronRightIcon from "~icons/lucide/chevron-right";
 import GripVerticalIcon from "~icons/lucide/grip-vertical";
 
 import { QgridService, TokenService } from "@/services/services.generated";
@@ -159,10 +157,7 @@ function SortableTokenCard({ token }: { token: Token }) {
   );
 }
 
-const PAGE_SIZE = 8;
-
 export function UsageCard() {
-  const [page, setPage] = useState(0);
   const { data, isLoading } = TokenService.useTokens("A", { orderBy: "ord-asc" });
   const queryClient = useQueryClient();
   const reorderMutation = TokenService.useReorderMutation();
@@ -235,45 +230,15 @@ export function UsageCard() {
     );
   }
 
-  const totalPages = Math.ceil(localTokens.length / PAGE_SIZE);
-  const safePage = Math.min(page, totalPages - 1);
-  const pageTokens = localTokens.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
-
   return (
-    <div>
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <SortableContext items={pageTokens.map((t) => String(t.id))} strategy={rectSortingStrategy}>
-          <div className="grid grid-cols-2 gap-3">
-            {pageTokens.map((token) => (
-              <SortableTokenCard key={token.id} token={token} />
-            ))}
-          </div>
-        </SortableContext>
-      </DndContext>
-
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2 mt-3">
-          <button
-            type="button"
-            className="p-0.5 rounded text-sand-400 hover:text-sand-600 disabled:opacity-30 transition-colors"
-            disabled={safePage === 0}
-            onClick={() => setPage(safePage - 1)}
-          >
-            <ChevronLeftIcon className="size-4" />
-          </button>
-          <span className="text-[10px] text-sand-400 tabular-nums">
-            {safePage + 1} / {totalPages}
-          </span>
-          <button
-            type="button"
-            className="p-0.5 rounded text-sand-400 hover:text-sand-600 disabled:opacity-30 transition-colors"
-            disabled={safePage === totalPages - 1}
-            onClick={() => setPage(safePage + 1)}
-          >
-            <ChevronRightIcon className="size-4" />
-          </button>
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+      <SortableContext items={localTokens.map((t) => String(t.id))} strategy={rectSortingStrategy}>
+        <div className="grid grid-cols-2 gap-3">
+          {localTokens.map((token) => (
+            <SortableTokenCard key={token.id} token={token} />
+          ))}
         </div>
-      )}
-    </div>
+      </SortableContext>
+    </DndContext>
   );
 }
