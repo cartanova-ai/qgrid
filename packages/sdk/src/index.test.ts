@@ -30,7 +30,41 @@ const server = setupServer(
     }
     if (body.prompt === "__invalid_json__") {
       return HttpResponse.json({
-        text: "not valid json",
+        text: "not valid json {[",
+        usage: MOCK_USAGE,
+        durationMs: 100,
+        costUsd: 0.01,
+      });
+    }
+
+    // primitive returnType 케이스: LLM이 따옴표 없이 raw로 반환
+    if (body.prompt === "__raw_enum__") {
+      return HttpResponse.json({
+        text: "YES",
+        usage: MOCK_USAGE,
+        durationMs: 100,
+        costUsd: 0.01,
+      });
+    }
+    if (body.prompt === "__raw_number__") {
+      return HttpResponse.json({
+        text: "42",
+        usage: MOCK_USAGE,
+        durationMs: 100,
+        costUsd: 0.01,
+      });
+    }
+    if (body.prompt === "__raw_boolean__") {
+      return HttpResponse.json({
+        text: "true",
+        usage: MOCK_USAGE,
+        durationMs: 100,
+        costUsd: 0.01,
+      });
+    }
+    if (body.prompt === "__quoted_string__") {
+      return HttpResponse.json({
+        text: '"YES"',
         usage: MOCK_USAGE,
         durationMs: 100,
         costUsd: 0.01,
@@ -114,6 +148,30 @@ describe("queryQgrid", () => {
       code: "PARSE_FAILED",
       status: 200,
     });
+  });
+
+  it("z.enum: LLM이 raw 값 반환해도 처리", async () => {
+    const schema = z.enum(["YES", "NO"]);
+    const result = await queryQgrid({ prompt: "__raw_enum__", returnType: schema });
+    expect(result.data).toBe("YES");
+  });
+
+  it("z.enum: LLM이 따옴표 감싸서 반환해도 처리", async () => {
+    const schema = z.enum(["YES", "NO"]);
+    const result = await queryQgrid({ prompt: "__quoted_string__", returnType: schema });
+    expect(result.data).toBe("YES");
+  });
+
+  it("z.number: raw 숫자 반환", async () => {
+    const schema = z.number();
+    const result = await queryQgrid({ prompt: "__raw_number__", returnType: schema });
+    expect(result.data).toBe(42);
+  });
+
+  it("z.boolean: raw boolean 반환", async () => {
+    const schema = z.boolean();
+    const result = await queryQgrid({ prompt: "__raw_boolean__", returnType: schema });
+    expect(result.data).toBe(true);
   });
 });
 

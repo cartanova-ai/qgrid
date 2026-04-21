@@ -72,7 +72,10 @@ export async function queryQgrid<T extends z.ZodType | undefined = undefined>(pa
     }
 
     try {
-      return { ...rest, data: z.parse(returnType, JSON.parse(text)) } as any;
+      // object/array/quoted-string/number/bool/null은 JSON.parse, 나머지는 raw string 그대로
+      const isJsonLike = /^[{["]|^-?\d|^(true|false|null)$/.test(text);
+      const parsed = isJsonLike ? JSON.parse(text) : text;
+      return { ...rest, data: z.parse(returnType, parsed) } as any;
     } catch (e) {
       lastError = e as Error;
       if (attempt < maxAttempts) {
