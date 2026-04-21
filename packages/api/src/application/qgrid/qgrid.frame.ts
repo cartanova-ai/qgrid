@@ -1,9 +1,9 @@
-import type { FastifyReply } from "fastify";
+import { type FastifyReply } from "fastify";
 import { api, BaseFrameClass } from "sonamu";
 
-import { RequestLogModel } from "../request-log/request-log.model";
+import { MICRO_USD, RequestLogModel } from "../request-log/request-log.model";
 import { TokenModel } from "../token/token.model";
-import type { RefreshTokenParams } from "../token/token.types";
+import { type RefreshTokenParams } from "../token/token.types";
 import {
   buildAuthUrl,
   exchangeCodeForTokens,
@@ -12,12 +12,12 @@ import {
   refreshAccessToken,
 } from "./oauth";
 import { type ClaudePool, getPool } from "./pool";
-import type {
-  CliResult,
-  HealthResponse,
-  OAuthStartResult,
-  TokenStats,
-  UsageResponse,
+import {
+  type CliResult,
+  type HealthResponse,
+  type OAuthStartResult,
+  type TokenStats,
+  type UsageResponse,
 } from "./qgrid.types";
 
 // PKCE 세션 메모리 저장 (state → { codeVerifier, name, redirectUri })
@@ -44,6 +44,7 @@ class QgridFrameClass extends BaseFrameClass {
         cache_read_tokens: result.usage.cache_read_input_tokens,
         cache_creation_tokens: result.usage.cache_creation_input_tokens,
         duration_ms: result.durationMs,
+        cost_usd: result.costUsd !== null ? Math.round(result.costUsd * MICRO_USD) : null,
       },
     ]).catch((e) => console.error("requestLog save failed:", e));
 
@@ -53,6 +54,11 @@ class QgridFrameClass extends BaseFrameClass {
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
   async stats(): Promise<TokenStats[]> {
     return getPool().getStats();
+  }
+
+  @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
+  async totalCost(tokenName?: string): Promise<{ usd: number }> {
+    return { usd: await RequestLogModel.totalCost({ token_name: tokenName }) };
   }
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })

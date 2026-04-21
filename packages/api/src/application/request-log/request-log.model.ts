@@ -9,9 +9,12 @@ import {
 } from "sonamu";
 
 import { SD } from "../../i18n/sd.generated";
-import type { RequestLogSubsetKey, RequestLogSubsetMapping } from "../sonamu.generated";
+import { type RequestLogSubsetKey, type RequestLogSubsetMapping } from "../sonamu.generated";
 import { requestLogLoaderQueries, requestLogSubsetQueries } from "../sonamu.generated.sso";
-import type { RequestLogListParams, RequestLogSaveParams } from "./request-log.types";
+import { type RequestLogListParams, type RequestLogSaveParams } from "./request-log.types";
+
+// cost_usd는 정수 micro-USD로 저장. 실제 USD = cost_usd / MICRO_USD.
+export const MICRO_USD = 1_000_000;
 
 /*
   RequestLog Model
@@ -61,7 +64,6 @@ class RequestLogModelClass extends BaseModelClass<
     subset: T,
     rawParams?: LP,
   ): Promise<ListResult<LP, RequestLogSubsetMapping[T]>> {
-    // params with defaults
     const params = {
       num: 24,
       page: 1,
@@ -70,20 +72,16 @@ class RequestLogModelClass extends BaseModelClass<
       ...rawParams,
     } satisfies RequestLogListParams;
 
-    // build queries
     const { qb, onSubset: _ } = this.getSubsetQueries(subset);
 
-    // id
     if (params.id) {
       qb.whereIn("request_logs.id", asArray(params.id));
     }
 
-    // token_name filter — prefix 매칭 (DongSeon → DongSeon-1, DongSeon-2, ...)
     if (params.token_name) {
       qb.where("request_logs.token_name", "like", `${params.token_name}-%`);
     }
 
-    // search-keyword
     if (params.search && params.keyword && params.keyword.length > 0) {
       if (params.search === "id") {
         qb.where("request_logs.id", Number(params.keyword));
@@ -137,6 +135,17 @@ class RequestLogModelClass extends BaseModelClass<
 
       return ids;
     });
+  }
+
+  // Sonamu findMany는 subset 전체 컬럼(text 포함)을 페치해서 aggregate엔 너무 무거움 → raw sum 사용.
+  async totalCost(params: { token_name?: string } = {}): Promise<number> {
+    const qb = this.getDB("r")("request_logs");
+    if (params.token_name) {
+      qb.where("token_name", "like", `${params.token_name}-%`);
+    }
+    // knex는 pg에서 numeric aggregate를 string으로 반환.
+    const row = (await qb.sum({ sum: "cost_usd" }).first()) as { sum: string | null } | undefined;
+    return Number(row?.sum ?? 0) / MICRO_USD;
   }
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
