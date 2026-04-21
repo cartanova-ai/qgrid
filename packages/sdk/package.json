@@ -18,7 +18,8 @@
   },
   "scripts": {
     "build": "tsdown && mv dist/index-*.d.ts dist/index.d.ts 2>/dev/null || true",
-    "dev": "tsdown --watch"
+    "dev": "tsdown --watch",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "catalog:",
