@@ -34,7 +34,13 @@
     { "name": "output_tokens", "type": "integer", "desc": "출력 토큰" },
     { "name": "cache_read_tokens", "type": "integer", "desc": "캐시 읽기 토큰" },
     { "name": "cache_creation_tokens", "type": "integer", "desc": "캐시 생성 토큰" },
-    { "name": "duration_ms", "type": "integer", "desc": "응답 소요시간(ms)" }
+    { "name": "duration_ms", "type": "integer", "desc": "응답 소요시간(ms)" },
+    {
+      "name": "cost_usd",
+      "type": "integer",
+      "nullable": true,
+      "desc": "API 비용"
+    }
   ],
   "indexes": [
     {
@@ -56,7 +62,8 @@
         "output_tokens",
         "cache_read_tokens",
         "cache_creation_tokens",
-        "duration_ms"
+        "duration_ms",
+        "cost_usd"
       ],
       "cone": { "note": "전체 필드 서브셋" }
     }
