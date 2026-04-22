@@ -67,9 +67,11 @@ export class Worker {
 
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
-      HOME: process.env.HOME,
       TMPDIR: process.env.TMPDIR,
       CLAUDE_CODE_OAUTH_TOKEN: this.config.token,
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+      CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1",
+      CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
     };
 
     const { cwd } = this.config;
