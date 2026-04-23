@@ -31,7 +31,7 @@ function calcCacheHitRate(row: RequestLog): string {
   return `${Math.round((row.cache_read_tokens / denom) * 100)}%`;
 }
 
-function trimText(q: string, maxLen = 60): string {
+function trimText(q: string, maxLen = 40): string {
   return q.length > maxLen ? `${q.slice(0, maxLen)}...` : q;
 }
 
