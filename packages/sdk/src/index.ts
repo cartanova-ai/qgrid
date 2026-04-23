@@ -7,6 +7,21 @@ import { type QgridResponse, type QgridTypedResponse, type QgridUsage } from "./
 type AiGenerateTextParams = Parameters<typeof _aiGenerateText>[0];
 type AiGenerateTextResult = Awaited<ReturnType<typeof _aiGenerateText>>;
 
+export type QgridModel =
+  | "anthropic/claude-haiku-4.5"
+  | "anthropic/claude-opus-4"
+  | "anthropic/claude-opus-4.1"
+  | "anthropic/claude-opus-4.5"
+  | "anthropic/claude-opus-4.6"
+  | "anthropic/claude-sonnet-4"
+  | "anthropic/claude-sonnet-4.5"
+  | "anthropic/claude-sonnet-4.6";
+
+// "anthropic/claude-sonnet-4.6" → "claude-sonnet-4-6"
+function toCliModel(model: QgridModel): string {
+  return model.replace(/^anthropic\//, "").replace(/\./g, "-");
+}
+
 export class QgridError extends Error {
   constructor(
     public code: string,
@@ -35,12 +50,14 @@ function getJsonSchemaString(schema: z.ZodType): string {
 export async function queryQgrid<T extends z.ZodType | undefined = undefined>(params: {
   prompt: string;
   system?: string;
+  model?: QgridModel;
   returnType?: T;
   timeout?: number;
   serverUrl?: string;
   maxAttempts?: number;
 }): Promise<T extends z.ZodType ? QgridTypedResponse<z.infer<T>> : QgridResponse> {
-  const { prompt, system, returnType } = params;
+  const { prompt, system, model, returnType } = params;
+  const cliModel = model ? toCliModel(model) : undefined;
   const url = params.serverUrl ?? process.env.QGRID_URL ?? "http://localhost:44900";
   const timeout = params.timeout ?? 300_000;
   const maxAttempts = params.maxAttempts ?? 3;
@@ -55,7 +72,7 @@ export async function queryQgrid<T extends z.ZodType | undefined = undefined>(pa
     const res = await fetch(`${url}/api/qgrid/query`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, system: systemWithSchema }),
+      body: JSON.stringify({ prompt, system: systemWithSchema, model: cliModel }),
       signal: AbortSignal.timeout(timeout),
     });
     if (!res.ok) {
@@ -91,46 +108,7 @@ export async function queryQgrid<T extends z.ZodType | undefined = undefined>(pa
   );
 }
 
-// --- ai-sdk 호환 API ---
-
-function extractPromptAndSystem(params: Record<string, any>): { prompt: string; system?: string } {
-  let system: string | undefined;
-
-  if (params.system) {
-    system = typeof params.system === "string" ? params.system : JSON.stringify(params.system);
-  }
-
-  if ("prompt" in params && params.prompt) {
-    const p = params.prompt;
-    return { prompt: typeof p === "string" ? p : JSON.stringify(p), system };
-  }
-
-  if ("messages" in params && params.messages) {
-    const messages = params.messages as Array<{ role: string; content: unknown }>;
-    const systemMsgs = messages
-      .filter((m) => m.role === "system")
-      .map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)));
-    const nonSystemMsgs = messages.filter((m) => m.role !== "system");
-    if (!system && systemMsgs.length > 0) {
-      system = systemMsgs.join("\n");
-    }
-
-    if (nonSystemMsgs.length === 1 && nonSystemMsgs[0].role === "user") {
-      const content = nonSystemMsgs[0].content;
-      return { prompt: typeof content === "string" ? content : JSON.stringify(content), system };
-    }
-
-    const prompt = nonSystemMsgs
-      .map((m) => {
-        const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
-        return `[${m.role}]: ${content}`;
-      })
-      .join("\n\n");
-    return { prompt, system };
-  }
-
-  throw new QgridError("INVALID_INPUT", 400, "prompt 또는 messages 중 하나는 필수입니다.");
-}
+// --- ai-sdk 호환 API (single-turn 전용) ---
 
 function mapUsage(usage: QgridUsage): AiGenerateTextResult["usage"] {
   return {
@@ -157,8 +135,13 @@ function extractSchema(output: unknown): z.ZodType | undefined {
   return def.schema as z.ZodType;
 }
 
-type BaseParams = Omit<AiGenerateTextParams, "model" | "output" | "experimental_output"> & {
-  model?: AiGenerateTextParams["model"];
+type BaseParams = Omit<
+  AiGenerateTextParams,
+  "model" | "messages" | "prompt" | "output" | "experimental_output"
+> & {
+  prompt: string;
+  system?: string;
+  model?: QgridModel;
   serverUrl?: string;
   maxAttempts?: number;
 };
@@ -182,9 +165,13 @@ export async function generateText(params: BaseParams): Promise<GenerateTextResp
 export async function generateText(
   params: BaseParams & { output?: OutputDefinition<any> },
 ): Promise<GenerateTextResponse<any>> {
-  const { prompt, system } = extractPromptAndSystem(params);
+  const { prompt, system } = params;
   const schema = extractSchema(params.output);
-  const rest = { serverUrl: params.serverUrl, maxAttempts: params.maxAttempts };
+  const rest = {
+    model: params.model,
+    serverUrl: params.serverUrl,
+    maxAttempts: params.maxAttempts,
+  };
 
   if (schema) {
     const result = await queryQgrid({ prompt, system, returnType: schema, ...rest });
@@ -208,10 +195,4 @@ export async function generateText(
 export { Output } from "./output";
 export type { OutputDefinition } from "./output";
 export type { QgridBase, QgridResponse, QgridTypedResponse, QgridUsage } from "./types";
-export type {
-  FinishReason,
-  GenerateTextResult,
-  LanguageModelUsage,
-  ModelMessage,
-  Prompt,
-} from "ai";
+export type { FinishReason, GenerateTextResult, LanguageModelUsage } from "ai";

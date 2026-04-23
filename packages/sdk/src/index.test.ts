@@ -206,53 +206,6 @@ describe("generateText", () => {
     });
   });
 
-  describe("messages 기반 호출", () => {
-    it("단일 user 메시지", async () => {
-      const result = await generateText({
-        messages: [{ role: "user", content: "Hello" }],
-      });
-
-      expect(result.text).toBe("Echo: Hello");
-    });
-
-    it("system + user 메시지", async () => {
-      const result = await generateText({
-        messages: [
-          { role: "system", content: "You are helpful." },
-          { role: "user", content: "Hello" },
-        ],
-      });
-
-      expect(result.text).toBe("Echo: Hello");
-    });
-
-    it("멀티턴 메시지 변환", async () => {
-      const result = await generateText({
-        messages: [
-          { role: "user", content: "Hi" },
-          { role: "assistant", content: "Hello!" },
-          { role: "user", content: "How are you?" },
-        ],
-      });
-
-      // 멀티턴은 role 라벨과 함께 결합
-      expect(result.text).toBe("Echo: [user]: Hi\n\n[assistant]: Hello!\n\n[user]: How are you?");
-    });
-
-    it("별도 system 파라미터가 messages의 system보다 우선", async () => {
-      const result = await generateText({
-        system: "Direct system",
-        messages: [
-          { role: "system", content: "Message system" },
-          { role: "user", content: "Hello" },
-        ],
-      });
-
-      // directSystem이 우선 (directSystem ?? converted.system)
-      expect(result.text).toBe("Echo: Hello");
-    });
-  });
-
   describe("구조화 출력 (Output.object)", () => {
     it("Output.object로 스키마 전달", async () => {
       const schema = z.object({ questions: z.array(z.string()) });
@@ -270,7 +223,7 @@ describe("generateText", () => {
   describe("ai-sdk 호환 파라미터 무시", () => {
     it("model과 providerOptions를 전달해도 정상 동작", async () => {
       const result = await generateText({
-        model: "some-model",
+        model: "anthropic/claude-haiku-4.5",
         providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
         prompt: "Hello",
       });
