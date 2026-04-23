@@ -3,13 +3,13 @@
  * 직접 수정하지 마세요.
  */
 
-import { type PuriWrapper, type DatabaseSchemaExtend, type PuriLoaderQueries } from "sonamu";
+import { PuriWrapper, DatabaseSchemaExtend, PuriLoaderQueries } from "sonamu";
 
 import {
-  type RequestLogSubsetKey,
-  type TokenSubsetKey,
-  type RequestLogBaseSchema,
-  type TokenBaseSchema,
+  RequestLogSubsetKey,
+  TokenSubsetKey,
+  RequestLogBaseSchema,
+  TokenBaseSchema,
 } from "./sonamu.generated";
 
 // SubsetQuery: RequestLog
@@ -19,6 +19,7 @@ export const requestLogSubsetQueries = {
       id: "request_logs.id",
       created_at: "request_logs.created_at",
       token_name: "request_logs.token_name",
+      project_name: "request_logs.project_name",
       query: "request_logs.query",
       response: "request_logs.response",
       input_tokens: "request_logs.input_tokens",

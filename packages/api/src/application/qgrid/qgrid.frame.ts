@@ -33,12 +33,14 @@ class QgridFrameClass extends BaseFrameClass {
     system?: string,
     timeout?: number,
     model?: string,
+    projectName?: string,
   ): Promise<CliResult> {
     const result = await QgridDispatcher.query({ system, prompt, model }, timeout);
 
     RequestLogModel.save([
       {
         token_name: result.tokenName,
+        project_name: projectName && projectName.length > 0 ? projectName : null,
         query: system ? `[System]\n${system}\n\n[User]\n${prompt}` : prompt,
         response: result.text,
         input_tokens: result.usage.input_tokens,

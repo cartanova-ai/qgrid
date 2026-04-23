@@ -82,6 +82,10 @@ class RequestLogModelClass extends BaseModelClass<
       qb.where("request_logs.token_name", "like", `${params.token_name}-%`);
     }
 
+    if (params.project_name) {
+      qb.where("request_logs.project_name", params.project_name);
+    }
+
     if (params.search && params.keyword && params.keyword.length > 0) {
       if (params.search === "id") {
         qb.where("request_logs.id", Number(params.keyword));

@@ -213,6 +213,7 @@ const entityLabels = {
   "entity.RequestLog.id": "ID",
   "entity.RequestLog.created_at": "등록일시",
   "entity.RequestLog.token_name": "토큰 이름",
+  "entity.RequestLog.project_name": "프로젝트 이름",
   "entity.RequestLog.query": "prompt 전문",
   "entity.RequestLog.response": "llm 응답 전문",
   "entity.RequestLog.input_tokens": "입력 토큰",

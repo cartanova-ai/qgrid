@@ -15,18 +15,21 @@
         "fixtureGenerator": "faker.number.int({ \"min\": 1, \"max\": 1000 })"
       }
     },
-    {
-      "name": "created_at",
-      "desc": "등록일시",
-      "dbDefault": "CURRENT_TIMESTAMP",
-      "type": "date"
-    },
+    { "name": "created_at", "desc": "등록일시", "dbDefault": "CURRENT_TIMESTAMP", "type": "date" },
     {
       "name": "token_name",
       "toFilter": true,
       "desc": "토큰 이름",
       "type": "string",
       "length": 100
+    },
+    {
+      "name": "project_name",
+      "toFilter": true,
+      "desc": "프로젝트 이름",
+      "type": "string",
+      "length": 50,
+      "nullable": true
     },
     { "name": "query", "type": "string", "desc": "prompt 전문" },
     { "name": "response", "desc": "llm 응답 전문", "type": "string" },
@@ -35,18 +38,19 @@
     { "name": "cache_read_tokens", "type": "integer", "desc": "캐시 읽기 토큰" },
     { "name": "cache_creation_tokens", "type": "integer", "desc": "캐시 생성 토큰" },
     { "name": "duration_ms", "type": "integer", "desc": "응답 소요시간(ms)" },
-    {
-      "name": "cost_usd",
-      "type": "integer",
-      "nullable": true,
-      "desc": "API 비용"
-    }
+    { "name": "cost_usd", "type": "integer", "nullable": true, "desc": "API 비용" }
   ],
   "indexes": [
     {
       "type": "index",
       "name": "request_logs_token_name_index",
       "columns": [{ "name": "token_name" }],
+      "using": "btree"
+    },
+    {
+      "type": "index",
+      "name": "request_logs_project_name_index",
+      "columns": [{ "name": "project_name" }],
       "using": "btree"
     }
   ],
@@ -56,6 +60,7 @@
         "id",
         "created_at",
         "token_name",
+        "project_name",
         "query",
         "response",
         "input_tokens",
