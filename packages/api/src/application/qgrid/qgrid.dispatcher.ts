@@ -9,7 +9,7 @@
  * env allowlist: PATH, TMPDIR, CLAUDE_CODE_OAUTH_TOKEN + CLAUDE_CODE_DISABLE_*
  */
 import { spawn } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 
 import { type CliResult, type QueryInput, type TokenStats } from "./qgrid.types";
 import { maskToken, ProcessError, QuotaError, TimeoutError } from "./qgrid.types";
@@ -17,13 +17,28 @@ import { maskToken, ProcessError, QuotaError, TimeoutError } from "./qgrid.types
 const DEFAULT_MODEL = "sonnet";
 const DEFAULT_TIMEOUT_MS = 600_000;
 
+// claude CLI 의 cwd. 이 경로의 .claude/settings.json 이 project scope 로 로드되어
+// 혹시라도 있을 user scope (~/.claude/settings.json)를 덮어씀 (--setting-sources project 와 함께).
+const CLAUDE_CWD = "/tmp/qgrid";
+
+// qgrid 전용 project settings — user scope 격리용
+const QGRID_CLAUDE_SETTINGS = {
+  alwaysThinkingEnabled: false, // thinking block 차단
+  includeGitInstructions: false, // system prompt 의 git 가이드 제거
+  cleanupPeriodDays: 1,
+};
+
 class QgridDispatcherClass {
   tokens = new Map<string, string>();
   requestCounts = new Map<string, number>();
   rrIndex = 0;
 
   constructor() {
-    mkdirSync("/tmp/qgrid", { recursive: true });
+    mkdirSync(`${CLAUDE_CWD}/.claude`, { recursive: true });
+    writeFileSync(
+      `${CLAUDE_CWD}/.claude/settings.json`,
+      JSON.stringify(QGRID_CLAUDE_SETTINGS, null, 2),
+    );
   }
 
   getStats(): TokenStats[] {
@@ -95,6 +110,11 @@ async function executeClaude(
     "project",
     "--model",
     model,
+    // thinking 비활성화는 project settings (alwaysThinkingEnabled: false) 에서 처리
+    "--tools",
+    "",
+    "--exclude-dynamic-system-prompt-sections", // cwd/env 를 user msg 로 이동 → prefix cache 안정화
+    "--no-session-persistence", // ~/.claude/projects/ 의 orphan jsonl 누적 방지
   ];
   if (input.system) {
     args.push("--append-system-prompt", input.system);
@@ -114,7 +134,7 @@ async function executeClaude(
     const child = spawn("claude", args, {
       stdio: ["ignore", "pipe", "ignore"],
       env,
-      cwd: "/tmp/qgrid",
+      cwd: CLAUDE_CWD,
     });
 
     let buffer = "";
