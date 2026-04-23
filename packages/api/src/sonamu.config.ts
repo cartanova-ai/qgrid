@@ -219,19 +219,16 @@ export default defineConfig({
           console.warn(`⚠ Migration skipped: ${(e as Error).message}`);
         }
 
-        // Pool 초기화
-        const { initPool } = await import("./application/qgrid/pool");
+        const { QgridDispatcher } = await import("./application/qgrid/qgrid.dispatcher");
         try {
           const { TokenModel } = await import("./application/token/token.model");
           const entries = await TokenModel.findActive("A");
-          const tokens = entries.map((e) => ({ token: e.token, name: e.name }));
-          const pool = initPool(tokens);
+          for (const e of entries) QgridDispatcher.addToken(e.token, e.name);
           console.log(
-            `🌲 Server listening on http://${host}:${port} (${pool.workers.size} tokens loaded)`,
+            `🌲 Server listening on http://${host}:${port} (${QgridDispatcher.tokens.size} tokens loaded)`,
           );
         } catch (e) {
-          console.warn(`⚠ Pool init failed: ${(e as Error).message}`);
-          initPool([]);
+          console.warn(`⚠ Dispatcher init failed: ${(e as Error).message}`);
           console.log(`🌲 Server listening on http://${host}:${port} (no tokens)`);
         }
       },
