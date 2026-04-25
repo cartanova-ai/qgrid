@@ -9,13 +9,15 @@ type AiGenerateTextResult = Awaited<ReturnType<typeof _aiGenerateText>>;
 
 export type QgridModel =
   | "anthropic/claude-haiku-4.5"
+  | "anthropic/claude-sonnet-4"
+  | "anthropic/claude-sonnet-4.5"
+  | "anthropic/claude-sonnet-4.6"
+  | "anthropic/claude-sonnet-4.7"
   | "anthropic/claude-opus-4"
   | "anthropic/claude-opus-4.1"
   | "anthropic/claude-opus-4.5"
   | "anthropic/claude-opus-4.6"
-  | "anthropic/claude-sonnet-4"
-  | "anthropic/claude-sonnet-4.5"
-  | "anthropic/claude-sonnet-4.6";
+  | "anthropic/claude-opus-4.7";
 
 // "anthropic/claude-sonnet-4.6" → "claude-sonnet-4-6"
 function toCliModel(model: QgridModel): string {
