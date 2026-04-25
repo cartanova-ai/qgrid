@@ -87,7 +87,7 @@ export async function queryQgrid<T extends z.ZodType | undefined = undefined>(pa
       prompt,
       system,
       model: cliModel,
-      projectName,
+      projectName: projectName ?? process.env.QGRID_PROJECT_NAME,
       jsonSchema: schemaEntry?.json,
     }),
     signal: AbortSignal.timeout(timeout),
