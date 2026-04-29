@@ -68,13 +68,13 @@ export async function queryQgrid<T extends z.ZodType | undefined = undefined>(pa
   model?: QgridModel;
   projectName?: string;
   returnType?: T;
-  timeout?: number;
+  abortSignal?: AbortSignal;
   serverUrl?: string;
 }): Promise<T extends z.ZodType ? QgridTypedResponse<z.infer<T>> : QgridResponse> {
   const { prompt, system, model, projectName, returnType } = params;
   const cliModel = model ? toCliModel(model) : undefined;
   const url = params.serverUrl ?? process.env.QGRID_URL ?? "http://localhost:44900";
-  const timeout = params.timeout ?? 300_000;
+  const signal = params.abortSignal ?? AbortSignal.timeout(300_000);
 
   // returnType 있으면 CLI 의 --json-schema 를 사용. schema 가 system prompt 에 들어가지 않고
   // Anthropic API 의 structured output (tool) 로 네이티브 전달됨 → prefix cache 절감, 파싱 실패 없음.
@@ -90,7 +90,7 @@ export async function queryQgrid<T extends z.ZodType | undefined = undefined>(pa
       projectName: projectName ?? process.env.QGRID_PROJECT_NAME,
       jsonSchema: schemaEntry?.json,
     }),
-    signal: AbortSignal.timeout(timeout),
+    signal,
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -158,6 +158,7 @@ type BaseParams = Omit<
   serverUrl?: string;
 };
 
+
 type GenerateTextResponse<T> = {
   text: string;
   usage: AiGenerateTextResult["usage"];
@@ -183,6 +184,7 @@ export async function generateText(
     model: params.model,
     projectName: params.projectName,
     serverUrl: params.serverUrl,
+    abortSignal: params.abortSignal,
   };
 
   if (schema) {
