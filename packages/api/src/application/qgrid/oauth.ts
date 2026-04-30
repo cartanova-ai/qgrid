@@ -3,7 +3,11 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 
+import { getLogger } from "@logtape/logtape";
+
 import { type UsageResponse } from "./qgrid.types";
+
+const logger = getLogger(["qgrid", "oauth"]);
 
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize";
@@ -139,7 +143,6 @@ export async function fetchUsage(accessToken: string): Promise<UsageResponse> {
   const cacheKey = accessToken.slice(-10);
   const cached = usageCache[cacheKey];
   if (cached && Date.now() - cached.cachedAt < USAGE_API_CACHE_TTL) {
-    console.log(`[usage] cache hit: ${cacheKey}`);
     return cached.data;
   }
 
@@ -163,7 +166,7 @@ export async function fetchUsage(accessToken: string): Promise<UsageResponse> {
       // 파싱 안 되면 기본 메시지
     }
 
-    console.warn(`[usage] ${res.status}: ${errorMessage}`);
+    logger.warn(`${res.status}: ${errorMessage}`);
 
     // 이전 성공 캐시 있으면 유지
     if (cached?.data && !cached.data.error) return cached.data;

@@ -11,8 +11,12 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 
+import { getLogger } from "@logtape/logtape";
+
 import { type CliResult, type QueryInput, type TokenStats } from "./qgrid.types";
 import { maskToken, ProcessError, QuotaError, TimeoutError } from "./qgrid.types";
+
+const logger = getLogger(["qgrid"]);
 
 const DEFAULT_MODEL = "sonnet";
 const DEFAULT_TIMEOUT_MS = 600_000;
@@ -67,7 +71,7 @@ class QgridDispatcherClass {
     // await 전에 count 선반영. 병렬 요청이 동시에 도착해도 각자 다른 토큰을 고르도록.
     this.requestCounts.set(sel.token, (this.requestCounts.get(sel.token) ?? 0) + 1);
 
-    console.log(`[qgrid] → ${sel.name} (model: ${input.model ?? DEFAULT_MODEL})`);
+    logger.info(`→ ${sel.name} (model: ${input.model ?? DEFAULT_MODEL})`);
 
     const result = await executeClaude(input, sel.token, timeoutMs ?? DEFAULT_TIMEOUT_MS);
     return { ...result, tokenName: sel.name, model: input.model ?? DEFAULT_MODEL };

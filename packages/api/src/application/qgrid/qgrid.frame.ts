@@ -1,3 +1,4 @@
+import { getLogger } from "@logtape/logtape";
 import { type FastifyReply } from "fastify";
 import { api, BaseFrameClass } from "sonamu";
 
@@ -21,6 +22,8 @@ import {
 } from "./qgrid.types";
 
 const pendingOAuth = new Map<string, { codeVerifier: string; name: string; redirectUri: string }>();
+const logger = getLogger(["qgrid"]);
+const oauthLogger = getLogger(["qgrid", "oauth"]);
 
 class QgridFrameClass extends BaseFrameClass {
   constructor() {
@@ -53,7 +56,7 @@ class QgridFrameClass extends BaseFrameClass {
         duration_ms: result.durationMs,
         cost_usd: result.costUsd !== null ? Math.round(result.costUsd * MICRO_USD) : null,
       },
-    ]).catch((e) => console.error("requestLog save failed:", e));
+    ]).catch((e) => logger.error(`requestLog save failed: ${(e as Error).message}`));
 
     return result;
   }
@@ -216,7 +219,7 @@ class QgridFrameClass extends BaseFrameClass {
       try {
         accessToken = await this.refreshToken(entry);
       } catch (e) {
-        console.warn(`[usage] refresh failed for ${entry.name}: ${(e as Error).message}`);
+        oauthLogger.warn(`refresh failed for ${entry.name}: ${(e as Error).message}`);
         return { error: "re-login required" };
       }
     }
@@ -228,7 +231,7 @@ class QgridFrameClass extends BaseFrameClass {
         accessToken = await this.refreshToken(entry);
         return await fetchUsage(accessToken);
       } catch (e) {
-        console.warn(`[usage] refresh failed for ${entry.name}: ${(e as Error).message}`);
+        oauthLogger.warn(`refresh failed for ${entry.name}: ${(e as Error).message}`);
         return { error: "re-login required" };
       }
     }

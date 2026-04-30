@@ -85,11 +85,12 @@ export default defineConfig({
       }),
     },
     loggers: [
-      {
-        category: ["sonamu"],
-        sinks: ["console"],
-        lowestLevel: process.env.NODE_ENV === "test" ? "warning" : "debug",
-      },
+      // qgrid 로그 (요청 분배, oauth/usage API)
+      { category: ["qgrid"], sinks: ["console"], lowestLevel: "info" },
+      // sonamu 로그는 warning 이상만
+      { category: ["sonamu"], sinks: ["console"], lowestLevel: "warning" },
+      // fastify 로그 차단
+      { category: ["fastify"], sinks: [], lowestLevel: "fatal" },
     ],
   },
   server: {
@@ -129,12 +130,7 @@ export default defineConfig({
           body: request.body,
         };
       },
-      guardHandler: (_guard, _request, _api) => {
-        if (_guard === "user") {
-          console.log("user guard");
-        }
-        console.log("NOTHING YET");
-      },
+      guardHandler: () => {},
       cacheControlHandler: (req) => {
         switch (req.type) {
           case "assets":
