@@ -8,6 +8,7 @@
  *
  * @see https://platform.openai.com/docs/pricing
  * @see https://platform.claude.com/docs/en/about-claude/pricing
+ * @see https://ai.google.dev/gemini-api/docs/pricing
  */
 
 import { type OpenAIEffort } from "./effort";
@@ -167,6 +168,52 @@ const ANTHROPIC_COSTS: Record<string, ModelCosts> = {
   "claude-sonnet-5": anthropicCosts(2, 10),
 };
 
+// ── Antigravity (Gemini direct HTTP) ────────────────────────────────────
+//
+// 구독 경로라 실제 청구액은 아니지만, 다른 provider 와 같은 축에서 비교하기 위해 Gemini API 공개
+// 단가를 적용한다. 가격 출처: https://ai.google.dev/gemini-api/docs/pricing (2026-09-04 확인)
+//  - 3.8/3.7/3.6 Flash: 2026-12-31 까지 introductory $0.75/$3.75, cache read $0.075.
+//    2027-01-01 부터 $1.50/$7.50/$0.15 로 인상이 공지돼 있어 날짜로 분기한다.
+//  - 3.1 Pro: $2/$12, cache read $0.20. 프롬프트 200k 초과 시 요청 전체에 $4/$18/$0.40.
+// cache write(storage 과금)는 Antigravity usage 가 보고하지 않으므로 단가를 두지 않는다.
+const GEMINI_FLASH_STANDARD_FROM = Date.UTC(2027, 0, 1);
+
+function geminiFlashCosts(now: number): ModelCosts {
+  return now >= GEMINI_FLASH_STANDARD_FROM
+    ? { inputTokens: 1.5, outputTokens: 7.5, cachedInputTokens: 0.15 }
+    : { inputTokens: 0.75, outputTokens: 3.75, cachedInputTokens: 0.075 };
+}
+
+const GEMINI_PRO_COSTS: ModelCosts = {
+  inputTokens: 2,
+  outputTokens: 12,
+  cachedInputTokens: 0.2,
+  longContext: {
+    threshold: 200_000,
+    inputMultiplier: 2,
+    cachedInputMultiplier: 2,
+    outputMultiplier: 1.5,
+  },
+};
+
+function antigravityCosts(model: string, now: number): ModelCosts | undefined {
+  switch (model) {
+    case "gemini-3.8-flash":
+    case "gemini-3.7-flash":
+    case "gemini-3.6-flash":
+      return geminiFlashCosts(now);
+    case "gemini-3.1-pro":
+      return GEMINI_PRO_COSTS;
+    // https://ai.google.dev/gemini-api/docs/pricing (2026-09-12), text input only.
+    case "gemini-3.1-flash-lite":
+      return { inputTokens: 0.25, outputTokens: 1.5, cachedInputTokens: 0.025 };
+    case "gemini-3.5-flash-lite":
+      return { inputTokens: 0.3, outputTokens: 2.5, cachedInputTokens: 0.03 };
+    default:
+      return undefined;
+  }
+}
+
 // gpt-5.3-codex-spark 는 research preview 로 공식 token 단가가 아직 final 이 아니다.
 // 지원 타입은 유지하되, 공식 단가가 공개될 때까지 아래 generic estimate 로 계산한다.
 // @see https://help.openai.com/en/articles/20001106-codex-rate-card
@@ -177,9 +224,14 @@ export function openaiModelMaxEffort(model: string): OpenAIEffort {
   return OPENAI_COSTS[model]?.maxEffort ?? "xhigh";
 }
 
-export function getModelCosts(model: string): ModelCosts {
+export function getModelCosts(model: string, now: number = Date.now()): ModelCosts {
   const normalizedModel = (model.split("/").pop() ?? model).replace(/\[1m\]$/i, "");
-  return OPENAI_COSTS[normalizedModel] ?? ANTHROPIC_COSTS[normalizedModel] ?? DEFAULT_COSTS;
+  return (
+    OPENAI_COSTS[normalizedModel] ??
+    ANTHROPIC_COSTS[normalizedModel] ??
+    antigravityCosts(normalizedModel, now) ??
+    DEFAULT_COSTS
+  );
 }
 
 export function calculateCostUsd(
@@ -192,8 +244,10 @@ export function calculateCostUsd(
     cacheCreationInputTokens5m?: number;
     cacheCreationInputTokens1h?: number;
   },
+  // 날짜 분기 단가(Gemini Flash introductory) 테스트용. 운영 호출은 현재 시각을 쓴다.
+  now: number = Date.now(),
 ): number {
-  const costs = getModelCosts(model);
+  const costs = getModelCosts(model, now);
   const cachedInput = usage.cachedInputTokens ?? 0;
   const cacheCreationInput5m = Math.max(usage.cacheCreationInputTokens5m ?? 0, 0);
   const cacheCreationInput1h = Math.max(usage.cacheCreationInputTokens1h ?? 0, 0);

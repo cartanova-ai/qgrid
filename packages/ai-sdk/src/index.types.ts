@@ -10,9 +10,16 @@ export type QgridOpenAIEffort = "low" | "medium" | "high" | "xhigh" | "max" | "u
  * 없음)은 Claude Code 가 처리하고, 이 집합 밖의 값은 서버가 조용히 무시한다.
  */
 export type QgridAnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
+/**
+ * Antigravity HTTP 경로의 reasoning effort. qgrid 가 받는 값은 low|medium|high 이고
+ * (Gemini 3.1 Pro 는 medium 이 없어 서버가 거부한다), 어휘 밖의 값은 서버가 다른 값으로 뭉개지 않고
+ * 요청을 거부한다. 미지정이면 qgrid 기본 `low` 를 쓴다.
+ */
+export type QgridAntigravityEffort = "low" | "medium" | "high";
 
 export type QgridOpenAIModel = Extract<QgridSupportedModel, `openai/${string}`>;
 export type QgridAnthropicModel = Extract<QgridSupportedModel, `anthropic/${string}`>;
+export type QgridAntigravityModel = Extract<QgridSupportedModel, `antigravity/${string}`>;
 
 type QgridCommonProviderConfig = {
   serverUrl?: string;
@@ -25,8 +32,14 @@ export type QgridOpenAIProviderConfig = QgridCommonProviderConfig & {
 export type QgridAnthropicProviderConfig = QgridCommonProviderConfig & {
   defaultEffort?: QgridAnthropicEffort;
 };
+export type QgridAntigravityProviderConfig = QgridCommonProviderConfig & {
+  defaultEffort?: QgridAntigravityEffort;
+};
 /** `qgrid()` 는 모델 ID prefix 로 오버로드되므로 보통 provider 별 타입이 추론된다. */
-export type QgridProviderConfig = QgridOpenAIProviderConfig | QgridAnthropicProviderConfig;
+export type QgridProviderConfig =
+  | QgridOpenAIProviderConfig
+  | QgridAnthropicProviderConfig
+  | QgridAntigravityProviderConfig;
 
 type QgridCommonProviderOptions = {
   /**
@@ -93,15 +106,33 @@ export type QgridAnthropicProviderOptions = QgridCommonProviderOptions & {
 };
 
 /**
- * `providerOptions.qgrid` 의 공용 타입. AI SDK 의 providerOptions 는 모델과 연결되지 않은 JSON
- * 레코드라 여기서는 두 provider 타입의 union 이다. provider 를 아는 호출자는
- * `QgridOpenAIProviderOptions` / `QgridAnthropicProviderOptions` 를 직접 쓰는 편이 정확하다.
+ * `providerOptions.qgrid` — Antigravity(직접 HTTP, Gemini) 모델용. `tokenName` 으로 등록된 OAuth 계정을 지정하며, `sessionKey` 는 Anthropic 과 같이 저장/회송되지 않는다(cold-only).
  */
-export type QgridProviderOptions = QgridOpenAIProviderOptions | QgridAnthropicProviderOptions;
+export type QgridAntigravityProviderOptions = QgridCommonProviderOptions & {
+  /** reasoning 깊이. 미지정이면 qgrid 기본 low. 어휘 밖의 값은 서버가 거부한다. */
+  effort?: QgridAntigravityEffort;
+  /**
+   * qgrid 서버의 HTTP 요청 제한(ms). Anthropic `timeoutMs` 와 같은 규칙(양의 정수, 최대 30분,
+   * 기본 240초)이며 non-stream HTTP 전송 예산도 같은 방식으로 60초 더 길게 잡힌다.
+   */
+  timeoutMs?: number;
+};
+
+/**
+ * `providerOptions.qgrid` 의 공용 타입. AI SDK 의 providerOptions 는 모델과 연결되지 않은 JSON
+ * 레코드라 여기서는 provider 타입들의 union 이다. provider 를 아는 호출자는
+ * `QgridOpenAIProviderOptions` / `QgridAnthropicProviderOptions` / `QgridAntigravityProviderOptions`
+ * 를 직접 쓰는 편이 정확하다.
+ */
+export type QgridProviderOptions =
+  | QgridOpenAIProviderOptions
+  | QgridAnthropicProviderOptions
+  | QgridAntigravityProviderOptions;
 
 /** SDK 내부용: 어느 provider 옵션이든 읽을 수 있게 합친 형태. 패키지 밖으로 내보내지 않는다. */
 export type QgridResolvedProviderOptions = Omit<QgridOpenAIProviderOptions, "effort"> &
-  Omit<QgridAnthropicProviderOptions, "effort"> & { effort?: string };
+  Omit<QgridAnthropicProviderOptions, "effort"> &
+  Omit<QgridAntigravityProviderOptions, "effort"> & { effort?: string };
 
 /**
  * OpenAI cache affinity 좌표(구 codex thread 좌표)
@@ -144,7 +175,15 @@ export type QgridSupportedModel =
   | "anthropic/claude-opus-4-6"
   | "anthropic/claude-opus-4-7"
   | "anthropic/claude-opus-4-8"
-  | "anthropic/claude-opus-5";
+  | "anthropic/claude-opus-5"
+  // Antigravity HTTP 경로가 지원하는 Gemini base slug. effort(-low/-medium/-high 변형)는
+  // providerOptions.qgrid.effort 로 고른다. Antigravity 호스팅 Claude/GPT 는 V1 범위 밖이다.
+  | "antigravity/gemini-3.8-flash"
+  | "antigravity/gemini-3.7-flash"
+  | "antigravity/gemini-3.6-flash"
+  | "antigravity/gemini-3.1-pro"
+  | "antigravity/gemini-3.1-flash-lite"
+  | "antigravity/gemini-3.5-flash-lite";
 
 /** Observed image response values. Usage is response-level and appears on the first image only. */
 export type QgridImageGenerationMetadata = {

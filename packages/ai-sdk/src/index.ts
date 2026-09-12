@@ -20,6 +20,8 @@ import {
   type QueryOutput,
   type QgridAnthropicModel,
   type QgridAnthropicProviderConfig,
+  type QgridAntigravityModel,
+  type QgridAntigravityProviderConfig,
   type QgridOpenAIModel,
   type QgridOpenAIProviderConfig,
   type QgridProviderConfig,
@@ -106,11 +108,17 @@ function setThreadCoord(sessionKey: string, coord: QgridThreadCoord): void {
   threadCoordStore.set(sessionKey, { coord, expiresAt: Date.now() + THREAD_COORD_TTL_MS });
 }
 
+// Cold-only routes replay full history without reusing server thread coordinates.
+// This covers both Claude Code spawn and stateless Antigravity HTTP requests.
+export function isColdOnlyModel(modelId: string): boolean {
+  return modelId.startsWith("anthropic/") || modelId.startsWith("antigravity/");
+}
+
 async function deriveCacheAffinityKey(
   modelId: QgridSupportedModel,
   sessionKey?: string,
 ): Promise<string | undefined> {
-  if (!sessionKey || modelId.startsWith("anthropic/")) return undefined;
+  if (!sessionKey || isColdOnlyModel(modelId)) return undefined;
   const bytes = new TextEncoder().encode(`${CACHE_AFFINITY_NAMESPACE}\0${modelId}\0${sessionKey}`);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -175,6 +183,10 @@ export function qgrid(
 export function qgrid(
   modelId: QgridAnthropicModel,
   config?: QgridAnthropicProviderConfig,
+): LanguageModelV3;
+export function qgrid(
+  modelId: QgridAntigravityModel,
+  config?: QgridAntigravityProviderConfig,
 ): LanguageModelV3;
 export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig): LanguageModelV3 {
   const serverUrl = config?.serverUrl ?? process.env.QGRID_URL ?? DEFAULT_QGRID_SERVER_URL;
@@ -640,6 +652,10 @@ export type {
   QgridAnthropicModel,
   QgridAnthropicProviderConfig,
   QgridAnthropicProviderOptions,
+  QgridAntigravityEffort,
+  QgridAntigravityModel,
+  QgridAntigravityProviderConfig,
+  QgridAntigravityProviderOptions,
   QgridLoggerConfig,
   QgridOpenAIEffort,
   QgridOpenAIModel,

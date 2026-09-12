@@ -343,7 +343,7 @@ class RequestLogModelClass extends BaseModelClass<
 
   /**
    * 최근 구간의 provider 별 경량 통계(모니터링용). provider 는 requested_model_name 의
-   * "openai/..." | "anthropic/..." prefix 로 판정한다 — serving model_name 은 prefix 가
+   * "openai/..." | "anthropic/..." | "antigravity/..." prefix 로 판정한다 — serving model_name 은 prefix 가
    * 없고, running 초기엔 아직 비어 있다. 집계는 JS 에서 한다: 폴링 주기가 느슨하고
    * 구간이 짧아 row 수가 작으며, prefix CASE 식을 쿼리 빌더에 박지 않아도 된다.
    */
@@ -382,7 +382,9 @@ class RequestLogModelClass extends BaseModelClass<
         ? "openai"
         : model.startsWith("anthropic/")
           ? "anthropic"
-          : "unknown";
+          : model.startsWith("antigravity/")
+            ? "antigravity"
+            : "unknown";
       const agg = byProvider.get(provider) ?? {
         requests: 0,
         errors: 0,

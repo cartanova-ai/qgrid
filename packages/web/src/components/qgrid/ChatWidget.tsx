@@ -65,8 +65,19 @@ const MODEL_PRESET_GROUPS: { label: string; models: string[] }[] = [
       "anthropic/claude-sonnet-4",
     ],
   },
+  {
+    // Antigravity HTTP model IDs; effort is selected separately.
+    label: "Antigravity",
+    models: [
+      "antigravity/gemini-3.8-flash",
+      "antigravity/gemini-3.7-flash",
+      "antigravity/gemini-3.6-flash",
+      "antigravity/gemini-3.1-pro",
+      "antigravity/gemini-3.1-flash-lite",
+      "antigravity/gemini-3.5-flash-lite",
+    ],
+  },
 ];
-const EFFORT_PRESETS = ["low", "medium", "high"];
 
 interface DoneMeta {
   model?: string;
@@ -116,7 +127,11 @@ function errorMessage(e: unknown): string {
   return String(e);
 }
 
-const PROVIDER_LABELS: Record<string, string> = { openai: "OpenAI", anthropic: "Anthropic" };
+const PROVIDER_LABELS: Record<string, string> = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  antigravity: "Antigravity",
+};
 
 // dispatcher 원문 에러(NO_OPENAI_WORKERS 등)와, 토큰 0개라 부팅이 끝나지 않는 환경의
 // "기동 중" 메시지를 실제 원인인 토큰 부재 안내로 바꿔준다.
@@ -126,6 +141,10 @@ function humanizeError(
   tokens: ChatTokenOption[] | undefined,
 ): string {
   const missing = tokens !== undefined && providerTokenMissing(tokens, provider);
+  // Antigravity accounts use the same OAuth token lifecycle as other providers.
+  if (/No antigravity registration|antigravity\/local is inactive/i.test(message)) {
+    return "활성 Antigravity OAuth 토큰이 없습니다. Tokens 페이지에서 Google 계정으로 로그인하고 토큰을 활성화해주세요.";
+  }
   const noTokenError =
     /NO_OPENAI_WORKERS|no ready openai workers|no anthropic tokens available/i.test(message);
   if (noTokenError || (missing && /기동 중입니다/.test(message))) {
@@ -168,6 +187,13 @@ export function ChatWidget() {
   const [streamId, setStreamId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
+
+  const { data: effortOptions, isError: effortOptionsFailed } = QgridService.useEffortOptions(
+    model,
+    {
+      enabled: open,
+    },
+  );
 
   const threadCoordRef = useRef<QgridThreadCoord | undefined>(undefined);
   const lastConfigRef = useRef<ChatConfig | undefined>(undefined);
@@ -428,7 +454,12 @@ export function ChatWidget() {
               <div className="flex items-center gap-1.5">
                 <select
                   value={model}
-                  onChange={(e) => setModel(e.target.value)}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setModel(next);
+                    // Each model has its own server-provided effort choices.
+                    setEffort("");
+                  }}
                   disabled={busy}
                   className="min-w-0 flex-1 rounded-xl border border-sand-200/80 bg-white px-2 py-1.5 text-[12px] text-sand-800 focus:outline-none focus:border-sienna-300 disabled:opacity-50"
                 >
@@ -445,11 +476,17 @@ export function ChatWidget() {
                 <select
                   value={effort}
                   onChange={(e) => setEffort(e.target.value)}
-                  disabled={busy}
+                  disabled={busy || !effortOptions}
                   className="rounded-xl border border-sand-200/80 bg-white px-2 py-1.5 text-[12px] text-sand-600 focus:outline-none focus:border-sienna-300 disabled:opacity-50"
                 >
-                  <option value="">effort 기본</option>
-                  {EFFORT_PRESETS.map((v) => (
+                  <option value="">
+                    {effortOptionsFailed
+                      ? "effort 조회 실패"
+                      : !effortOptions
+                        ? "effort 불러오는 중…"
+                        : "effort 기본"}
+                  </option>
+                  {(effortOptions ?? []).map((v) => (
                     <option key={v} value={v}>
                       {v}
                     </option>

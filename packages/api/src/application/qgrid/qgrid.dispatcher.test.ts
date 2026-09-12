@@ -6,7 +6,11 @@ import {
   type GenerateStreamCallbacks,
 } from "../../utils/providers/common/provider-dispatcher";
 import { systemHash } from "./conv-routing";
-import { buildStrictOutputSchema, QgridDispatcherClass } from "./qgrid.dispatcher";
+import {
+  buildAndValidateStrictOutputSchema,
+  buildStrictOutputSchema,
+  QgridDispatcherClass,
+} from "./qgrid.dispatcher";
 import { type QueryOutput } from "./qgrid.types";
 
 function providerResult(overrides: Partial<GenerateResult> = {}): GenerateResult {
@@ -1160,5 +1164,165 @@ describe("QgridDispatcherClass", () => {
     await expect(
       dispatcher.query({ prompt: "hi", model: "openai/gpt-5.5" }),
     ).resolves.toMatchObject({ ttftMs: 0 });
+  });
+});
+
+describe("QgridDispatcherClass antigravity route", () => {
+  it("AntigravityDispatcher 미초기화 시 503, 초기화 실패 시 500 이며 Antigravity 라벨을 쓴다", async () => {
+    const dispatcher = new QgridDispatcherClass();
+    await expect(
+      dispatcher.query({ prompt: "hi", model: "antigravity/gemini-3.7-flash" }),
+    ).rejects.toMatchObject({ statusCode: 503 });
+    dispatcher.startupState.antigravity = "failed";
+    const error = await dispatcher
+      .query({ prompt: "hi", model: "antigravity/gemini-3.7-flash" })
+      .catch((e) => e);
+    expect(error).toMatchObject({ statusCode: 500 });
+    expect(String(error.message)).toContain("Antigravity");
+  });
+
+  it("antigravity query 는 스키마 계약을 system 에 합성하고 outputSchema·reuse 는 넘기지 않는다", async () => {
+    const dispatcher = new QgridDispatcherClass();
+    const generate = vi.fn(async (_req: GenerateRequest) =>
+      providerResult({ tokenName: "antigravity/local", model: "gemini-3.7-flash", text: '{"result":"ok"}' }),
+    );
+    dispatcher.antigravityDispatcher = { generate } as never;
+
+    const result = await dispatcher.query({
+      prompt: "hi",
+      system: "base",
+      model: "antigravity/gemini-3.7-flash",
+      jsonSchema: JSON.stringify({ type: "object", properties: { result: { type: "string" } } }),
+      effort: "high",
+      timeout: 5_000,
+      preferredTokenId: 3,
+      requirePreferredToken: true,
+      runContext: {
+        threadCoord: { workerId: 3, threadId: "old", epoch: 0, systemHash: systemHash("base") },
+      },
+    });
+
+    const req = generate.mock.calls[0]?.[0];
+    expect(req?.model).toBe("antigravity/gemini-3.7-flash");
+    expect(req?.systemPrompt).toContain("base");
+    expect(req?.systemPrompt).toContain("<output-json-schema>");
+    expect(req?.outputSchema).toBeUndefined();
+    expect(req?.effort).toBe("high");
+    expect(req?.timeoutMs).toBe(5_000);
+    expect(req?.preferredTokenId).toBe(3);
+    expect(req).not.toHaveProperty("reuse");
+    expect(req).not.toHaveProperty("reuseInput");
+    expect(result.tokenName).toBe("antigravity/local");
+    expect(result.text).toBe('{"result":"ok"}');
+    expect(result.runContext?.threadCoord).toMatchObject({ workerId: 1, threadId: "sess-1", epoch: 0 });
+  });
+
+  it("antigravity queryStream 은 계약 주입 시 델타의 코드펜스를 벗기고 잔여를 done 전에 방출한다", async () => {
+    const dispatcher = new QgridDispatcherClass();
+    const generateStream = vi.fn(async (_req: GenerateRequest, cb: GenerateStreamCallbacks) => {
+      cb.onDelta("```json\n");
+      cb.onDelta('{"result":"o');
+      cb.onDelta('k"}\n```');
+      cb.onComplete(providerResult({ tokenName: "antigravity/local", text: '{"result":"ok"}' }));
+    });
+    dispatcher.antigravityDispatcher = { generateStream } as never;
+
+    const deltas: string[] = [];
+    let done: QueryOutput | undefined;
+    await dispatcher.queryStream(
+      {
+        prompt: "hi",
+        model: "antigravity/gemini-3.7-flash",
+        jsonSchema: JSON.stringify({ type: "object", properties: { result: { type: "string" } } }),
+      },
+      {
+        onDelta: (t) => deltas.push(t),
+        onComplete: (r) => {
+          done = r;
+        },
+        onError: vi.fn(),
+      },
+    );
+
+    expect(deltas.join("")).toBe('{"result":"ok"}');
+    expect(done?.text).toBe('{"result":"ok"}');
+    expect(generateStream.mock.calls[0]?.[0].outputSchema).toBeUndefined();
+  });
+
+  it("antigravity 도 imageGeneration 플래그를 provider 로 넘겨 명시적으로 거부하게 한다", async () => {
+    const dispatcher = new QgridDispatcherClass();
+    const generate = vi.fn(async (req: GenerateRequest) => {
+      if (req.imageGeneration) throw new Error("image generation is not supported on the antigravity route");
+      return providerResult();
+    });
+    dispatcher.antigravityDispatcher = { generate } as never;
+    await expect(
+      dispatcher.query({ prompt: "hi", model: "antigravity/gemini-3.7-flash", imageGeneration: true }),
+    ).rejects.toThrow(/not supported on the antigravity route/);
+  });
+
+  it("cold-only 두 경로는 OpenAI 전용 옵션을 조용히 버리지 않고 400 으로 거부한다", async () => {
+    const dispatcher = new QgridDispatcherClass();
+    const generate = vi.fn(async () => providerResult());
+    const generateStream = vi.fn();
+    dispatcher.anthropicDispatcher = { generate, generateStream } as never;
+    dispatcher.antigravityDispatcher = { generate, generateStream } as never;
+
+    const anthropic = await dispatcher
+      .query({ prompt: "hi", model: "anthropic/claude-sonnet-5", verbosity: "low" })
+      .catch((e) => e);
+    expect(anthropic).toMatchObject({ statusCode: 400 });
+    expect(String(anthropic.message)).toBe(
+      "Anthropic route does not support OpenAI-only option(s): verbosity",
+    );
+
+    const antigravity = await dispatcher
+      .query({
+        prompt: "hi",
+        model: "antigravity/gemini-3.7-flash",
+        reasoningSummary: "auto",
+        serviceTier: "flex",
+        imageGenerationOptions: { size: "1024x1024" },
+      })
+      .catch((e) => e);
+    expect(String(antigravity.message)).toBe(
+      "Antigravity route does not support OpenAI-only option(s): reasoningSummary, serviceTier, imageGenerationOptions",
+    );
+
+    const stream = await dispatcher
+      .queryStream(
+        { prompt: "hi", model: "antigravity/gemini-3.7-flash", verbosity: "high" },
+        { onDelta: vi.fn(), onComplete: vi.fn(), onError: vi.fn() },
+      )
+      .catch((e) => e);
+    expect(stream).toMatchObject({ statusCode: 400 });
+    expect(generate).not.toHaveBeenCalled();
+    expect(generateStream).not.toHaveBeenCalled();
+
+    // 이미지 플래그가 켜진 요청의 옵션은 이 게이트가 아니라 provider 의 명시적 거부 대상이다.
+    generate.mockRejectedValueOnce(new Error("image generation is not supported on the antigravity route"));
+    await expect(
+      dispatcher.query({
+        prompt: "hi",
+        model: "antigravity/gemini-3.7-flash",
+        imageGeneration: true,
+        imageGenerationOptions: { size: "1024x1024" },
+      }),
+    ).rejects.toThrow(/not supported on the antigravity route/);
+  });
+
+  it("antigravity 는 anthropic 과 같이 strict 스키마를 만들지 않고 원형 구문만 검증한다", () => {
+    expect(
+      buildAndValidateStrictOutputSchema({
+        model: "antigravity/gemini-3.7-flash",
+        jsonSchema: JSON.stringify({ type: "object", properties: {} }),
+      }),
+    ).toBeUndefined();
+    expect(() =>
+      buildAndValidateStrictOutputSchema({
+        model: "antigravity/gemini-3.7-flash",
+        jsonSchema: "not json",
+      }),
+    ).toThrow(/valid JSON/);
   });
 });

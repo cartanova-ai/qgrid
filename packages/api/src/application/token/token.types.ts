@@ -23,7 +23,24 @@ export const OpenAICredentials = z.object({
 });
 export type OpenAICredentials = z.infer<typeof OpenAICredentials>;
 
-export const TokenCredentials = z.union([AnthropicCredentials, OpenAICredentials]);
+// Direct Antigravity OAuth credentials are selected per account, not per host.
+export const AntigravityCredentials = z.object({
+  accessToken: z.string(),
+  refreshToken: z.string(),
+  expiresAt: z.number(),
+  accountId: z.string(),
+  accountEmail: z.string(),
+  projectId: z.string(),
+});
+export type AntigravityCredentials = z.infer<typeof AntigravityCredentials>;
+
+export const OAuthTokenCredentials = z.union([
+  AntigravityCredentials,
+  AnthropicCredentials,
+  OpenAICredentials,
+]);
+export type OAuthTokenCredentials = z.infer<typeof OAuthTokenCredentials>;
+export const TokenCredentials = OAuthTokenCredentials;
 export type TokenCredentials = z.infer<typeof TokenCredentials>;
 
 // Token - ListParams

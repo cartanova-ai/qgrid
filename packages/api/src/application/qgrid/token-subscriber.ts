@@ -3,7 +3,11 @@ import { getLogger } from "@logtape/logtape";
 import { Client, type ClientConfig } from "pg";
 
 import { TokenModel } from "../token/token.model";
-import { type AnthropicCredentials, type OpenAICredentials } from "../token/token.types";
+import {
+  type AnthropicCredentials,
+  type AntigravityCredentials,
+  type OpenAICredentials,
+} from "../token/token.types";
 import { type QgridDispatcherClass } from "./qgrid.dispatcher";
 import { type SubscriberStatus } from "./qgrid.types";
 
@@ -179,8 +183,9 @@ export class TokenSubscriber {
       await this.dispatcher.openaiDispatcher
         ?.onTokenRemoved(payload.id)
         .catch((e) => logger.warn(`openai token remove failed: ${(e as Error).message}`));
-      // anthropic 토큰 이벤트는 동기(void) — provider 를 모르므로 무해하게 항상 제거 시도.
+      // anthropic/antigravity 토큰 이벤트는 동기(void) — provider 를 모르므로 무해하게 항상 제거 시도.
       this.dispatcher.anthropicDispatcher?.onTokenRemoved(payload.id);
+      this.dispatcher.antigravityDispatcher?.onTokenRemoved(payload.id);
       logger.info(`NOTIFY ${payload.op} id=${payload.id} → removed from cache`);
       if (previousRow === undefined || wasKeepaliveTarget) this.notifyTokensChanged();
       return;
@@ -192,6 +197,7 @@ export class TokenSubscriber {
         ?.onTokenRemoved(payload.id)
         .catch((e) => logger.warn(`openai token remove failed: ${(e as Error).message}`));
       this.dispatcher.anthropicDispatcher?.onTokenRemoved(payload.id);
+      this.dispatcher.antigravityDispatcher?.onTokenRemoved(payload.id);
       logger.info(`NOTIFY ${payload.op} id=${payload.id} → missing, removed from cache`);
       if (previousRow === undefined || wasKeepaliveTarget) this.notifyTokensChanged();
       return;
@@ -253,6 +259,24 @@ export class TokenSubscriber {
         // inactive 면 INSERT 든 UPDATE 든 풀에 넣지 않는다.
         this.dispatcher.anthropicDispatcher?.onTokenRemoved(payload.id);
       }
+    } else if (row.provider === "antigravity") {
+      // 싱글턴 등록(가중 선택 없음). active 면 등록 갱신, inactive 면 "행은 있으나 비활성" 으로 남겨
+      // dispatcher 가 등록 없음과 다른 오류 문구를 내게 한다.
+      const antigravityDispatcher = this.dispatcher.antigravityDispatcher;
+      const registration = {
+        id: row.id,
+        name: row.name,
+        credentials: row.credentials as AntigravityCredentials,
+        quotaThreshold: row.quota_threshold,
+        weight: row.weight,
+      };
+      if (payload.op === "INSERT" && row.active) {
+        antigravityDispatcher?.onTokenAdded(registration);
+      } else if (row.active) {
+        antigravityDispatcher?.onTokenUpdated(registration);
+      } else {
+        antigravityDispatcher?.onTokenDeactivated(payload.id);
+      }
     }
     logger.info(`NOTIFY ${payload.op} id=${payload.id} (${row.name}) active=${row.active}`);
     const isKeepaliveTarget = row.active && row.provider === "anthropic";
@@ -286,6 +310,17 @@ export class TokenSubscriber {
         weight: r.weight,
       }));
     this.dispatcher.anthropicDispatcher?.replaceTokens(anthropicRows);
+    this.dispatcher.antigravityDispatcher?.replaceTokens(
+      rows
+        .filter((r) => r.provider === "antigravity")
+        .map((r) => ({
+          id: r.id,
+          name: r.name,
+          credentials: r.credentials as AntigravityCredentials,
+          quotaThreshold: r.quota_threshold,
+          weight: r.weight,
+        })),
+    );
     const openaiRows = rows
       .filter((r) => r.provider === "openai")
       .map((r) => ({

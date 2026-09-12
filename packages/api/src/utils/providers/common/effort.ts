@@ -1,5 +1,9 @@
 import { getLogger } from "@logtape/logtape";
 
+import {
+  ANTIGRAVITY_MODEL_EFFORTS,
+  type AntigravityModel,
+} from "../antigravity/antigravity-constants";
 import { openaiModelMaxEffort } from "./model-cost";
 
 const logger = getLogger(["qgrid", "effort"]);
@@ -22,6 +26,36 @@ export type OpenAIEffort = (typeof OPENAI_EFFORTS)[number];
 // 스스로 처리하므로 qgrid 는 provider 집합만 검사한다.
 export const ANTHROPIC_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type AnthropicEffort = (typeof ANTHROPIC_EFFORTS)[number];
+
+// Antigravity HTTP effort vocabulary; model-specific restrictions live in its catalog.
+export const ANTIGRAVITY_EFFORTS = ["low", "medium", "high"] as const;
+export type AntigravityEffort = (typeof ANTIGRAVITY_EFFORTS)[number];
+
+/** Dashboard choices use the same vocabulary and model limits as request dispatch. */
+export function effortOptionsForModel(model: string): string[] {
+  const separator = model.indexOf("/");
+  const provider = model.slice(0, separator);
+  const name = model.slice(separator + 1);
+  if (provider === "openai") {
+    return OPENAI_EFFORTS.filter((effort) => resolveOpenAIEffort(name, effort) !== undefined);
+  }
+  if (provider === "anthropic") return [...ANTHROPIC_EFFORTS];
+  if (provider === "antigravity") {
+    if (!Object.hasOwn(ANTIGRAVITY_MODEL_EFFORTS, name)) return [];
+    return [...(ANTIGRAVITY_MODEL_EFFORTS[name as AntigravityModel] ?? [])];
+  }
+  return [];
+}
+
+export class UnsupportedAntigravityEffortError extends Error {
+  readonly code = "ANTIGRAVITY_UNSUPPORTED_EFFORT" as const;
+  constructor(effort: string) {
+    super(
+      `effort "${effort}" is not supported on the antigravity route (supported: ${ANTIGRAVITY_EFFORTS.join(", ")})`,
+    );
+    this.name = "UnsupportedAntigravityEffortError";
+  }
+}
 
 // 어휘 안에 있고 상한(있다면) 이하인 값만 통과시킨다. 나머지는 debug 로그 후 미지정.
 function resolveWithin<T extends string>(
@@ -50,4 +84,15 @@ export function resolveOpenAIEffort(model: string, effort?: string): OpenAIEffor
 
 export function resolveAnthropicEffort(effort?: string): AnthropicEffort | undefined {
   return resolveWithin(ANTHROPIC_EFFORTS, effort, undefined, "anthropic");
+}
+
+export function resolveAntigravityEffort(
+  effort?: string,
+  fallback: AntigravityEffort = "low",
+): AntigravityEffort {
+  if (effort === undefined) return fallback;
+  if (!(ANTIGRAVITY_EFFORTS as readonly string[]).includes(effort)) {
+    throw new UnsupportedAntigravityEffortError(effort);
+  }
+  return effort as AntigravityEffort;
 }

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   qgrid,
   type QgridAnthropicProviderOptions,
+  type QgridAntigravityProviderOptions,
   type QgridOpenAIProviderOptions,
 } from "./index";
 
@@ -2124,6 +2125,9 @@ describe("provider 별 effort 타입", () => {
     expect(qgrid("anthropic/claude-opus-5", { defaultEffort: "ultra" })).toBeDefined();
     // @ts-expect-error none 은 어느 경로에도 없다
     expect(qgrid("openai/gpt-5.6-terra", { defaultEffort: "none" })).toBeDefined();
+    expect(qgrid("antigravity/gemini-3.7-flash", { defaultEffort: "high" })).toBeDefined();
+    // @ts-expect-error xhigh 는 agy --effort 어휘(low|medium|high)가 아니다
+    expect(qgrid("antigravity/gemini-3.1-pro", { defaultEffort: "xhigh" })).toBeDefined();
   });
 
   it("provider 별 옵션 타입은 effort 어휘를 나눠 검사한다", () => {
@@ -2131,6 +2135,73 @@ describe("provider 별 effort 타입", () => {
     const anthropic = { effort: "max", timeoutMs: 1_000 } satisfies QgridAnthropicProviderOptions;
     // @ts-expect-error Anthropic 옵션에는 ultra 가 없다
     const wrong = { effort: "ultra" } satisfies QgridAnthropicProviderOptions;
-    expect([openai, anthropic, wrong]).toHaveLength(3);
+    const antigravity = {
+      effort: "medium",
+      timeoutMs: 1_000,
+      tokenName: "antigravity/local",
+    } satisfies QgridAntigravityProviderOptions;
+    // @ts-expect-error Antigravity 옵션에는 max 가 없다
+    const wrongAntigravity = { effort: "max" } satisfies QgridAntigravityProviderOptions;
+    expect([openai, anthropic, wrong, antigravity, wrongAntigravity]).toHaveLength(5);
+  });
+});
+
+describe("antigravity 모델의 cold-only 계약", () => {
+  it("sessionKey 좌표를 저장·회송하지 않고 effort/timeoutMs/tokenName 은 그대로 보낸다", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        calls.push({ url, body });
+        return new Response(
+          JSON.stringify({
+            text: "pong",
+            content: [{ type: "text", text: "pong" }],
+            finishReason: "stop",
+            model: "gemini-3.7-flash",
+            tokenName: "antigravity/local",
+            usage,
+            durationMs: 50,
+            costUsd: 0.001,
+            costSource: "pricing_table",
+            runContext: { threadCoord: { threadId: "conv-1", workerId: 3, epoch: 0 } },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }),
+    );
+
+    const model = qgrid("antigravity/gemini-3.7-flash", { defaultEffort: "low" });
+    // sessionKey 는 Antigravity 옵션 타입에 없지만(cold-only), 호출자가 union 타입으로 보내도 저장·회송되지
+    // 않아야 한다. 타입이 아닌 런타임 계약을 검증하므로 satisfies 없이 넘긴다.
+    const providerOptions = {
+      qgrid: {
+        sessionKey: "agy-session",
+        effort: "high",
+        timeoutMs: 120_000,
+        tokenName: "antigravity/local",
+      },
+    };
+    for (const text of ["first", "second"]) {
+      const result = await model.doGenerate({
+        prompt: [{ role: "user", content: [{ type: "text", text }] }],
+        providerOptions,
+      } as never);
+      expect(result.response?.modelId).toBe("gemini-3.7-flash");
+    }
+
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.url).toContain("/api/qgrid/query");
+      const args = call.body.args as Record<string, unknown>;
+      expect(args.model).toBe("antigravity/gemini-3.7-flash");
+      expect(args.effort).toBe("high");
+      expect(args.timeout).toBe(120_000);
+      expect(args.tokenName).toBe("antigravity/local");
+      expect(args).not.toHaveProperty("runContext");
+      expect(args).not.toHaveProperty("cacheAffinityKey");
+      expect(args).not.toHaveProperty("sessionKey");
+    }
   });
 });

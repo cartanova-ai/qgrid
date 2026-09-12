@@ -115,6 +115,9 @@ export namespace QgridService {
   export const modelNames = (): SSRQuery =>
     createSSRQuery("QgridFrame", "modelNames", [], ["Qgrid", "modelNames"]);
 
+  export const effortOptions = (model: string): SSRQuery =>
+    createSSRQuery("QgridFrame", "effortOptions", [model], ["Qgrid", "effortOptions"]);
+
   export const usage = (tokenId?: number): SSRQuery =>
     createSSRQuery("QgridFrame", "usage", [tokenId], ["Qgrid", "usage"]);
 

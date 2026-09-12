@@ -360,3 +360,19 @@ packages/
 - **Schema references (OpenAI)**: structured schemas accept only local root-relative JSON Pointer `$ref` values targeting the document root or a chain of `$defs`/`definitions` entry roots. References into properties, tuple internals, conditionals, or literal values fail with HTTP 400 because normalization can move or rewrite those targets. Resource IDs, anchors, external refs, dynamic refs, and recursive refs are also rejected. The Anthropic route passes the schema through verbatim, so any `$ref` form the model can read is accepted.
 - **Schema budget**: output/tool schema serialization, tool names, descriptions, JSON escaping, and composition framing share one aggregate 512 KiB UTF-8 budget.
 - **Quota management**: Subscription rate limits apply (5-hour / 7-day rolling window). Each token has a quota threshold (default 80%) that excludes it from routing when exceeded; tokens can also be disabled manually in the dashboard.
+
+## Antigravity direct HTTP (experimental branch)
+
+This branch supports named Google OAuth accounts through the Antigravity internal
+HTTP backend, without agy or a host Keychain. In Add Token, choose Google
+(Antigravity), complete consent, and paste the full localhost callback URL.
+Set `QGRID_ANTIGRAVITY_CLIENT_SECRET` on the server before starting OAuth.
+Tokens use normal weight, active, quota threshold, and exact tokenName routing.
+
+Supported Gemini models include 3.8/3.7/3.6 Flash, 3.1 Pro, and 3.1/3.5 Flash-Lite.
+Availability is checked against the selected account; listing does not guarantee capacity.
+Use `providerOptions.qgrid` for effort, timeoutMs, and tokenName.
+No paid-credit fallback is enabled. Reported costs are API-price estimates.
+
+Google's [terms](https://antigravity.google/terms) restrict third-party access.
+This experiment's technical success is not a provider support guarantee.

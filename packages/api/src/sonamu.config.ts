@@ -25,6 +25,7 @@ import {
 import { loadSettings, setSettingChangeHandler } from "./application/setting/setting.store";
 import { handleServerError } from "./server-error-handler";
 import { AnthropicDispatcher } from "./utils/providers/anthropic/anthropic-dispatcher";
+import { AntigravityDispatcher } from "./utils/providers/antigravity/antigravity-dispatcher";
 import { stopOpenAICallbackRelay } from "./utils/providers/openai/openai-callback-relay";
 import { OpenAIDispatcher } from "./utils/providers/openai/openai-dispatcher";
 
@@ -222,6 +223,16 @@ export default defineConfig({
           log.warn(`anthropic dispatcher failed: ${(e as Error).message}`);
         }
 
+        try {
+          const antigravityDispatcher = new AntigravityDispatcher();
+          await antigravityDispatcher.start();
+          QgridDispatcher.antigravityDispatcher = antigravityDispatcher;
+          QgridDispatcher.startupState.antigravity = "ready";
+        } catch (e) {
+          QgridDispatcher.startupState.antigravity = "failed";
+          log.warn(`antigravity dispatcher failed: ${(e as Error).message}`);
+        }
+
         subscriber.setTokenChangeHandler(() => {
           void rescheduleTokenWindowKeepalive();
         });
@@ -234,6 +245,9 @@ export default defineConfig({
         log.info(`listening on http://${host}:${port}`);
         log.info(`anthropic: ${anthropicCount} tokens ready`);
         log.info(`openai: ${openaiCount} tokens ready`);
+        log.info(
+          `antigravity: ${QgridDispatcher.antigravityDispatcher?.tokenCount ? "registered" : "not registered"}`,
+        );
         log.info(
           `subscriber: ${started ? "LISTEN active" : "degraded"}${triggerReady ? "" : ", trigger failed"}`,
         );
@@ -250,6 +264,9 @@ export default defineConfig({
         }
         if (QgridDispatcher.anthropicDispatcher) {
           await QgridDispatcher.anthropicDispatcher.stop();
+        }
+        if (QgridDispatcher.antigravityDispatcher) {
+          await QgridDispatcher.antigravityDispatcher.stop();
         }
         if (QgridDispatcher.subscriber) {
           await QgridDispatcher.subscriber.stop();

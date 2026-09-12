@@ -41,7 +41,7 @@ function formatNum(n: number): string {
   return n.toLocaleString();
 }
 
-type TokenRateProvider = "anthropic" | "openai";
+type TokenRateProvider = "anthropic" | "openai" | "antigravity";
 
 // U0 duration 기준 실측이 끝난 provider만 opt-in한다. 미판정 기본값은 전 provider off.
 const TOKENS_PER_SEC_PROVIDERS = new Set<TokenRateProvider>();
@@ -476,11 +476,13 @@ function detectTokenRateProvider(source: {
     const canonical = modelName.includes("/") ? modelName.split("/").pop()! : modelName;
     if (canonical.startsWith("claude-")) return "anthropic";
     if (/^(gpt-|codex-|o\d)/.test(canonical)) return "openai";
+    if (canonical.startsWith("gemini-")) return "antigravity";
   }
 
   const tokenName = source.token_name?.trim().toLowerCase();
   if (tokenName?.startsWith("anthropic/")) return "anthropic";
   if (tokenName?.startsWith("openai/")) return "openai";
+  if (tokenName?.startsWith("antigravity/")) return "antigravity";
   return null;
 }
 

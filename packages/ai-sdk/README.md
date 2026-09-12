@@ -519,3 +519,19 @@ If multiple projects/workflows share one qgrid server, set `QGRID_PROJECT_NAME`.
 - Node.js >= 20
 - AI SDK v6 (`ai@^6.0.0`)
 - A running qgrid server
+
+## Antigravity direct HTTP (experimental branch)
+
+This branch supports named Google OAuth accounts through the Antigravity internal
+HTTP backend, without agy or a host Keychain. In Add Token, choose Google
+(Antigravity), complete consent, and paste the full localhost callback URL.
+Set `QGRID_ANTIGRAVITY_CLIENT_SECRET` on the server before starting OAuth.
+Tokens use normal weight, active, quota threshold, and exact tokenName routing.
+
+Supported Gemini models include 3.8/3.7/3.6 Flash, 3.1 Pro, and 3.1/3.5 Flash-Lite.
+Availability is checked against the selected account; listing does not guarantee capacity.
+Use `providerOptions.qgrid` for effort, timeoutMs, and tokenName.
+No paid-credit fallback is enabled. Reported costs are API-price estimates.
+
+Google's [terms](https://antigravity.google/terms) restrict third-party access.
+This experiment's technical success is not a provider support guarantee.

@@ -10,7 +10,6 @@ export function AddTokenModal() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const oauth = useOAuthLoginFlow();
-
   const close = () => {
     setOpen(false);
     setName("");
@@ -116,6 +115,34 @@ export function AddTokenModal() {
                       </>
                     )}
                   </button>
+
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 h-px bg-sand-200" />
+                    <span className="text-[10px] text-sand-400 uppercase">or</span>
+                    <div className="flex-1 h-px bg-sand-200" />
+                  </div>
+
+                  <button
+                    type="button"
+                    className="w-full py-2.5 text-sm font-medium rounded-md border border-google-300 text-google-600 hover:bg-google-50 disabled:opacity-50 transition-colors duration-150 flex items-center justify-center gap-2"
+                    disabled={!name.trim() || oauth.loadingProvider !== null}
+                    onClick={() => void oauth.start("antigravity", name)}
+                  >
+                    {oauth.loadingProvider === "antigravity" ? (
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-3.5 h-3.5 border-2 border-google-400 border-t-transparent rounded-full animate-spin" />
+                        Waiting for Google login...
+                      </span>
+                    ) : (
+                      <>
+                        <KeyIcon className="size-4" />
+                        Login with Google (Antigravity)
+                      </>
+                    )}
+                  </button>
+                  <p className="text-[11px] text-sand-400">
+                    Google 계정으로 로그인해 Antigravity 요청에 사용할 토큰을 추가합니다.
+                  </p>
                 </div>
               )}
             </div>

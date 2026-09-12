@@ -215,6 +215,20 @@ class TokenModelClass extends BaseModelClass<
     return wdb.transaction((trx) => trx.table("tokens").where("id", id).update(fields));
   }
 
+  async updateCredentialsIfCurrent(
+    id: number,
+    expected: TokenCredentials,
+    credentials: TokenCredentials,
+  ): Promise<boolean> {
+    return this.getPuri("w").transaction(async (trx) => {
+      const result = await trx.knex.raw<{ rows: { id: number }[] }>(
+        "UPDATE tokens SET credentials = ?::jsonb, reauth_required = false WHERE id = ? AND active = true AND credentials = ?::jsonb RETURNING id",
+        [JSON.stringify(credentials), id, JSON.stringify(expected)],
+      );
+      return result.rows.length === 1;
+    });
+  }
+
   async toggleActive(id: number): Promise<{ active: boolean; reauthRequired: boolean } | null> {
     const wdb = this.getPuri("w");
     return wdb.transaction(async (trx) => {

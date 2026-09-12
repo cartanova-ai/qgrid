@@ -2,17 +2,23 @@
  * QgridDispatcher — provider dispatcher 라우팅 + 토큰 캐시/통계 싱글턴.
  *
  * - 메모리 캐시 (Map<id, TokenSubsetA>) 는 TokenSubscriber 가 pg LISTEN/NOTIFY 로 갱신
- * - OpenAI/Anthropic 요청은 각 provider dispatcher 로만 실행
+ * - OpenAI/Anthropic/Antigravity 요청은 각 provider dispatcher 로만 실행. Anthropic 과 Antigravity 는
+ *   같은 cold-only 계약(스키마 계약을 system 텍스트로, 재사용 좌표 없음)을 쓴다.
  * - QuotaError 는 그대로 상위 전파
  * - dispatcher 미준비는 기동 중(503)/초기화 실패(500)로 구분해 던진다
  */
 
-import { InternalServerErrorException, ServiceUnavailableException } from "sonamu";
+import {
+  BadRequestException,
+  InternalServerErrorException,
+  ServiceUnavailableException,
+} from "sonamu";
 
-import { SD } from "../../i18n/sd.generated";
+import { type LocalizedString, SD } from "../../i18n/sd.generated";
 import { type AnthropicDispatcher } from "../../utils/providers/anthropic/anthropic-dispatcher";
 import { createFenceStripTransform } from "../../utils/providers/anthropic/fence-strip";
-import { getAccessToken } from "../../utils/providers/common/credentials";
+import { type AntigravityDispatcher } from "../../utils/providers/antigravity/antigravity-dispatcher";
+import { getAccessToken, isOAuthTokenCredentials } from "../../utils/providers/common/credentials";
 import { calculateCostUsd } from "../../utils/providers/common/model-cost";
 import {
   type GenerateResult,
@@ -45,6 +51,35 @@ export type InternalQueryInput = QueryInput & {
   requirePreferredToken?: boolean;
 };
 
+export type QgridProviderName = "openai" | "anthropic" | "antigravity";
+
+const PROVIDER_LABELS: Record<QgridProviderName, string> = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  antigravity: "Antigravity",
+};
+
+// Anthropic/Antigravity 가 공유하는 cold-only dispatcher 표면. 둘은 fresh spawn + 전체 history 재생 +
+// 텍스트 스키마 계약이라 qgrid.dispatcher 의 라우팅 분기가 같다.
+type ColdOnlyDispatcher = Pick<AnthropicDispatcher, "generate" | "generateStream">;
+type ColdOnlyProvider = "anthropic" | "antigravity";
+
+// Codex Responses 요청에만 있는 옵션. cold-only 경로는 이를 전달할 곳이 없다 — 조용히 버리면 호출자는
+// 적용된 줄 알고 성공을 받으므로, 두 경로 모두 400 으로 거부한다(사용자 결정 2026-09-08).
+const OPENAI_ONLY_OPTIONS = ["verbosity", "reasoningSummary", "serviceTier"] as const;
+
+function rejectOpenAIOnlyOptions(input: InternalQueryInput, provider: ColdOnlyProvider): void {
+  const present: string[] = OPENAI_ONLY_OPTIONS.filter((key) => input[key] !== undefined);
+  // 이미지 옵션 단독 전달(imageGeneration 없이)도 같은 부류다. 플래그가 켜진 요청은 provider 가 명시적으로 거부한다.
+  if (input.imageGenerationOptions !== undefined && !input.imageGeneration) {
+    present.push("imageGenerationOptions");
+  }
+  if (present.length === 0) return;
+  throw new BadRequestException(
+    `${PROVIDER_LABELS[provider]} route does not support OpenAI-only option(s): ${present.join(", ")}` as LocalizedString,
+  );
+}
+
 export class QgridDispatcherClass {
   tokens = new Map<number, TokenSubsetA>();
 
@@ -55,6 +90,7 @@ export class QgridDispatcherClass {
   subscriber: TokenSubscriber | null = null;
   openaiDispatcher: OpenAIDispatcher | null = null;
   anthropicDispatcher: AnthropicDispatcher | null = null;
+  antigravityDispatcher: AntigravityDispatcher | null = null;
 
   /**
    * provider 별 기동 상태. dispatcher 가 없는 이유를 구분하기 위해 필요하다 —
@@ -65,9 +101,10 @@ export class QgridDispatcherClass {
    * - `ready`: 정상
    * - `failed`: start() 가 예외로 끝남 → 재시도해도 같은 결과
    */
-  startupState: Record<"openai" | "anthropic", ProviderStartupState> = {
+  startupState: Record<QgridProviderName, ProviderStartupState> = {
     openai: "starting",
     anthropic: "starting",
+    antigravity: "starting",
   };
 
   /**
@@ -77,8 +114,8 @@ export class QgridDispatcherClass {
    * 500 으로 재시도가 무의미함을 알린다. 이전에는 둘 다 QuotaError 였는데, 쿼터 소진이
    * 아닌 상태를 그렇게 표현하면 호출자가 토큰 문제로 오해하고 재시도 판단도 못 한다.
    */
-  private notReadyError(provider: "openai" | "anthropic"): Error {
-    const label = provider === "openai" ? "OpenAI" : "Anthropic";
+  private notReadyError(provider: QgridProviderName): Error {
+    const label = PROVIDER_LABELS[provider];
     return this.startupState[provider] === "failed"
       ? new InternalServerErrorException(SD("qgrid.dispatcherFailed")(label))
       : new ServiceUnavailableException(SD("qgrid.dispatcherStarting")(label));
@@ -103,7 +140,10 @@ export class QgridDispatcherClass {
 
   getStats(): TokenStats[] {
     return [...this.tokens.values()].map((r) => ({
-      token: maskToken(getAccessToken(r.credentials)),
+      // Antigravity 행은 secret 이 없다(호스트 Keychain 참조). 마스킹할 토큰 대신 출처를 표시한다.
+      token: isOAuthTokenCredentials(r.credentials)
+        ? maskToken(getAccessToken(r.credentials))
+        : "keychain",
       name: r.name,
       provider: r.provider,
       requests: this.countOf(r.name),
@@ -155,16 +195,18 @@ export class QgridDispatcherClass {
         images: result.images,
         answerKind,
       });
-    } else if (route.provider === "anthropic") {
-      if (!this.anthropicDispatcher) throw this.notReadyError("anthropic");
+    } else if (route.provider === "anthropic" || route.provider === "antigravity") {
+      const dispatcher = this.coldOnlyDispatcher(route.provider);
+      rejectOpenAIOnlyOptions(input, route.provider);
 
       const decision = decideConvRouting(input);
-      const result = await this.anthropicDispatcher.generate({
-        // AnthropicDispatcher 내부에서 알아서 provider prefix 를 canonical model 로 정규화함
+      const result = await dispatcher.generate({
+        // provider dispatcher 내부에서 알아서 provider prefix 를 canonical model 로 정규화함
         model: input.model,
         // 스키마/envelope 계약은 --json-schema 대신 system 말미의 텍스트로 안내한다(SON-532).
         // outputSchema 는 전달하지 않는다 — anthropic 에서 항상 undefined(U1)이며,
-        // CC 로 가는 --json-schema 채널 자체가 닫혀 있음을 여기서 명시한다.
+        // CC 로 가는 --json-schema 채널 자체가 닫혀 있음을 여기서 명시한다. antigravity 도 같다:
+        // Antigravity uses the shared text schema/envelope contract.
         systemPrompt: composeSystemWithSchemaContract(input.system, input),
         effort: input.effort,
         timeoutMs: input.timeout,
@@ -242,8 +284,9 @@ export class QgridDispatcherClass {
         },
       );
       return;
-    } else if (route.provider === "anthropic") {
-      if (!this.anthropicDispatcher) throw this.notReadyError("anthropic");
+    } else if (route.provider === "anthropic" || route.provider === "antigravity") {
+      const dispatcher = this.coldOnlyDispatcher(route.provider);
+      rejectOpenAIOnlyOptions(input, route.provider);
 
       // 계약(스키마/envelope)이 주입된 요청의 델타에서 코드펜스를 벗긴다(SON-532).
       // 비스트림 최종 텍스트는 stream-json-adapter 의 stripFences 가 같은 시맨틱으로
@@ -258,7 +301,7 @@ export class QgridDispatcherClass {
         : cb.onDelta;
 
       const decision = decideConvRouting(input);
-      await this.anthropicDispatcher.generateStream(
+      await dispatcher.generateStream(
         {
           model: input.model,
           // 스키마/envelope 계약은 --json-schema 대신 system 말미의 텍스트로 안내한다(SON-532)
@@ -296,6 +339,13 @@ export class QgridDispatcherClass {
     }
 
     throw directLlmApiFallbackNotImplemented(input);
+  }
+
+  private coldOnlyDispatcher(provider: ColdOnlyProvider): ColdOnlyDispatcher {
+    const dispatcher =
+      provider === "anthropic" ? this.anthropicDispatcher : this.antigravityDispatcher;
+    if (!dispatcher) throw this.notReadyError(provider);
+    return dispatcher;
   }
 }
 
@@ -342,7 +392,8 @@ export function buildAndValidateStrictOutputSchema(
   // 4.7~9.1배 출력 청구 실측). 스키마/envelope 계약은 프롬프트 텍스트로 안내하고 판정은
   // 소비자(zod)/parseEnvelope 가 맡는다. 따라서 strict 변환·argv 64KiB 제한 없이 수신
   // 원형의 구문·복잡도(전역 512KiB 한도)만 검증해 caller-fault 를 조기에 돌려준다.
-  if (provider === "anthropic") {
+  // Antigravity also uses the shared text schema contract.
+  if (provider === "anthropic" || provider === "antigravity") {
     parseAndValidateCallerSchemas(input);
     return undefined;
   }

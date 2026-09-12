@@ -50,7 +50,8 @@ export function createQgridRequestTransport(
   modelId: QgridSupportedModel,
   timeoutMs?: number,
 ): QgridRequestTransport | undefined {
-  if (!modelId.startsWith("anthropic/")) return undefined;
+  // Both cold-only routes need a transport budget longer than the server request timeout.
+  if (!modelId.startsWith("anthropic/") && !modelId.startsWith("antigravity/")) return undefined;
 
   const options = anthropicTransportOptions(timeoutMs);
   return {

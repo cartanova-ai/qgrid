@@ -257,3 +257,59 @@ describe("calculateCostUsd", () => {
     );
   });
 });
+
+describe("Antigravity(Gemini via agy) 단가", () => {
+  const before2027 = Date.UTC(2026, 8, 4);
+  const from2027 = Date.UTC(2027, 0, 1);
+
+  it("Flash 계열은 2026-12-31 까지 introductory $0.75/$3.75, cache read $0.075", () => {
+    for (const model of ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]) {
+      expect(
+        calculateCostUsd(
+          `antigravity/${model}`,
+          { inputTokens: 1_000_000, outputTokens: 1_000_000, cachedInputTokens: 0 },
+          before2027,
+        ),
+      ).toBeCloseTo(4.5, 6);
+    }
+    expect(
+      calculateCostUsd(
+        "gemini-3.7-flash",
+        { inputTokens: 1_000_000, outputTokens: 1_000_000, cachedInputTokens: 500_000 },
+        before2027,
+      ),
+    ).toBeCloseTo(0.375 + 0.0375 + 3.75, 6);
+  });
+
+  it("Flash 계열은 2027-01-01 부터 공지된 표준 단가 $1.50/$7.50/$0.15 로 바뀐다", () => {
+    expect(
+      calculateCostUsd(
+        "antigravity/gemini-3.7-flash",
+        { inputTokens: 1_000_000, outputTokens: 1_000_000, cachedInputTokens: 0 },
+        from2027,
+      ),
+    ).toBeCloseTo(9, 6);
+    expect(getModelCosts("gemini-3.8-flash", from2027).cachedInputTokens).toBe(0.15);
+  });
+
+  it("3.1 Pro 는 $2/$12/$0.20 이고 200k 초과 프롬프트는 요청 전체에 $4/$18/$0.40 을 적용한다", () => {
+    expect(
+      calculateCostUsd("antigravity/gemini-3.1-pro", {
+        inputTokens: 100_000,
+        outputTokens: 10_000,
+        cachedInputTokens: 0,
+      }),
+    ).toBeCloseTo(0.32, 6);
+    expect(
+      calculateCostUsd("antigravity/gemini-3.1-pro", {
+        inputTokens: 300_000,
+        outputTokens: 10_000,
+        cachedInputTokens: 100_000,
+      }),
+    ).toBeCloseTo(0.8 + 0.04 + 0.18, 6);
+  });
+
+  it("agy 가 보고하지 않는 cache write 는 단가가 없어 0 으로 계산된다", () => {
+    expect(getModelCosts("gemini-3.1-pro").cacheCreationInputTokens).toBeUndefined();
+  });
+});

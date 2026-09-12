@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { QgridService } from "@/services/services.generated";
 
-export type Provider = "anthropic" | "openai";
+export type Provider = "anthropic" | "openai" | "antigravity";
 
 const OPENAI_POLL_INTERVAL_MS = 3000;
 const OPENAI_POLL_TIMEOUT_MS = 300_000;
@@ -32,6 +32,7 @@ export function useOAuthLoginFlow() {
   const queryClient = useQueryClient();
   const oauthStartMutation = QgridService.useOauthStartMutation();
   const oauthStartOpenAIMutation = QgridService.useOauthStartOpenAIMutation();
+  const oauthStartAntigravityMutation = QgridService.useOauthStartAntigravityMutation();
   const oauthCompleteMutation = QgridService.useOauthCompleteMutation();
 
   // 폴링 타이머는 언마운트 시 반드시 정리한다 — 안 하면 모달을 닫거나 페이지를 떠나도
@@ -59,6 +60,14 @@ export function useOAuthLoginFlow() {
     setLoadingProvider(provider);
 
     try {
+      if (provider === "antigravity") {
+        const { authUrl } = await oauthStartAntigravityMutation.mutateAsync({ name: trimmed });
+        if (popup) popup.location.href = authUrl;
+        else window.open(authUrl, "_blank");
+        setCodeEntryProvider(provider);
+        setLoadingProvider(null);
+        return;
+      }
       if (provider === "openai") {
         const { authUrl, mode } = await oauthStartOpenAIMutation.mutateAsync({ name: trimmed });
         if (popup) popup.location.href = authUrl;

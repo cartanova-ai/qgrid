@@ -305,3 +305,96 @@ describe("TokenSubscriber OpenAI notifications", () => {
     expect(onTokensChanged).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("TokenSubscriber Antigravity singleton registration", () => {
+  beforeEach(() => {
+    findOneMock.mockReset();
+    findActiveMock.mockReset();
+  });
+
+  function antigravityRow(active = true) {
+    return {
+      id: 3,
+      provider: "antigravity",
+      active,
+      name: "antigravity/local",
+      credentials: { accessToken: "test", refreshToken: "test", expiresAt: 9999999999999, accountId: "id", accountEmail: "test@example.test", projectId: "project" },
+      quota_threshold: 80,
+      weight: 1,
+    };
+  }
+
+  function subscriberWithAntigravity(antigravityDispatcher: Record<string, unknown>) {
+    return new TokenSubscriber(
+      {} as never,
+      {
+        tokens: new Map(),
+        removeCache: vi.fn(),
+        upsertCache: vi.fn(),
+        replaceCache: vi.fn(),
+        openaiDispatcher: null,
+        anthropicDispatcher: null,
+        antigravityDispatcher,
+      } as never,
+    );
+  }
+
+  it("active INSERT/UPDATE 는 등록 갱신, inactive 는 비활성 표시, DELETE 는 제거", async () => {
+    const antigravityDispatcher = {
+      onTokenAdded: vi.fn(),
+      onTokenUpdated: vi.fn(),
+      onTokenDeactivated: vi.fn(),
+      onTokenRemoved: vi.fn(),
+    };
+    const subscriber = subscriberWithAntigravity(antigravityDispatcher);
+    const registration = {
+      id: 3,
+      name: "antigravity/local",
+      credentials: { accessToken: "test", refreshToken: "test", expiresAt: 9999999999999, accountId: "id", accountEmail: "test@example.test", projectId: "project" },
+      quotaThreshold: 80, weight: 1,
+    };
+
+    findOneMock.mockResolvedValueOnce(antigravityRow(true));
+    await subscriber.handleNotification(JSON.stringify({ op: "INSERT", id: 3 }));
+    expect(antigravityDispatcher.onTokenAdded).toHaveBeenCalledWith(registration);
+
+    findOneMock.mockResolvedValueOnce(antigravityRow(true));
+    await subscriber.handleNotification(JSON.stringify({ op: "UPDATE", id: 3 }));
+    expect(antigravityDispatcher.onTokenUpdated).toHaveBeenCalledWith(registration);
+
+    findOneMock.mockResolvedValueOnce(antigravityRow(false));
+    await subscriber.handleNotification(JSON.stringify({ op: "UPDATE", id: 3 }));
+    expect(antigravityDispatcher.onTokenDeactivated).toHaveBeenCalledWith(3);
+
+    await subscriber.handleNotification(JSON.stringify({ op: "DELETE", id: 3 }));
+    expect(antigravityDispatcher.onTokenRemoved).toHaveBeenCalledWith(3);
+  });
+
+  it("reconcile 은 active antigravity 행으로 등록을 재동기화한다", async () => {
+    const antigravityDispatcher = { replaceTokens: vi.fn() };
+    const subscriber = subscriberWithAntigravity(antigravityDispatcher);
+    findActiveMock.mockResolvedValueOnce([antigravityRow(true)]);
+
+    await subscriber.reconcile();
+
+    expect(antigravityDispatcher.replaceTokens).toHaveBeenCalledWith([
+      {
+        id: 3,
+        name: "antigravity/local",
+        credentials: { accessToken: "test", refreshToken: "test", expiresAt: 9999999999999, accountId: "id", accountEmail: "test@example.test", projectId: "project" },
+        quotaThreshold: 80, weight: 1,
+      },
+    ]);
+  });
+
+  it("antigravity 변경은 Anthropic keepalive 재예약을 유발하지 않는다", async () => {
+    const subscriber = subscriberWithAntigravity({ onTokenAdded: vi.fn() });
+    const onTokensChanged = vi.fn();
+    subscriber.setTokenChangeHandler(onTokensChanged);
+    findOneMock.mockResolvedValueOnce(antigravityRow(true));
+
+    await subscriber.handleNotification(JSON.stringify({ op: "INSERT", id: 3 }));
+
+    expect(onTokensChanged).not.toHaveBeenCalled();
+  });
+});

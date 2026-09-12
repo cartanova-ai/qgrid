@@ -363,6 +363,7 @@ export const HealthResponse = z.object({
   providers: z.object({
     openai: ProviderStartupState,
     anthropic: ProviderStartupState,
+    antigravity: ProviderStartupState,
   }),
 });
 export type HealthResponse = z.infer<typeof HealthResponse>;

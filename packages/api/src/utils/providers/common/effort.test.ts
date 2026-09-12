@@ -3,9 +3,33 @@ import { describe, expect, it } from "vitest";
 import {
   ANTHROPIC_EFFORTS,
   OPENAI_EFFORTS,
+  effortOptionsForModel,
   resolveAnthropicEffort,
+  resolveAntigravityEffort,
   resolveOpenAIEffort,
+  UnsupportedAntigravityEffortError,
 } from "./effort";
+
+describe("dashboard effort options", () => {
+  it("follows OpenAI model ceilings", () => {
+    expect(effortOptionsForModel("openai/gpt-6-astra")).toEqual(OPENAI_EFFORTS);
+    expect(effortOptionsForModel("openai/gpt-5.6-luna")).toEqual([
+      "low", "medium", "high", "xhigh", "max",
+    ]);
+    expect(effortOptionsForModel("openai/gpt-5.5")).toEqual([
+      "low", "medium", "high", "xhigh",
+    ]);
+  });
+
+  it("keeps provider vocabularies and Gemini model exceptions", () => {
+    expect(effortOptionsForModel("anthropic/claude-opus-5")).toEqual(ANTHROPIC_EFFORTS);
+    expect(effortOptionsForModel("antigravity/gemini-3.8-flash")).toEqual(["low", "medium", "high"]);
+    expect(effortOptionsForModel("antigravity/gemini-3.1-pro")).toEqual(["low", "high"]);
+    expect(effortOptionsForModel("antigravity/unknown")).toEqual([]);
+    expect(effortOptionsForModel("antigravity/__proto__")).toEqual([]);
+    expect(effortOptionsForModel("unknown/model")).toEqual([]);
+  });
+});
 
 describe("resolveOpenAIEffort", () => {
   it("preserves every Astra Codex catalog effort including ultra", () => {
@@ -57,5 +81,21 @@ describe("resolveAnthropicEffort", () => {
     expect(resolveAnthropicEffort("none")).toBeUndefined();
     expect(resolveAnthropicEffort("minimal")).toBeUndefined();
     expect(resolveAnthropicEffort(undefined)).toBeUndefined();
+  });
+});
+
+describe("resolveAntigravityEffort (agy --effort 어휘)", () => {
+  it("low/medium/high 만 통과시키고 미지정은 기본 low", () => {
+    expect(resolveAntigravityEffort("low")).toBe("low");
+    expect(resolveAntigravityEffort("medium")).toBe("medium");
+    expect(resolveAntigravityEffort("high")).toBe("high");
+    expect(resolveAntigravityEffort(undefined)).toBe("low");
+    expect(resolveAntigravityEffort(undefined, "medium")).toBe("medium");
+  });
+
+  it("어휘 밖의 값은 다른 effort 로 뭉개지 않고 거부한다", () => {
+    for (const effort of ["minimal", "xhigh", "max", "ultra", "none", ""]) {
+      expect(() => resolveAntigravityEffort(effort)).toThrow(UnsupportedAntigravityEffortError);
+    }
   });
 });

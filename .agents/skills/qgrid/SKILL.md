@@ -21,6 +21,7 @@ Before changing code, identify the affected path:
 - OpenAI direct transport, permits, routing, cache affinity, OAuth, or quota behavior: read `references/openai-codex-runtime.md`.
 - Adding an OpenAI model, its pricing, or reasoning levels: follow the model-addition checklist in `references/openai-codex-runtime.md`.
 - Anthropic models or Claude Code spawn/stream-json behavior: read `references/anthropic-claude-code-runtime.md`.
+- Antigravity direct HTTP, OAuth, account routing, models, and quota: read `references/antigravity-http-runtime.md`.
 - Token registration, OAuth, token sync, active/inactive behavior, quota thresholds, or weighted token routing: read `references/token-auth-quota-lifecycle.md`.
 - Provider comparisons, routing, or cross-provider bugs: read `references/provider-runtime-differences.md`.
 - Tool calling, AI SDK multi-step loops, or tool-call request logs: read `references/tool-calling-and-multiturn.md`.
@@ -47,7 +48,7 @@ Request logging is enabled by default. Use `providerOptions.qgrid.logger: false`
 - Use `packages/ai-sdk` as the active public SDK surface.
 - The old v1 SDK package (`packages/sdk`, `@cartanova/qgrid-sdk`) has been removed from the repository. It survives only as a deprecated npm artifact (1.9.0); do not resurrect it or write new code against it.
 - Let the server infer single-turn versus tool-run request-log lifecycle. Do not recreate caller-selected logging modes in the SDK or API examples.
-- Route provider models by prefix: `openai/*` goes to the OpenAI Codex runtime, `anthropic/*` goes to the Anthropic Claude Code runtime. Prefix-less model fallback is not implemented.
+- Route provider models by prefix: `openai/*` goes to the OpenAI Codex runtime, `anthropic/*` goes to the Anthropic Claude Code runtime, and `antigravity/*` goes to the Antigravity direct HTTP runtime. Prefix-less model fallback is not implemented.
 - Treat Fable (5 and 5.1) safety fallback as upstream Claude Code behavior, not qgrid routing: a classifier refusal can retry on Opus 5 or Opus 4.8 depending on refusal category. Do not add a second qgrid retry. Preserve requested Fable versus actual serving Opus, fallback history, and provider-reported cost; a fresh Claude Code process means the fallback is not sticky across qgrid requests.
 - Treat dashboard work as Sonamu API/model/generated-client/web work, not isolated frontend work.
 - Prefer `getPuri()` for Sonamu model queries. Treat `getDB()` as a legacy escape hatch only when Puri cannot express the required query. Inside `@transactional` methods, all participating queries must use `getPuri()`; `getDB()` does not reuse Sonamu's ambient transaction connection.

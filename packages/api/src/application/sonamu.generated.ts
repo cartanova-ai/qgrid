@@ -28,6 +28,14 @@ const TokenCredentials = z.union([
     accessToken: z.string(),
     refreshToken: z.string(),
     expiresAt: z.number(),
+    accountId: z.string(),
+    accountEmail: z.string(),
+    projectId: z.string(),
+  }),
+  z.object({
+    accessToken: z.string(),
+    refreshToken: z.string(),
+    expiresAt: z.number(),
     accountUuid: z.string(),
   }),
   z.object({

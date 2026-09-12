@@ -25,7 +25,7 @@ import { type Provider, useOAuthLoginFlow } from "./use-oauth-login-flow";
 type Token = TokenSubsetMapping["A"];
 
 // Quota gate 가 구현된 provider 에서만 threshold 편집/표시를 연다(거짓 UI 방지).
-const QUOTA_THRESHOLD_PROVIDERS = new Set(["anthropic", "openai"]);
+const QUOTA_THRESHOLD_PROVIDERS = new Set(["anthropic", "openai", "antigravity"]);
 
 // threshold 입력(문자열) → 저장값(number|null) 검증.
 // 빈 값 또는 0 = 해제(null, 제한 없음). 1..100 정수는 그대로. 소수/음수/100 초과는 거부.
@@ -71,6 +71,13 @@ const PROVIDER_THEMES: Record<string, ProviderTheme> = {
     cost: "text-anthropic-600",
   },
   google: {
+    stripe: "bg-google-400",
+    bar: "bg-google-400",
+    badge: "bg-google-50 text-google-600",
+    cost: "text-google-600",
+  },
+  // Antigravity 는 Gemini(Google) 런타임이라 google 팔레트를 쓴다.
+  antigravity: {
     stripe: "bg-google-400",
     bar: "bg-google-400",
     badge: "bg-google-50 text-google-600",
@@ -134,7 +141,7 @@ function UsageRow({
     // 고정 폭 합(w-20+w-10+w-24 = 216px)이 좁은 카드보다 커서 resets 가 밖으로 밀려났다.
     // 라벨·수치는 내용에 맞게 줄이고, resets 는 폭이 확보되는 sm 이상에서만 보여준다.
     <div className="flex items-center gap-2">
-      <span className="text-xs text-sand-600 w-7 shrink-0">
+      <span className="text-xs text-sand-600 min-w-7 whitespace-nowrap shrink-0">
         {formatWindowLabel(label, windowDurationMins)}
       </span>
       <div className="relative flex-1 min-w-0 h-2 bg-sand-200 rounded-full overflow-hidden">
@@ -150,7 +157,9 @@ function UsageRow({
           />
         )}
       </div>
-      <span className="text-xs tabular-nums text-sand-700 w-9 text-right shrink-0">{pct}%</span>
+      <span className="text-xs tabular-nums text-sand-700 min-w-11 whitespace-nowrap text-right shrink-0">
+        {Number(pct.toFixed(1))}%
+      </span>
       <span
         className="hidden sm:inline text-[10px] text-sand-400 w-24 text-right shrink-0"
         title={formatResets(resetsAt)}
@@ -647,10 +656,10 @@ function SortableTokenCard({ token }: { token: Token }) {
         </div>
         <TokenUsage token={token} theme={theme} />
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          {/* 만료를 확인하는 곳이 대시보드인데 조치는 Tokens 페이지에서만 되면 동선이
-              어긋난다. 조치가 필요한 카드에서 바로 재로그인한다. */}
+          {/* Re-login uses the same OAuth flow for every provider. */}
           {token.reauth_required && <ReloginButton token={token} />}
           <div className="flex-1" />
+
           <WeightControl token={token} />
           <ThresholdControl token={token} />
         </div>
@@ -659,8 +668,14 @@ function SortableTokenCard({ token }: { token: Token }) {
   );
 }
 
-const PROVIDERS = ["all", "openai", "anthropic"] as const;
+const PROVIDERS = ["all", "openai", "anthropic", "antigravity"] as const;
 type ProviderFilter = (typeof PROVIDERS)[number];
+const PROVIDER_FILTER_LABELS: Record<ProviderFilter, string> = {
+  all: "All",
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  antigravity: "Antigravity",
+};
 
 export function UsageCard() {
   const { data, isLoading } = TokenService.useTokens("A", { orderBy: "ord-asc" });
@@ -758,7 +773,7 @@ export function UsageCard() {
               }`}
               onClick={() => setProviderFilter(p)}
             >
-              {p === "all" ? "All" : p === "openai" ? "OpenAI" : "Anthropic"}
+              {PROVIDER_FILTER_LABELS[p]}
             </button>
           ))}
         </div>

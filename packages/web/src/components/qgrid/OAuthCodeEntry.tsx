@@ -12,27 +12,31 @@ export function OAuthCodeEntry({
   onSubmit,
   onRestart,
 }: {
-  provider: "anthropic" | "openai";
+  provider: "anthropic" | "openai" | "antigravity";
   isPending: boolean;
   isError: boolean;
   onSubmit: (pastedCode: string) => void;
   onRestart: () => void;
 }) {
   const [pastedCode, setPastedCode] = useState("");
-  const isOpenAI = provider === "openai";
+  const isOpenAI = provider !== "anthropic";
 
   return (
     <div className="space-y-2">
       <p className="text-[12px] text-sand-600 leading-relaxed">
         {isOpenAI
-          ? "새 탭에서 OpenAI 로그인을 완료한 뒤 연결 실패 화면이 나타나면, 주소창의 전체 URL을 아래에 붙여넣으세요."
+          ? `새 탭에서 ${provider === "antigravity" ? "Google" : "OpenAI"} 로그인을 완료한 뒤 연결 실패 화면이 나타나면, 주소창의 전체 URL을 아래에 붙여넣으세요.`
           : "새 탭에서 Claude 로그인을 완료하면 코드가 표시됩니다. 코드 전체를 아래에 붙여넣으세요."}
       </p>
       <Input
         value={pastedCode}
         onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPastedCode(e.target.value)}
         placeholder={
-          isOpenAI ? "http://localhost:1455/auth/callback?code=...&state=..." : "code#state"
+          provider === "antigravity"
+            ? "http://localhost:51121/oauth-callback?code=...&state=..."
+            : isOpenAI
+              ? "http://localhost:1455/auth/callback?code=...&state=..."
+              : "code#state"
         }
         className="w-full border border-sand-200 rounded-md px-3 py-2 text-sm font-mono text-sand-900 bg-white placeholder:text-sand-300 focus:outline-none focus:border-sienna-300"
       />

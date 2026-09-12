@@ -522,6 +522,12 @@ Content-Type: application/json
 
 ###
 
+GET {{baseUrl}}/api/qgrid/effortOptions
+	?model=MODEL
+Content-Type: application/json
+
+###
+
 POST {{baseUrl}}/api/qgrid/addToken
 Content-Type: application/json
 
@@ -531,7 +537,9 @@ Content-Type: application/json
     "accessToken": "ACCESSTOKEN",
     "refreshToken": "REFRESHTOKEN",
     "expiresAt": 0,
-    "accountUuid": "ACCOUNTUUID"
+    "accountId": "ACCOUNTID",
+    "accountEmail": "ACCOUNTEMAIL",
+    "projectId": "PROJECTID"
   },
   "name": "NAME"
 }
@@ -565,6 +573,15 @@ Content-Type: application/json
 
 {
   "id": 0
+}
+
+###
+
+POST {{baseUrl}}/api/qgrid/oauthStartAntigravity
+Content-Type: application/json
+
+{
+  "name": "NAME"
 }
 
 ###

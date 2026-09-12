@@ -26,7 +26,7 @@ export interface ClaudeStreamJsonLine {
   };
 }
 
-function userInputToText(input: Array<UserInput>): string {
+export function userInputToText(input: Array<UserInput>): string {
   return input
     .filter((i): i is Extract<UserInput, { type: "text" }> => i.type === "text")
     .map((i) => i.text)
@@ -61,7 +61,8 @@ function responseItemText(item: ResponseItem): string {
     .join("\n");
 }
 
-function flattenColdHistory(coldHistory: Array<JsonValue>): string {
+// Antigravity HTTP uses the same cold-history serialization.
+export function flattenColdHistory(coldHistory: Array<JsonValue>): string {
   const parts: Array<string> = [];
   for (const raw of coldHistory) {
     const item = asObject(raw);

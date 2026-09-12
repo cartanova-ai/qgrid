@@ -41,11 +41,13 @@
       "id": "provider-runtimes",
       "code": [
         "packages/api/src/utils/providers/openai/openai-dispatcher.ts",
-        "packages/api/src/utils/providers/anthropic/anthropic-dispatcher.ts"
+        "packages/api/src/utils/providers/anthropic/anthropic-dispatcher.ts",
+        "packages/api/src/utils/providers/antigravity/antigravity-dispatcher.ts"
       ],
       "skill": [
         "packages/cli/skills/qgrid/references/openai-codex-runtime.md",
-        "packages/cli/skills/qgrid/references/anthropic-claude-code-runtime.md"
+        "packages/cli/skills/qgrid/references/anthropic-claude-code-runtime.md",
+        "packages/cli/skills/qgrid/references/antigravity-http-runtime.md"
       ],
       "notion": {
         "title": "Provider 런타임",
@@ -56,7 +58,8 @@
       "id": "token-routing",
       "code": [
         "packages/api/src/application/token/token.entity.json",
-        "packages/api/src/utils/providers/common/smooth-weighted-round-robin.ts"
+        "packages/api/src/utils/providers/common/smooth-weighted-round-robin.ts",
+        "packages/api/src/utils/providers/antigravity/antigravity-http.ts"
       ],
       "skill": [
         "packages/cli/skills/qgrid/references/token-auth-quota-lifecycle.md"

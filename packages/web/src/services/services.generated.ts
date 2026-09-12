@@ -994,6 +994,27 @@ export namespace QgridService {
       }),
     );
 
+  export async function effortOptions(model: string): Promise<string[]> {
+    return fetch({
+      method: "GET",
+      url: `/api/qgrid/effortOptions?${qs.stringify({ model })}`,
+    });
+  }
+
+  export const effortOptionsQueryOptions = (model: string) =>
+    queryOptions({
+      queryKey: ["Qgrid", "effortOptions", model],
+      queryFn: () => effortOptions(model),
+    });
+
+  export const useEffortOptions = (model: string, options?: { enabled?: boolean }) =>
+    useRefreshable(
+      useQuery({
+        ...effortOptionsQueryOptions(model),
+        ...options,
+      }),
+    );
+
   export async function addToken(
     provider: string,
     credentials: TokenCredentials,
@@ -1050,6 +1071,19 @@ export namespace QgridService {
   export const useToggleTokenMutation = () =>
     useMutation({
       mutationFn: (params: { id: number }) => toggleToken(params.id),
+    });
+
+  export async function oauthStartAntigravity(name: string): Promise<OAuthStartResult> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/oauthStartAntigravity`,
+      data: { name },
+    });
+  }
+
+  export const useOauthStartAntigravityMutation = () =>
+    useMutation({
+      mutationFn: (params: { name: string }) => oauthStartAntigravity(params.name),
     });
 
   export async function oauthStart(name: string): Promise<OAuthStartResult> {

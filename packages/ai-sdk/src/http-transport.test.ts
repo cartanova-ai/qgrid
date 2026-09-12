@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   anthropicTransportOptions,
+  closeQgridRequestTransport,
+  createQgridRequestTransport,
   toQgridTransportError,
 } from "./http-transport";
 
@@ -63,5 +65,19 @@ describe("qgrid HTTP transport", () => {
         serverUrl: "http://localhost:44900",
       }),
     ).toBe(error);
+  });
+});
+
+describe("createQgridRequestTransport provider scope", () => {
+  it("서버가 CLI 프로세스를 돌리는 Anthropic/Antigravity 만 확장 전송 예산을 받고 OpenAI 는 기본값", async () => {
+    expect(createQgridRequestTransport("openai/gpt-5.6-terra", 600_000)).toBeUndefined();
+    const anthropic = createQgridRequestTransport("anthropic/claude-opus-5", 600_000);
+    const antigravity = createQgridRequestTransport("antigravity/gemini-3.7-flash", 600_000);
+    expect(anthropic?.timeoutMs).toBe(660_000);
+    expect(antigravity?.timeoutMs).toBe(660_000);
+    await Promise.all([
+      closeQgridRequestTransport(anthropic),
+      closeQgridRequestTransport(antigravity),
+    ]);
   });
 });

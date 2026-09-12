@@ -6,11 +6,18 @@ import { api, BadRequestException, BaseFrameClass, Sonamu, stream } from "sonamu
 import { getCacheManagerRef } from "sonamu/cache";
 
 import { type LocalizedString } from "../../i18n/sd.generated";
+import { ANTIGRAVITY_PROVIDER } from "../../utils/providers/antigravity/antigravity-constants";
+import {
+  buildAntigravityAuthUrl,
+  exchangeAntigravityCode,
+  ANTIGRAVITY_REDIRECT_URI,
+} from "../../utils/providers/antigravity/antigravity-oauth";
 import {
   getAccessToken,
   getExpiresAt,
   getRefreshToken,
 } from "../../utils/providers/common/credentials";
+import { effortOptionsForModel } from "../../utils/providers/common/effort";
 import { CallerSchemaValidationError } from "../../utils/providers/common/schema-validation";
 import {
   OPENAI_CALLBACK_PORTS,
@@ -71,7 +78,7 @@ type PendingOAuth = {
   codeVerifier: string;
   name: string;
   redirectUri: string;
-  provider: "anthropic" | "openai";
+  provider: "anthropic" | "openai" | "antigravity";
 };
 const OAUTH_STATE_PREFIX = "oauth:state:";
 const OAUTH_STATE_TTL = "5m";
@@ -182,7 +189,11 @@ async function resolveTokenName(args: QueryInput): Promise<InternalQueryInput> {
 
   const tokenProvider = args.tokenName.split("/", 1)[0];
   const modelProvider = args.model?.split("/", 1)[0];
-  if (tokenProvider !== "anthropic" && tokenProvider !== "openai") {
+  if (
+    tokenProvider !== "anthropic" &&
+    tokenProvider !== "openai" &&
+    tokenProvider !== ANTIGRAVITY_PROVIDER
+  ) {
     throw new BadRequestException(`Invalid token name: ${args.tokenName}` as LocalizedString);
   }
   if (modelProvider !== tokenProvider) {
@@ -190,6 +201,7 @@ async function resolveTokenName(args: QueryInput): Promise<InternalQueryInput> {
       "Token provider does not match model provider" as LocalizedString,
     );
   }
+  // antigravity 는 등록이 하나뿐이라 고정 이름만 주소가 된다. 다른 이름은 조용히 무시하지 않고 거부한다.
 
   const token = await TokenModel.findActiveByProviderAndName("A", tokenProvider, args.tokenName);
   if (!token) {
@@ -512,6 +524,11 @@ class QgridFrameClass extends BaseFrameClass {
     return { names: await RequestLogModel.distinctModelNames() };
   }
 
+  @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
+  async effortOptions(model: string): Promise<string[]> {
+    return effortOptionsForModel(model);
+  }
+
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async addToken(
     provider: string,
@@ -584,6 +601,32 @@ class QgridFrameClass extends BaseFrameClass {
   }
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
+  async oauthStartAntigravity(name: string): Promise<OAuthStartResult> {
+    if (!name.trim()) throw new BadRequestException("Token name is required" as LocalizedString);
+    const state = crypto.randomBytes(32).toString("hex");
+    const authUrl = buildAntigravityAuthUrl(state);
+    await setOAuthState(state, {
+      codeVerifier: "",
+      name: name.trim(),
+      redirectUri: ANTIGRAVITY_REDIRECT_URI,
+      provider: "antigravity",
+    });
+    // Google redirects to the user's localhost. Paste its full URL into this dashboard,
+    // just like remote OpenAI OAuth; no callback listener or server-side browser is needed.
+    return { authUrl, mode: "code" };
+  }
+
+  private async completeAntigravityLogin(code: string, pending: PendingOAuth): Promise<void> {
+    const credentials = await exchangeAntigravityCode(code);
+    await TokenModel.replaceByAccount("antigravity", credentials.accountId, {
+      provider: "antigravity",
+      credentials,
+      name: pending.name,
+    });
+    notifyTokenAdded(pending.name, "antigravity");
+  }
+
+  @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async oauthStart(name: string): Promise<OAuthStartResult> {
     const { codeVerifier, codeChallenge, state } = generatePKCE();
 
@@ -616,6 +659,8 @@ class QgridFrameClass extends BaseFrameClass {
 
     if (pending.provider === "openai") {
       await this.completeOpenAILogin(code, pending);
+    } else if (pending.provider === "antigravity") {
+      await this.completeAntigravityLogin(code, pending);
     } else {
       await this.completeAnthropicLogin(code, state, pending);
     }
@@ -672,6 +717,8 @@ class QgridFrameClass extends BaseFrameClass {
     try {
       if (pending.provider === "openai") {
         await this.completeOpenAILogin(code, pending);
+      } else if (pending.provider === "antigravity") {
+        await this.completeAntigravityLogin(code, pending);
       } else {
         await this.completeAnthropicLogin(code, state, pending);
       }
@@ -745,6 +792,21 @@ class QgridFrameClass extends BaseFrameClass {
         };
       } catch (e) {
         return { error: `OpenAI usage failed: ${(e as Error).message}` };
+      }
+    }
+
+    if (entry.provider === ANTIGRAVITY_PROVIDER) {
+      try {
+        const quota = entry.active
+          ? await QgridDispatcher.antigravityDispatcher?.usageForToken(entry.id)
+          : null;
+        return {
+          provider: ANTIGRAVITY_PROVIDER,
+          fiveHour: quota?.fiveHour ?? null,
+          sevenDay: quota?.sevenDay ?? null,
+        };
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : "Antigravity usage unavailable" };
       }
     }
 
