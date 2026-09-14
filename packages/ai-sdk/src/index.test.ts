@@ -1377,6 +1377,20 @@ describe("qgrid AI SDK provider", () => {
     ]);
   });
 
+  it.each(["png", "jpeg", "webp"] as const)("passes %s output format and uses the returned MIME", async (outputFormat) => {
+    let queryBody: { args: Record<string, unknown> } | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      queryBody = JSON.parse(String(init?.body));
+      return Response.json({ text: "", content: [{ type: "image", data: "image-data", mediaType: `image/${outputFormat}` }], finishReason: "stop", model: "gpt-5.5", usage, durationMs: 1, costUsd: 0 });
+    }));
+    const result = await qgrid("openai/gpt-5.5").doGenerate({
+      prompt: [{ role: "user", content: [{ type: "text", text: "draw" }] }],
+      providerOptions: { qgrid: { imageGeneration: true, logger: false, imageGenerationOptions: { outputFormat } } },
+    });
+    expect(queryBody?.args.imageGenerationOptions).toEqual({ outputFormat });
+    expect(result.content).toContainEqual({ type: "file", data: "image-data", mediaType: `image/${outputFormat}` });
+  });
+
   it("passes imageGenerationOptions through to qgrid", async () => {
     let queryBody: unknown;
     const generation = {

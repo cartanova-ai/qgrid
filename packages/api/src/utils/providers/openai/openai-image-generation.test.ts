@@ -31,6 +31,23 @@ async function run(fetchImpl: typeof fetch, overrides = {}) {
 }
 
 describe("standalone transparent images", () => {
+  it("rejects non-PNG formats before a network request", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    await expect(run(fetchMock, { imageGeneration: { background: "transparent", output_format: "webp" } })).rejects.toThrow("only supports PNG");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves a previous JPEG image MIME when switching to transparent editing", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json(result()));
+    await run(fetchMock, { history: [
+      { type: "image_generation_call", result: "/9j/", output_format: "jpeg" },
+      { role: "user", content: "Remove the background" },
+    ] });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toContain("/images/edits");
+    expect(JSON.parse(String(init?.body)).images).toEqual([{ image_url: "data:image/jpeg;base64,/9j/" }]);
+  });
+
   it("uses the Images endpoint and preserves actual metadata without charging a driver", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => Response.json(result()));
     const events = await run(fetchMock);

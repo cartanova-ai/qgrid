@@ -175,7 +175,7 @@ export type OpenAINormalizedEvent =
       type: "image";
       id?: string;
       base64: string;
-      mimeType: "image/png";
+      mimeType: "image/png" | "image/jpeg" | "image/webp";
       revisedPrompt?: string;
       generation?: ImageGenerationMetadata;
     }
@@ -209,6 +209,23 @@ function usageFrom(value: unknown): OpenAIUsage | undefined {
   };
 }
 
+export function imageMimeType(
+  base64: string,
+  outputFormat?: unknown,
+): "image/png" | "image/jpeg" | "image/webp" {
+  // Inspect only the header, without decoding a potentially large image twice.
+  const header = Buffer.from(base64.slice(0, 24), "base64");
+  if (header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
+    return "image/png";
+  if (header[0] === 255 && header[1] === 216 && header[2] === 255) return "image/jpeg";
+  if (header.toString("ascii", 0, 4) === "RIFF" && header.toString("ascii", 8, 12) === "WEBP")
+    return "image/webp";
+  if (outputFormat === "jpeg") return "image/jpeg";
+  if (outputFormat === "webp") return "image/webp";
+  if (outputFormat === undefined || outputFormat === "png") return "image/png";
+  throw new OpenAIProtocolError(`Unsupported image output format: ${String(outputFormat)}`);
+}
+
 export function normalizeOpenAIEvent(raw: unknown): OpenAINormalizedEvent | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const event = raw as Record<string, unknown>;
@@ -231,7 +248,7 @@ export function normalizeOpenAIEvent(raw: unknown): OpenAINormalizedEvent | unde
         type: "image",
         ...(typeof item.id === "string" ? { id: item.id } : {}),
         base64: item.result,
-        mimeType: "image/png",
+        mimeType: imageMimeType(item.result, item.output_format),
         ...(typeof item.revised_prompt === "string"
           ? { revisedPrompt: item.revised_prompt }
           : typeof item.revisedPrompt === "string"

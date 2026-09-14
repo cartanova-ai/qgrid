@@ -67,11 +67,12 @@ export type QgridOpenAIProviderOptions = QgridCommonProviderOptions & {
    */
   imageGeneration?: boolean;
   /**
-   * Image generation hint and cost-estimation basis. The image model is fixed
-   * to gpt-image-2; qgrid accepts supported quality/size pairs from OpenAI's
-   * public calculator table.
+   * Image generation controls. The Responses backend selects the image model;
+   * quality/size cost estimates use the GPT Image 2 public calculator table.
    */
   imageGenerationOptions?: {
+    /** Responses output format. Defaults to PNG; transparent output only supports PNG. */
+    outputFormat?: "png" | "jpeg" | "webp";
     quality?: "low" | "medium" | "high";
     size?: "1024x1024" | "1024x1536" | "1536x1024";
     /** Transparent uses Codex standalone Images and validates PNG alpha. See README for limits. */
@@ -171,6 +172,7 @@ export type QueryOutput = {
     | {
         type: "image";
         data: string;
+        mediaType?: "image/png" | "image/jpeg" | "image/webp";
         revisedPrompt?: string | null;
         generation?: QgridImageGenerationMetadata;
       }

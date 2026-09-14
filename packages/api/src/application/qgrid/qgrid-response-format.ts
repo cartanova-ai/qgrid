@@ -26,10 +26,7 @@ export function formatResponseForLog(result: QueryOutput): string {
   return result.content
     .flatMap((item) => {
       if (item.type === "text") return [item.text];
-      if (item.type === "image") {
-        const alt = escapeHtmlAttribute(item.revisedPrompt ?? "generated image");
-        return [`<img src="data:image/png;base64,${item.data}" alt="${alt}" />`];
-      }
+      if (item.type === "image") return [formatImagePartForLog(item)];
       return [];
     })
     .filter((part) => part.length > 0)
@@ -42,7 +39,7 @@ export function getImageParts(result: QueryOutput): Extract<QgridContent, { type
 
 export function formatImagePartForLog(image: Extract<QgridContent, { type: "image" }>): string {
   const alt = escapeHtmlAttribute(image.revisedPrompt ?? "generated image");
-  return `<img src="data:image/png;base64,${image.data}" alt="${alt}" />`;
+  return `<img src="data:${image.mediaType ?? "image/png"};base64,${image.data}" alt="${alt}" />`;
 }
 
 export function imageGenerationToolArgs(
@@ -56,7 +53,12 @@ export function imageGenerationToolArgs(
     prompt: args.prompt,
     ...(inputImages.length > 0 ? { inputImages } : {}),
     driverModel: args.model ?? null,
-    tool: CODEX_IMAGE_GENERATION_TOOL_CONFIG,
+    tool: {
+      ...CODEX_IMAGE_GENERATION_TOOL_CONFIG,
+      ...(args.imageGenerationOptions?.outputFormat
+        ? { outputFormat: args.imageGenerationOptions.outputFormat }
+        : {}),
+    },
     ...(args.imageGenerationOptions ? { requestedOptions: args.imageGenerationOptions } : {}),
     ...(options.generation
       ? { observedGeneration: options.generation }

@@ -220,7 +220,7 @@ const { text } = await generateText({
 | `serviceTier` | `string` | OpenAI only | OpenAI/codex service tier |
 | `timeoutMs` | positive integer, max `1_800_000` | Anthropic only | Server-side Claude Code process timeout in milliseconds. The SDK's non-stream HTTP budget is 60 seconds longer. Defaults to 240 seconds |
 | `imageGeneration` | `boolean` | OpenAI only, non-stream | Enables codex's built-in `image_generation` tool (see [below](#image-generation)) |
-| `imageGenerationOptions` | `{ quality?, size?, background? }` | OpenAI only | Image controls; `background: "transparent"` selects standalone Images. Read actual size/quality from response metadata ([below](#image-generation)). |
+| `imageGenerationOptions` | `{ quality?, size?, background?, outputFormat? }` | OpenAI only | Image controls; `outputFormat` selects PNG/JPEG/WebP on Responses. `background: "transparent"` selects standalone Images (PNG only). Read actual size/quality from response metadata ([below](#image-generation)). |
 | `fallbackModels` | `string[]` | reserved | Reserved for future qgrid server-side fallback routing. Not functional yet and unrelated to Claude Code's Fable refusal fallback |
 
 ```typescript
@@ -270,13 +270,15 @@ const result = await generateText({
   providerOptions: {
     qgrid: {
       imageGeneration: true,
-      imageGenerationOptions: { quality: "medium", size: "1536x1024" },
+      imageGenerationOptions: { quality: "medium", size: "1536x1024", outputFormat: "webp" },
     },
   },
 });
 
-const image = result.files[0]; // mediaType: "image/png", base64
+const image = result.files[0]; // mediaType: "image/webp", base64
 ```
+
+Since 2.9.6, `imageGenerationOptions.outputFormat` accepts `"png" | "jpeg" | "webp"`; omission keeps PNG. qgrid preserves the returned image format in `mediaType` rather than converting the image. Save files with the matching extension. Transparent background requests only support PNG and reject JPEG/WebP before generation. `result.files[].mediaType` retains the AI SDK standard `string` type; no qgrid-specific wrapper or type assertion is needed.
 
 Reference images can be passed through normal AI SDK multimodal message parts:
 

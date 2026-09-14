@@ -7,6 +7,7 @@
 import {
   type ImageGenerationMetadata,
   type ImageGenerationOptions,
+  type QgridContent,
 } from "../../../application/qgrid/qgrid.types";
 import { type JsonValue, type TokenUsageBreakdown, type UserInput } from "./provider-types";
 
@@ -28,7 +29,8 @@ export interface ReuseThreadCoord {
 // provider-무관 이미지 결과. OpenAI 경로에서만 채워지며, 상위(qgrid.dispatcher)가
 // content 파트로 전파한다. Anthropic 경로는 이 필드를 채우지 않는다.
 export interface GeneratedImage {
-  data: string; // base64 PNG
+  data: string; // base64 image
+  mediaType?: Extract<QgridContent, { type: "image" }>["mediaType"];
   revisedPrompt: string | null;
   generation?: ImageGenerationMetadata;
 }

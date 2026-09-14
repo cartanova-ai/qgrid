@@ -51,6 +51,25 @@ async function tickTimer(): Promise<void> {
 }
 
 describe("OpenAIDispatcher direct runtime", () => {
+  it.each(["png", "jpeg", "webp"] as const)("forwards %s format and preserves returned MIME", async (outputFormat) => {
+    const args = QueryInput.parse({ prompt: "draw", imageGeneration: true, imageGenerationOptions: { outputFormat } });
+    let body: ReturnType<typeof buildOpenAIResponsesRequest> | undefined;
+    const d = dispatcher((options) => {
+      body = buildOpenAIResponsesRequest(options);
+      return events({ type: "image", base64: "data", mimeType: `image/${outputFormat}` }, { type: "completed", responseId: "r" });
+    });
+    await d.onTokenAdded(1, "one", credentials);
+    const result = await d.generate(request({ imageGeneration: args.imageGeneration, imageGenerationOptions: args.imageGenerationOptions }));
+    expect(body?.tools).toEqual([{ type: "image_generation", output_format: outputFormat }]);
+    expect(result.images).toMatchObject([{ mediaType: `image/${outputFormat}` }]);
+  });
+
+  it("rejects unsupported output formats and non-PNG transparent requests", () => {
+    for (const imageGenerationOptions of [{ outputFormat: "gif" }, { outputFormat: "webp", background: "transparent" }, { outputFormat: "jpeg", background: "transparent" }]) {
+      expect(QueryInput.safeParse({ prompt: "draw", imageGeneration: true, imageGenerationOptions }).success).toBe(false);
+    }
+  });
+
   beforeEach(() => { refreshMock.mockReset(); });
 
   it("refreshes a quota 401 once, shares the recovery, and uses the new credentials", async () => {

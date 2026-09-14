@@ -203,7 +203,9 @@ qgrid response content maps to AI SDK content:
 
 - qgrid `text` -> AI SDK text content.
 - qgrid `tool-call` -> AI SDK tool-call content.
-- qgrid `image` -> AI SDK file content with `mediaType: "image/png"`.
+- qgrid `image` -> AI SDK file content with the returned `mediaType` (`image/png`, `image/jpeg`, or `image/webp`). Older responses without `mediaType` retain the PNG default.
+
+`imageGenerationOptions.outputFormat` accepts `png | jpeg | webp` for the hosted Responses route and maps to `image_generation.output_format`. Omission retains PNG. The standalone transparent route only supports PNG; a transparent request with JPEG/WebP is rejected before generation. Preserve the returned MIME type through response content, SDK file parts, and request-log image data URLs.
 
 `finishReason` maps `tool-calls` when qgrid returns tool calls.
 

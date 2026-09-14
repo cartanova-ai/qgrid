@@ -60,8 +60,9 @@ export const QgridContent = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("image"),
-    // Codex image_generation result base64. qgrid 는 포맷/확장자 책임을 지지 않는다.
+    // Base64 image bytes; older responses without mediaType are PNG.
     data: z.string(),
+    mediaType: z.enum(["image/png", "image/jpeg", "image/webp"]).optional(),
     revisedPrompt: z.string().nullish(),
     generation: ImageGenerationMetadata.optional(),
   }),
@@ -86,11 +87,20 @@ export type ImageGenerationQuality = z.infer<typeof ImageGenerationQuality>;
 export const ImageGenerationSize = z.enum(["1024x1024", "1024x1536", "1536x1024"]);
 export type ImageGenerationSize = z.infer<typeof ImageGenerationSize>;
 
-export const ImageGenerationOptions = z.object({
-  quality: ImageGenerationQuality.optional(),
-  size: ImageGenerationSize.optional(),
-  background: z.enum(["auto", "opaque", "transparent"]).optional(),
-});
+export const ImageGenerationOptions = z
+  .object({
+    quality: ImageGenerationQuality.optional(),
+    size: ImageGenerationSize.optional(),
+    background: z.enum(["auto", "opaque", "transparent"]).optional(),
+    outputFormat: z.enum(["png", "jpeg", "webp"]).optional(),
+  })
+  .refine(
+    (options) =>
+      options.background !== "transparent" ||
+      !options.outputFormat ||
+      options.outputFormat === "png",
+    { message: "Transparent image generation only supports PNG output", path: ["outputFormat"] },
+  );
 export type ImageGenerationOptions = z.infer<typeof ImageGenerationOptions>;
 
 export const QgridInputPart = z.discriminatedUnion("type", [

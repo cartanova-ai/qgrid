@@ -112,6 +112,7 @@ function asReasoning(req: GenerateRequest): OpenAIResponsesOptions["reasoning"] 
 }
 
 function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
+  const { outputFormat, ...imageControls } = req.imageGenerationOptions ?? {};
   return {
     model: req.model ?? "",
     ...(req.systemPrompt ? { instructions: req.systemPrompt } : {}),
@@ -124,7 +125,14 @@ function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
     ...(req.promptCacheKey ? { promptCacheKey: req.promptCacheKey } : {}),
     ...(req.outputSchema ? { outputSchema: { schema: req.outputSchema as JsonValue } } : {}),
     ...(req.imageGeneration
-      ? { imageGeneration: req.imageGenerationOptions ? { ...req.imageGenerationOptions } : true }
+      ? {
+          imageGeneration: req.imageGenerationOptions
+            ? {
+                ...imageControls,
+                ...(outputFormat ? { output_format: outputFormat } : {}),
+              }
+            : true,
+        }
       : {}),
   };
 }
@@ -320,6 +328,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           imageAttempted = true;
           images.push({
             data: event.base64,
+            mediaType: event.mimeType,
             revisedPrompt: event.revisedPrompt ?? null,
             ...(event.generation ? { generation: event.generation } : {}),
           });

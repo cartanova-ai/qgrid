@@ -8,6 +8,29 @@ import {
 } from "./openai-backend-protocol";
 
 describe("OpenAI Codex backend protocol", () => {
+  it("uses returned bytes rather than a mismatched format label", () => {
+    expect(normalizeOpenAIEvent({ type: "response.output_item.done", item: {
+      type: "image_generation_call", result: "UklGRgAAAABXRUJQ", output_format: "png",
+    } })).toMatchObject({ mimeType: "image/webp" });
+  });
+
+  it("detects JPEG when the format label is absent", () => {
+    expect(normalizeOpenAIEvent({ type: "response.output_item.done", item: {
+      type: "image_generation_call", result: "/9j/",
+    } })).toMatchObject({ mimeType: "image/jpeg" });
+  });
+
+  it.each([
+    ["png", "iVBORw0KGgo=", "image/png"],
+    ["jpeg", "/9j/", "image/jpeg"],
+    ["webp", "UklGRgAAAABXRUJQ", "image/webp"],
+  ])("preserves %s output MIME type", (format, result, mimeType) => {
+    expect(normalizeOpenAIEvent({
+      type: "response.output_item.done",
+      item: { type: "image_generation_call", result, output_format: format },
+    })).toMatchObject({ type: "image", mimeType });
+  });
+
   it("preserves raw history and pins Responses controls", () => {
     const history = [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }];
     const request = buildOpenAIResponsesRequest({

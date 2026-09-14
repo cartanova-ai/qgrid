@@ -55,6 +55,13 @@ Request logging is enabled by default. Use `providerOptions.qgrid.logger: false`
 - Keep OpenAI Codex built-in tools, apps, plugins, skills, web search, shell, and environment instruction blocks disabled unless the user explicitly asks for agentic Codex behavior.
 - Treat OpenAI image generation as opt-in. Transparent background requests use Codex standalone Images endpoints with subscription credentials; other image requests use the hosted Responses image tool. Inspect current code before modifying either route; image costs remain API-price estimates.
 
+## Image output formats (2.9.6+)
+
+- Use `imageGenerationOptions.outputFormat: "png" | "jpeg" | "webp"` on the hosted Responses image path. Omission retains PNG.
+- Preserve the actual returned MIME type in qgrid content, AI SDK files, and request-log image URLs; do not relabel bytes as the requested format.
+- Transparent generation keeps the standalone Codex Images route and accepts PNG only. Reject transparent JPEG/WebP requests before generation.
+- Keep the AI SDK standard `GeneratedFile.mediaType: string` contract. Do not add a qgrid-specific image wrapper or conditional return type.
+
 ## Verification
 
 Choose verification by blast radius:

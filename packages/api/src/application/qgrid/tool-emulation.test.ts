@@ -22,6 +22,13 @@ const baseResult = {
 };
 
 describe("applyToolCallEmulation image parts", () => {
+  it("preserves non-PNG MIME types in response content", () => {
+    const out = applyToolCallEmulation(baseResult, undefined, {
+      images: [{ data: "webp", mediaType: "image/webp", revisedPrompt: null }], answerKind: "text",
+    });
+    expect(out.content).toContainEqual({ type: "image", data: "webp", mediaType: "image/webp", revisedPrompt: null });
+  });
+
   const img = { data: "iVBORw0KGgoBAgM", revisedPrompt: "a red circle" };
 
   it("appends an image part after text when images are present (no tools)", () => {

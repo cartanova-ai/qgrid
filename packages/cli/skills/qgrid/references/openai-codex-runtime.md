@@ -144,7 +144,7 @@ Quota is fetched directly from `https://chatgpt.com/backend-api/wham/usage` with
 
 OpenAI usage reports total input, cached input, output, reasoning, and total tokens for the request. Preserve cached input as a subset of input; do not add it to input again when computing cache-hit rate.
 
-Image generation is opt-in and non-stream at the AI SDK interface. The backend still delivers its response through SSE. Returned base64 images become AI SDK PNG file parts. Recorded image cost remains an estimate based on qgrid's configured public image price table because this route does not expose exact image-tool billing.
+Image generation is opt-in and non-stream at the AI SDK interface. The backend still delivers its response through SSE. `imageGenerationOptions.outputFormat` maps to the hosted tool's `output_format` (`png`, `jpeg`, or `webp`); omission retains PNG. Returned bytes determine the MIME type when recognizable, with the reported format as fallback. Preserve that type through qgrid content, AI SDK file parts, and request-log image data URLs. The standalone transparent route remains PNG-only and rejects other output formats. Recorded image cost remains an estimate based on qgrid's configured public image price table because this route does not expose exact image-tool billing.
 
 ### Transparent image route
 

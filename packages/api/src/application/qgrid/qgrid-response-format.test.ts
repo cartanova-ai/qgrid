@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildImageGenerationToolSteps, imageGenerationToolArgs } from "./qgrid-response-format";
+import { buildImageGenerationToolSteps, formatImagePartForLog, imageGenerationToolArgs } from "./qgrid-response-format";
 
 it("logs observed standalone settings separately from requested controls without a requested-price assumption", () => {
   const requestedOptions = { quality: "high" as const, size: "1024x1024" as const, background: "transparent" as const };
@@ -19,6 +19,11 @@ it("logs observed standalone settings separately from requested controls without
 });
 
 describe("qgrid response log formatting", () => {
+  it("logs the returned MIME and requested output format", () => {
+    expect(formatImagePartForLog({ type: "image", data: "webp", mediaType: "image/webp" })).toContain("data:image/webp;base64,webp");
+    expect(JSON.parse(imageGenerationToolArgs({ prompt: "draw", imageGenerationOptions: { outputFormat: "webp" } })).tool.outputFormat).toBe("webp");
+  });
+
   it("records requested image controls separately from pricing assumptions", () => {
     const requestedOptions = { background: "transparent", size: "1024x1024", quality: "high" } as const;
     const args = JSON.parse(imageGenerationToolArgs({

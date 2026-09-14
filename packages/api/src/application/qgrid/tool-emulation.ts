@@ -67,9 +67,10 @@ export class ToolCallEmulationError extends Error {
   }
 }
 
-// dispatcher 가 넘기는 이미지 결과. qgrid 는 base64 payload 만 전달하고 포맷은 보장하지 않는다.
+// Preserve image bytes and the provider's resolved MIME type.
 interface EmulationImage {
   data: string;
+  mediaType?: Extract<QgridContent, { type: "image" }>["mediaType"];
   revisedPrompt?: string | null;
   generation?: ImageGenerationMetadata;
 }
@@ -213,6 +214,7 @@ function appendImages(content: QgridContent[], images?: EmulationImage[]): Qgrid
       (image): QgridContent => ({
         type: "image",
         data: image.data,
+        ...(image.mediaType ? { mediaType: image.mediaType } : {}),
         revisedPrompt: image.revisedPrompt ?? null,
         ...(image.generation ? { generation: image.generation } : {}),
       }),

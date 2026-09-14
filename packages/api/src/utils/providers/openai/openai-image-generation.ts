@@ -4,6 +4,7 @@ import { z } from "zod";
 import { ImageGenerationMetadata } from "../../../application/qgrid/qgrid.types";
 import {
   CHATGPT_CODEX_RESPONSES_URL,
+  imageMimeType,
   OpenAIProtocolError,
   type OpenAINormalizedEvent,
   type OpenAIResponsesOptions,
@@ -26,13 +27,18 @@ export function buildStandaloneImageRequest(options: OpenAIResponsesOptions) {
       "Standalone images require an explicit transparent background request",
     );
   }
+  if (controls.output_format && controls.output_format !== "png") {
+    throw new OpenAIProtocolError("Transparent image generation only supports PNG output");
+  }
   const text: string[] = [];
   const images: Array<{ image_url: string }> = [];
   if (options.instructions) text.push(`System instructions:\n${options.instructions}`);
   for (const item of options.history) {
     if (item.type === "reasoning") continue;
     if (item.type === "image_generation_call" && typeof item.result === "string") {
-      images.push({ image_url: `data:image/png;base64,${item.result}` });
+      images.push({
+        image_url: `data:${imageMimeType(item.result, item.output_format)};base64,${item.result}`,
+      });
       continue;
     }
     if (item.type !== "message" && typeof item.role !== "string") {

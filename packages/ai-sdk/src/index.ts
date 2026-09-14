@@ -354,7 +354,7 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
             // qgrid raw image parts are base64-only; AI SDK file parts require a mediaType.
             content.push({
               type: "file",
-              mediaType: "image/png",
+              mediaType: item.mediaType ?? "image/png",
               data: item.data,
               ...(item.generation
                 ? { providerMetadata: { qgrid: { imageGeneration: item.generation } } }
