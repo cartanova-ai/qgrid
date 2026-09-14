@@ -157,7 +157,12 @@ describe("expired token reminder scheduling", () => {
     const sent = await sendExpiredTokenReminderNow(deps);
 
     expect(sent).toBe(1);
-    expect(notifySlackMock).toHaveBeenCalledWith(expect.objectContaining({ urgent: true }));
+    expect(notifySlackMock).toHaveBeenCalledWith(expect.objectContaining({ urgent: true, throwOnFailure: true }));
+  });
+
+  it("never reports a sent count when manual Slack delivery fails", async () => {
+    notifySlackMock.mockRejectedValue(new Error("Slack delivery failed"));
+    await expect(sendExpiredTokenReminderNow(deps)).rejects.toThrow("Slack delivery failed");
   });
 
   it("보낼 대상이 없으면 0을 돌려주고 아무것도 보내지 않는다", async () => {

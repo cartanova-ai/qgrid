@@ -143,7 +143,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
   readonly rateLimitsCache = new Map<number, OpenAIRateLimitsWithMeta & { generation: number }>();
   private readonly pendingRateLimits = new Map<
     number,
-    Promise<OpenAIRateLimitsWithMeta & { generation: number }>
+    { token: TokenMetadata; generation: number; promise: Promise<OpenAIRateLimitsWithMeta> }
   >();
   private readonly clients = new Map<number, ClientEntry>();
   private readonly retiredClients = new Set<ClientEntry>();
@@ -383,17 +383,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           },
           transportKind: this.transportKind,
           fetch: this.fetchImpl,
-          refreshCredentials: async () => {
-            const refreshed = await handleChatgptAuthTokensRefresh(selection.tokenId);
-            const current = this.tokenMetadata.get(selection.tokenId);
-            if (current)
-              current.credentials = {
-                ...current.credentials,
-                accessToken: refreshed.accessToken,
-                accountId: refreshed.chatgptAccountId,
-              };
-            return { accessToken: refreshed.accessToken, accountId: refreshed.chatgptAccountId };
-          },
+          refreshCredentials: () => this.refreshCredentials(selection.tokenId),
         },
         selection.tokenId,
       );
@@ -524,6 +514,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
   ): Promise<OpenAIRateLimitsWithMeta> {
     const token = this.tokenMetadata.get(tokenId);
     if (!token) throw new Error(`openai token ${tokenId} not found`);
+    const generation = token.generation;
     const cached = this.rateLimitsCache.get(tokenId);
     if (
       cached &&
@@ -536,21 +527,51 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     // 조회가 몰릴 수 있다 — 진행 중인 fetch 를 공유한다. 최초 호출자의 abort 로
     // 공유 조회가 실패해도 소비처(isQuotaEligible)가 fail-open 으로 처리한다.
     const pending = this.pendingRateLimits.get(tokenId);
-    if (pending) return pending;
+    if (pending?.token === token && pending.generation === generation) return pending.promise;
     const fetchPromise = (async () => {
       const result = await readOpenAIQuotaUsage({
         credentials: token.credentials,
+        refreshCredentials: () => this.refreshCredentials(tokenId),
         fetch: this.fetchImpl,
         ...(signal ? { signal } : {}),
       });
       if (result.kind === "lookup_failed") throw new Error(result.reason);
       if (!result.raw) throw new Error("OpenAI quota response missing raw rate limits");
-      const entry = { data: result.raw, cachedAt: Date.now(), generation: token.generation };
-      if (this.tokenMetadata.get(tokenId) === token) this.rateLimitsCache.set(tokenId, entry);
+      const entry = { data: result.raw, cachedAt: Date.now(), generation };
+      if (this.tokenMetadata.get(tokenId) === token && token.generation === generation) {
+        this.rateLimitsCache.set(tokenId, entry);
+      }
       return entry;
-    })().finally(() => this.pendingRateLimits.delete(tokenId));
-    this.pendingRateLimits.set(tokenId, fetchPromise);
+    })().finally(() => {
+      if (this.pendingRateLimits.get(tokenId)?.promise === fetchPromise) {
+        this.pendingRateLimits.delete(tokenId);
+      }
+    });
+    this.pendingRateLimits.set(tokenId, { token, generation, promise: fetchPromise });
     return fetchPromise;
+  }
+
+  private async refreshCredentials(tokenId: number) {
+    const previous = this.tokenMetadata.get(tokenId);
+    const generation = previous?.generation;
+    const refreshed = await handleChatgptAuthTokensRefresh(tokenId);
+    const credentials = {
+      accessToken: refreshed.accessToken,
+      accountId: refreshed.chatgptAccountId,
+    };
+    const current = this.tokenMetadata.get(tokenId);
+    if (!current?.active) throw new Error(`openai token ${tokenId} is no longer active`);
+    // A subscriber update may already contain newer credentials. Never overwrite it
+    // with the result of a refresh that started against an older generation.
+    if (current === previous && current.generation === generation) {
+      current.credentials = { ...current.credentials, ...credentials };
+      this.retireClient(tokenId);
+      this.invalidateRateLimitsCache(tokenId);
+    }
+    return {
+      accessToken: current.credentials.accessToken,
+      accountId: current.credentials.accountId,
+    };
   }
 
   private async isQuotaEligible(

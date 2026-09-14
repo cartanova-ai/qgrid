@@ -23,19 +23,26 @@ export type OpenAIQuotaUsageResult =
 
 export interface OpenAIQuotaHttpOptions {
   credentials: Pick<OpenAICredentials, "accessToken" | "accountId">;
+  refreshCredentials?: () => Promise<Pick<OpenAICredentials, "accessToken" | "accountId">>;
   fetch?: typeof fetch;
   signal?: AbortSignal;
 }
 
 async function readDirect(options: OpenAIQuotaHttpOptions): Promise<OpenAIRateLimitsWithMeta> {
-  const response = await (options.fetch ?? fetch)(CHATGPT_WHAM_USAGE_URL, {
-    method: "GET",
-    headers: buildCodexIdentityHeaders(
-      options.credentials.accessToken,
-      options.credentials.accountId,
-    ),
-    ...(options.signal ? { signal: options.signal } : {}),
-  });
+  const read = (credentials: OpenAIQuotaHttpOptions["credentials"]) =>
+    (options.fetch ?? fetch)(CHATGPT_WHAM_USAGE_URL, {
+      method: "GET",
+      headers: buildCodexIdentityHeaders(credentials.accessToken, credentials.accountId),
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+  let response = await read(options.credentials);
+  if (response.status === 401 && options.refreshCredentials) {
+    await response.body?.cancel();
+    options.signal?.throwIfAborted();
+    const credentials = await options.refreshCredentials();
+    options.signal?.throwIfAborted();
+    response = await read(credentials);
+  }
   if (!response.ok) throw new Error(`OpenAI quota lookup failed: HTTP ${response.status}`);
   const body = (await response.json()) as Record<string, unknown>;
   const data = normalizeWhamUsage(body);

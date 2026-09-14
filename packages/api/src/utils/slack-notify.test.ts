@@ -19,6 +19,20 @@ const noSettings = () => undefined;
 const WORKING_HOURS = seoul("2026-08-05T14:00:00");
 
 describe("notifySlack", () => {
+  it.each([
+    ["not_in_channel", () => Promise.resolve(new Response(JSON.stringify({ ok: false, error: "not_in_channel" })))],
+    ["HTTP 503", () => Promise.resolve(new Response("unavailable", { status: 503 }))],
+    ["network", () => Promise.reject(new Error("private network detail"))],
+  ] as const)("reports %s to manual send callers", async (_name, response) => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(response);
+    await expect(notify({ title: "hello", urgent: true, throwOnFailure: true })).rejects.toThrow("Slack");
+  });
+
+  it("reports missing configuration to manual send callers", async () => {
+    settingMock.mockReturnValue(undefined);
+    await expect(notify({ title: "hello", urgent: true, throwOnFailure: true })).rejects.toThrow("Slack");
+  });
+
   beforeEach(() => {
     settingMock.mockImplementation((key: string) =>
       key === "slack.botToken" ? "xoxb-test" : key === "slack.channelId" ? "C123" : undefined,

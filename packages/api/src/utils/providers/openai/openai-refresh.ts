@@ -1,7 +1,7 @@
 /**
  * OpenAI chatgptAuthTokens refresh handler.
  *
- * - direct HTTPS/WS transport가 401 refresh를 소유하고 저장된 refresh token으로 갱신함
+ * - direct transport와 quota 조회의 401에서 같은 refresh 경로를 사용함
  * - qgrid 가 DB 의 refresh_token 으로 새 access_token 을 발급받아 응답
  * - per-token inflight promise 로 concurrent refresh dedup
  * - rotation 감지: 새 refresh_token 있으면 DB 즉시 업데이트
@@ -104,11 +104,18 @@ async function doRefresh(tokenId: number): Promise<RefreshResult> {
     // 위 3개는 모두 영구 실패. 재등록 외 복구 불가.
     let errorCode: string | undefined;
     try {
-      errorCode = (JSON.parse(body) as { error?: string }).error;
+      const error = (JSON.parse(body) as { error?: unknown }).error;
+      const code =
+        typeof error === "string"
+          ? error
+          : error && typeof error === "object" && "code" in error
+            ? error.code
+            : undefined;
+      if (typeof code === "string" && /^[a-z_]{1,80}$/.test(code)) errorCode = code;
     } catch {}
     logger.error(
       `OpenAI refresh FAILED token=${token.name}(id=${tokenId}) status=${resp.status} ` +
-        `code=${errorCode ?? "?"} body=${body}`,
+        `code=${errorCode ?? "unknown"}`,
     );
     // 영구 실패는 errorCode 로만 판정한다 — status 를 함께 요구하면 provider 가
     // 상태코드를 바꿀 때 판정이 조용히 멎는다.
@@ -118,7 +125,7 @@ async function doRefresh(tokenId: number): Promise<RefreshResult> {
         `openai:${errorCode}`,
       );
     }
-    throw new Error(`OpenAI refresh failed: ${resp.status} ${body}`);
+    throw new Error(`OpenAI refresh failed: ${resp.status} ${errorCode ?? "unknown"}`);
   }
 
   const data = (await resp.json()) as {

@@ -54,7 +54,10 @@ export function buildReminderContext(
   return [...lines, "재로그인이 필요합니다"].filter(Boolean).join("\n");
 }
 
-async function sendReminder(deps: ExpiredTokenReminderDeps, urgent = false): Promise<number> {
+async function sendReminder(
+  deps: ExpiredTokenReminderDeps,
+  mode: "scheduled" | "manual",
+): Promise<number> {
   const expired = await deps.findReauthRequired();
   if (expired.length === 0) return 0;
 
@@ -66,7 +69,8 @@ async function sendReminder(deps: ExpiredTokenReminderDeps, urgent = false): Pro
     subject: expired.length > 1 ? `${expired.length}건` : (expired[0]!.name ?? "unnamed"),
     context: buildReminderContext(expired, userMap),
     color: SLACK_COLOR.bad,
-    urgent,
+    urgent: mode === "manual",
+    throwOnFailure: mode === "manual",
   });
   return expired.length;
 }
@@ -80,7 +84,7 @@ async function sendReminder(deps: ExpiredTokenReminderDeps, urgent = false): Pro
 export function sendExpiredTokenReminderNow(
   deps: ExpiredTokenReminderDeps = defaultDeps,
 ): Promise<number> {
-  return sendReminder(deps, true);
+  return sendReminder(deps, "manual");
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -104,7 +108,9 @@ function scheduleExpiredTokenReminder(runNow: boolean, deps: ExpiredTokenReminde
   );
 
   const run = () =>
-    sendReminder(deps).catch((e) => logger.warn(`reminder failed: ${(e as Error).message}`));
+    sendReminder(deps, "scheduled").catch((e) =>
+      logger.warn(`reminder failed: ${(e as Error).message}`),
+    );
 
   if (runNow) void run();
   timer = setInterval(run, minutes * MINUTE_MS);

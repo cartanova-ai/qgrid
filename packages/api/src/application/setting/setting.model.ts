@@ -11,9 +11,10 @@ import {
   exhaustive,
 } from "sonamu";
 
-import { SD } from "../../i18n/sd.generated";
+import { SD, type LocalizedString } from "../../i18n/sd.generated";
 import { detectSupervisor } from "../../utils/process-supervisor";
 import { armServerRestartExit, beginServerRestart } from "../../utils/server-restart";
+import { SlackNotificationError } from "../../utils/slack-notify";
 import { type SettingSubsetKey, type SettingSubsetMapping } from "../sonamu.generated";
 import { settingSubsetQueries, settingLoaderQueries } from "../sonamu.generated.sso";
 import {
@@ -315,7 +316,14 @@ class SettingModelClass extends BaseModelClass<
     // setting.model → expired-token-reminder → token.model 경로가 생겨,
     // token.model 을 mock 하는 테스트가 실제 모듈을 먼저 로드하게 된다.
     const { sendExpiredTokenReminderNow } = await import("../qgrid/expired-token-reminder");
-    return { sent: await sendExpiredTokenReminderNow() };
+    try {
+      return { sent: await sendExpiredTokenReminderNow() };
+    } catch (error) {
+      if (error instanceof SlackNotificationError) {
+        throw new BadRequestException(error.message as LocalizedString);
+      }
+      throw error;
+    }
   }
 
   /**

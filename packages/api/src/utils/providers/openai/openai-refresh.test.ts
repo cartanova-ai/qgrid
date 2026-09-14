@@ -126,4 +126,22 @@ describe("OpenAI refresh", () => {
       "openai:refresh_token_reused",
     );
   });
+
+  it("recognizes nested permanent error codes without exposing the provider body", async () => {
+    findOneMock.mockResolvedValue(token(12));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { code: "refresh_token_invalidated", message: "private provider detail" },
+    }), { status: 401 })));
+    await expect(handleChatgptAuthTokensRefresh(12)).rejects.toThrow(
+      "OpenAI refresh failed: 401 refresh_token_invalidated",
+    );
+    expect(deactivateMock).toHaveBeenCalledWith(expect.objectContaining({ id: 12 }), "openai:refresh_token_invalidated");
+  });
+
+  it.each([429, 500, 503])("does not deactivate a token on transient refresh HTTP %s", async (status) => {
+    findOneMock.mockResolvedValue(token(status));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("upstream failure", { status })));
+    await expect(handleChatgptAuthTokensRefresh(status)).rejects.toThrow(`OpenAI refresh failed: ${status} unknown`);
+    expect(deactivateMock).not.toHaveBeenCalled();
+  });
 });

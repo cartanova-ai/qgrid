@@ -186,4 +186,36 @@ describe("readOpenAIQuotaUsage", () => {
       }),
     ).resolves.toEqual({ kind: "lookup_failed", reason: "OpenAI quota lookup failed: HTTP 503" });
   });
+
+  it("does not refresh a cancelled 401 lookup", async () => {
+    const controller = new AbortController();
+    const refreshCredentials = vi.fn();
+    const result = await readOpenAIQuotaUsage({
+      credentials: { accessToken: "old", accountId: "acct" },
+      signal: controller.signal,
+      refreshCredentials,
+      fetch: async () => {
+        controller.abort(new Error("cancelled"));
+        return new Response("", { status: 401 });
+      },
+    });
+    expect(result).toEqual({ kind: "lookup_failed", reason: "cancelled" });
+    expect(refreshCredentials).not.toHaveBeenCalled();
+  });
+
+  it("does not retry when cancelled while refreshing", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 401 }));
+    const result = await readOpenAIQuotaUsage({
+      credentials: { accessToken: "old", accountId: "acct" },
+      signal: controller.signal,
+      fetch: fetchMock,
+      refreshCredentials: async () => {
+        controller.abort(new Error("cancelled"));
+        return { accessToken: "new", accountId: "acct" };
+      },
+    });
+    expect(result).toEqual({ kind: "lookup_failed", reason: "cancelled" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

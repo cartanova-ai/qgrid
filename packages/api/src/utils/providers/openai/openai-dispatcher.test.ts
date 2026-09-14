@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { refreshMock } = vi.hoisted(() => ({ refreshMock: vi.fn() }));
+vi.mock("./openai-refresh", () => ({ handleChatgptAuthTokensRefresh: refreshMock }));
 
 import { QueryInput, QuotaThresholdExceededError } from "../../../application/qgrid/qgrid.types";
 import { type GenerateRequest } from "../common/provider-dispatcher";
@@ -48,6 +51,101 @@ async function tickTimer(): Promise<void> {
 }
 
 describe("OpenAIDispatcher direct runtime", () => {
+  beforeEach(() => { refreshMock.mockReset(); });
+
+  it("refreshes a quota 401 once, shares the recovery, and uses the new credentials", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        rate_limits: { primary_window: { used_percent: 20 } },
+      })));
+    refreshMock.mockResolvedValue({ accessToken: "new-access", chatgptAccountId: "acct" });
+    const factory = vi.fn(() => ({ responses: () => events({ type: "completed", responseId: "r" }) }));
+    const d = new OpenAIDispatcher(config(), { fetch: fetchMock, clientFactory: factory });
+    await d.onTokenAdded(1, "one", credentials);
+    const [first, second] = await Promise.all([
+      d.getRateLimitsByTokenId(1), d.getRateLimitsByTokenId(1),
+    ]);
+    expect(first).toEqual(second);
+    expect(first.data.rateLimits.primary?.usedPercent).toBe(20);
+    expect(refreshMock).toHaveBeenCalledExactlyOnceWith(1);
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe("Bearer new-access");
+    await d.generate(request());
+    expect(factory).toHaveBeenCalledWith(expect.objectContaining({
+      credentials: { accessToken: "new-access", accountId: "acct" },
+    }), 1);
+  });
+
+  it("does not loop when quota still returns 401 after refresh", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response("", { status: 401 })));
+    refreshMock.mockResolvedValue({ accessToken: "new-access", chatgptAccountId: "acct" });
+    const d = new OpenAIDispatcher(config(), { fetch: fetchMock });
+    await d.onTokenAdded(1, "one", credentials);
+    await expect(d.getRateLimitsByTokenId(1)).rejects.toThrow("HTTP 401");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([403, 429, 500, 503])("does not refresh credentials for quota HTTP %s", async (status) => {
+    const d = new OpenAIDispatcher(config(), {
+      fetch: vi.fn().mockResolvedValue(new Response("", { status })),
+    });
+    await d.onTokenAdded(1, "one", credentials);
+    await expect(d.getRateLimitsByTokenId(1)).rejects.toThrow(`HTTP ${status}`);
+    expect(refreshMock).not.toHaveBeenCalled();
+    expect(d.tokenCount).toBe(1);
+  });
+
+  it("propagates refresh failure instead of retrying rejected credentials", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 401 }));
+    refreshMock.mockRejectedValue(new Error("OpenAI refresh failed: 401 refresh_token_reused"));
+    const d = new OpenAIDispatcher(config(), { fetch: fetchMock });
+    await d.onTokenAdded(1, "one", credentials);
+    await expect(d.getRateLimitsByTokenId(1)).rejects.toThrow("refresh_token_reused");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a newer subscriber credential and never caches an old generation's lookup", async () => {
+    let finishRefresh!: (value: { accessToken: string; chatgptAccountId: string }) => void;
+    refreshMock.mockImplementation(() => new Promise((resolve) => { finishRefresh = resolve; }));
+    const quota = (percent: number) => new Response(JSON.stringify({
+      rate_limits: { primary_window: { used_percent: percent } },
+    }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 401 }))
+      .mockResolvedValueOnce(quota(20))
+      .mockResolvedValueOnce(quota(30));
+    const d = new OpenAIDispatcher(config(), { fetch: fetchMock });
+    await d.onTokenAdded(1, "one", credentials);
+    const pending = d.getRateLimitsByTokenId(1);
+    await vi.waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1));
+    await d.onTokenUpdated(1, "one", { ...credentials, accessToken: "subscriber-access" });
+    finishRefresh({ accessToken: "older-refresh-access", chatgptAccountId: "acct" });
+    await pending;
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe("Bearer subscriber-access");
+    expect((await d.getRateLimitsByTokenId(1)).data.rateLimits.primary?.usedPercent).toBe(30);
+  });
+
+  it("does not share pending quota requests across subscriber generations", async () => {
+    let finishOld!: (value: Response) => void;
+    const quota = (percent: number) => new Response(JSON.stringify({
+      rate_limits: { primary_window: { used_percent: percent } },
+    }));
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockResolvedValueOnce(quota(10));
+    const d = new OpenAIDispatcher(config(), { fetch: fetchMock });
+    await d.onTokenAdded(1, "one", credentials);
+    const old = d.getRateLimitsByTokenId(1);
+    await d.onTokenUpdated(1, "one", { ...credentials, accessToken: "new" });
+    const current = d.getRateLimitsByTokenId(1);
+    finishOld(quota(90));
+    await old;
+    expect((await current).data.rateLimits.primary?.usedPercent).toBe(10);
+    expect((await d.getRateLimitsByTokenId(1)).data.rateLimits.primary?.usedPercent).toBe(10);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["transparent", "opaque", "auto"] as const)(
     "preserves %s background through validation and Responses serialization",
     async (background) => {

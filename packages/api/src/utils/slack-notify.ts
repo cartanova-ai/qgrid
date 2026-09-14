@@ -15,6 +15,8 @@ const logger = getLogger(["qgrid", "slack"]);
 const SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage";
 const SLACK_TIMEOUT_MS = 5_000;
 
+export class SlackNotificationError extends Error {}
+
 /** 상태를 색으로 먼저 읽히게 하는 attachment 색상 바. */
 export const SLACK_COLOR = {
   good: "#2eb886",
@@ -34,6 +36,8 @@ export type SlackNotification = {
    * 커지는 사건에만 쓴다 — 남용하면 조용 시간 자체가 무의미해진다.
    */
   urgent?: boolean;
+  /** Manual sends must report delivery failures; background notifications remain fail-open. */
+  throwOnFailure?: boolean;
   /** 조용 시간 판정 기준 시각. 테스트에서 시계를 고정할 때만 넘긴다. */
   now?: Date;
 };
@@ -47,6 +51,9 @@ export async function notifySlack(
   const { title, subject, context, color, urgent, now } = notification;
   if (!botToken || !channel) {
     logger.debug(`slack not configured, skipping notification: ${title} ${subject ?? ""}`);
+    if (notification.throwOnFailure) {
+      throw new SlackNotificationError("Slack 봇 토큰과 채널 ID를 설정해 주세요");
+    }
     return;
   }
 
@@ -99,10 +106,19 @@ export async function notifySlack(
     // bot 미초대(not_in_channel)·잘못된 채널 등 가장 흔한 오설정은 HTTP 200 + ok:false 로 온다.
     // status 만 보면 조용히 성공 처리돼 알림이 통째로 사라진다.
     const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
-    if (!body?.ok) {
-      logger.warn(`slack notification rejected: ${body?.error ?? `http ${res.status}`}`);
+    if (!res.ok || body?.ok !== true) {
+      const code =
+        typeof body?.error === "string" && /^[a-z_]{1,80}$/.test(body.error)
+          ? body.error
+          : `HTTP ${res.status}`;
+      throw new SlackNotificationError(`Slack 알림 발송 실패: ${code}`);
     }
   } catch (e) {
-    logger.warn(`slack notification failed: ${(e as Error).message}`);
+    const error =
+      e instanceof SlackNotificationError
+        ? e
+        : new SlackNotificationError("Slack 알림 발송 실패: 네트워크 오류 또는 응답 시간 초과");
+    logger.warn(error.message);
+    if (notification.throwOnFailure) throw error;
   }
 }

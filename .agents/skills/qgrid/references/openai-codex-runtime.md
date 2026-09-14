@@ -109,6 +109,8 @@ Selection picks among active, quota-eligible tokens: a cache-affinity-preferred 
 
 Quota lookup failures fail open. A successful lookup over a token's configured threshold excludes that token until the cached usage is refreshed.
 
+A quota HTTP 401 uses the same per-token refresh path as generation, then retries the GET once. Explicit permanent refresh error codes (string or nested `error.code`) mark the credentials as requiring re-login and deactivate the token through the shared auth-death path. Other lookup failures do not prove an expired login. In-flight quota lookups and cached results are scoped to a metadata generation; a subscriber credential update takes precedence over an older refresh result.
+
 ## Full-history replay and cache affinity
 
 Qgrid no longer retains an OpenAI provider thread. It sends the full conversation history on every turn. The AI SDK derives a model-scoped opaque value from `sessionKey`; the server validates and forwards it as `prompt_cache_key`.
