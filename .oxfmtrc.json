@@ -29,6 +29,8 @@
     "**/sonamu.lock",
     "**/*.mdx",
     "**/*.md",
-    "**/*.d.ts"
+    "**/*.d.ts",
+    "output/**",
+    ".playwright-cli/**"
   ]
 }

@@ -204,7 +204,7 @@ const { text } = await generateText({
 | `tokenName` | provider prefix를 포함한 토큰 이름 | 공통 | `anthropic/yds`처럼 활성 토큰 하나를 엄격히 지정. prefix는 model provider와 같아야 하며 빈 값·누락·inactive·quota 초과 시 다른 토큰으로 fallback하지 않음 |
 | `logger` | `boolean` | 공통 | qgrid request log 저장 여부. 기본값은 `true`. `false`로 설정해도 client tool 실행과 multi-step 연결은 계속 동작 |
 | `sessionKey` | `string` | OpenAI 전용 | 전체 history 재전송 시 불투명 prompt-cache affinity를 파생하는 멀티턴 대화 식별자 ([아래](#멀티턴-prompt-cache-sessionkey) 참조) |
-| `effort` | OpenAI: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` \| `"ultra"` | OpenAI 전용 (`QgridOpenAIProviderOptions`) | ChatGPT 구독 Codex 경로의 reasoning 깊이. GPT-6 Astra와 GPT-5.6 Sol/Terra는 `"ultra"`까지, GPT-5.6 Luna는 `"max"`까지 지원하며, 모델이 지원하지 않는 값은 서버가 조용히 무시하고 백엔드 기본값을 적용. 공개 OpenAI API의 `"none"`/`"minimal"`은 이 경로에 없음 |
+| `effort` | OpenAI: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` \| `"ultra"` | OpenAI 전용 (`QgridOpenAIProviderOptions`) | ChatGPT 구독 Codex 경로의 reasoning 깊이. GPT-6 Astra/Sol과 GPT-5.6 Sol/Terra는 `"ultra"`까지, GPT-6 Luna와 GPT-5.6 Luna는 `"max"`까지 지원하며, 모델이 지원하지 않는 값은 서버가 조용히 무시하고 백엔드 기본값을 적용. 공개 OpenAI API의 `"none"`/`"minimal"`은 이 경로에 없음 |
 | `effort` | Anthropic: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` | Anthropic 전용 (`QgridAnthropicProviderOptions`) | Claude Code `--effort` 허용값. 집합 밖의 값은 서버가 조용히 무시하고 qgrid 기본(`"low"`)을 적용. 모델별 상한(예: Sonnet 4.6은 `"xhigh"` 없음)은 Claude Code가 처리 |
 | `verbosity` | `"low"` \| `"medium"` \| `"high"` | OpenAI 전용 | 응답 텍스트의 상세도 |
 | `reasoningSummary` | `"auto"` \| `"concise"` \| `"detailed"` \| `"none"` | OpenAI 전용 | 추론 요약 출력 방식 |
@@ -368,6 +368,8 @@ AI SDK response metadata로 실제 serving 모델을 다르게 보고하면 step
 type QgridSupportedModel =
   // OpenAI (direct private Codex Responses backend)
   | "openai/gpt-6-astra"
+  | "openai/gpt-6-sol"
+  | "openai/gpt-6-luna"
   | "openai/gpt-5.6-sol"
   | "openai/gpt-5.6-terra"
   | "openai/gpt-5.6-luna"
@@ -393,17 +395,20 @@ type QgridSupportedModel =
   | "anthropic/claude-opus-4-7"
   | "anthropic/claude-opus-4-8"
   | "anthropic/claude-opus-5"
+  | "anthropic/claude-opus-5-5"
 ```
 
 `openai/gpt-5.4`, `openai/gpt-5.4-mini`, `openai/gpt-5.2`, `openai/gpt-5.3-codex`는 하위 호환을 위해 타입에 남아 있지만, qgrid가 사용하는 ChatGPT 구독 Codex 경로에서는 더 이상 제공되지 않습니다. `gpt-5.4`와 `gpt-5.4-mini`는 2026-08-31에 retire되었고(대체: `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`), `gpt-5.2`와 `gpt-5.3-codex`는 그보다 먼저 해당 경로에서 제거되었습니다. 이 id로 요청하면 백엔드에서 실패합니다.
 
-### GPT-6 Astra 사양
+### GPT-6 사양
 
-| 모델 | Context (Codex 카탈로그) | 최대 출력 (공개 API) | 1M tokens당 input / cached input / output |
+| 모델 | Context (Codex 카탈로그) | 최대 출력 (공개 API) | 1M tokens당 input / cached input / cache write / output |
 |---|---:|---:|---:|
-| `openai/gpt-6-astra` | 272K | 128K | $10 / $1 / $50 |
+| `openai/gpt-6-astra` | 272K | 128K | $10 / $1 / $12.50 / $50 |
+| `openai/gpt-6-sol` | 272K | 128K | $2 / $0.20 / $2.50 / $10 |
+| `openai/gpt-6-luna` | 272K | 128K | $0.10 / $0.01 / $0.125 / $0.50 |
 
-2026-09-07에 조회한 Codex 카탈로그는 272K context window와 `low`, `medium`, `high`, `xhigh`, `max`, `ultra` reasoning effort를 제공합니다(백엔드 기본값: `medium`). Qgrid SDK의 기본값은 기존대로 `low`이며, 다른 깊이가 필요하면 effort를 명시하세요. [공개 API 모델 문서](https://developers.openai.com/api/docs/models/gpt-6-astra)는 별도로 1.05M context, 최대 입력 922K, 최대 출력 128K와 `max`까지의 effort를 명시하며 `ultra`는 포함하지 않습니다. 이 공개 API 한도를 구독 경로의 한도로 간주하지 않습니다. Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/docs/pricing)를 사용합니다. Cache write는 1M tokens당 $12.50이며, 입력이 272K tokens를 넘으면 요청 전체에 input/cache 2x, output 1.5x 단가가 적용됩니다.
+2026-09-23에 조회한 Codex 카탈로그는 세 모델 모두 272K context window를 제공합니다. Astra와 Sol은 `ultra`까지, Luna는 `max`까지 reasoning effort를 지원합니다. 백엔드 기본값은 세 모델 모두 `medium`이며, qgrid SDK의 기본값은 기존대로 `low`이니 다른 깊이가 필요하면 effort를 명시하세요. [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)의 공개 API 문서는 별도로 1.05M context, 최대 입력 922K, 최대 출력 128K와 `max`까지의 effort를 명시하며 `ultra`는 포함하지 않습니다. 이 공개 API 한도를 구독 경로의 한도로 간주하지 않습니다. Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/docs/pricing)를 사용합니다. Cache write는 uncached input 단가의 1.25x이며, 입력이 272K tokens를 넘으면 요청 전체에 input/cache 2x, output 1.5x 단가가 적용됩니다. GPT-6 Sol과 Luna(2026-09-22 출시)는 GPT-5.6 Sol/Luna의 절반 단가이며, 기존 모델 단가는 2026-09-23에 재확인했고 변동이 없습니다.
 
 ### GPT-5.6 사양
 
@@ -422,6 +427,8 @@ Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/
 `anthropic/claude-fable-5-1`(2026-09-01 출시)은 Fable 5와 같은 1M context, 128K 최대 출력, 항상 켜진 adaptive thinking, input $10 / output $50 단가를 공유합니다. cache read만 Fable 5의 $1 대신 1M tokens당 $0.25(input의 0.025x)로 과금되며, cache write는 $12.50(5분)/$20(1시간)으로 같습니다. Fable 5.1의 API 수준 파괴적 변경(forced `tool_choice` 거부, 모델에 귀속된 thinking 블록)은 qgrid에 영향을 주지 않습니다. qgrid는 도구를 끈 Claude Code를 fresh 프로세스로 실행하고 히스토리를 텍스트로 평탄화해 전달하기 때문입니다.
 
 `anthropic/claude-opus-5`는 기본 1M context와 128K 최대 출력을 지원합니다. 1M tokens당 단가는 input $5, cache read $0.50, 5분 cache write $6.25, 1시간 cache write $10, output $25입니다. qgrid는 Opus 5의 기본 adaptive thinking 동작을 유지하고 `effort`로 추론 깊이를 조절합니다. 따라서 `xhigh` 또는 `max` effort에서 허용되지 않는 `thinking: disabled` 조합도 만들지 않습니다.
+
+`anthropic/claude-opus-5-5`(2026-09-22 출시)는 1M context와 128K 최대 출력을 지원합니다. 1M tokens당 단가는 input $4, cache read $0.20(input의 0.05x), 5분 cache write $5, 1시간 cache write $8, output $20입니다. adaptive thinking이 항상 켜져 있고 끌 수 없으므로 qgrid는 Fable과 같이 이를 보존하고 `effort`로 추론 깊이를 조절합니다. Opus 5.5의 API 수준 파괴적 변경(forced `tool_choice` 거부, 모델에 귀속된 thinking 블록)은 Fable 5.1과 같은 이유로 qgrid에 영향을 주지 않습니다. Opus 5 단가는 변동이 없습니다.
 
 Claude Code는 Fable의 safety refusal을 다른 Opus 모델로 자동 재시도할 수 있습니다. 현재 CLI는 refusal 카테고리에 따라 Opus 5 또는 Opus 4.8을 고릅니다. 이 경우 AI SDK 응답의 `response.modelId`와 `providerMetadata.qgrid.model`은 실제 serving 모델인 Opus를 가리킵니다. `providerMetadata.qgrid.requestedModel`은 Fable로 유지되고, `providerMetadata.qgrid.modelFallbacks`에 refusal fallback 이력이 담깁니다. 같은 metadata에서 `costSource`와 5분/1시간 cache-write 토큰 분해도 확인할 수 있습니다.
 

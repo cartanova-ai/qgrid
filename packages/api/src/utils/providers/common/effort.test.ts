@@ -23,6 +23,8 @@ describe("resolveOpenAIEffort", () => {
     expect(resolveOpenAIEffort("gpt-5.6-terra", "max")).toBe("max");
     expect(resolveOpenAIEffort("gpt-5.6-terra", "ultra")).toBe("ultra");
     expect(resolveOpenAIEffort("gpt-5.6-luna", "max")).toBe("max");
+    expect(resolveOpenAIEffort("gpt-6-sol", "ultra")).toBe("ultra");
+    expect(resolveOpenAIEffort("gpt-6-luna", "max")).toBe("max");
   });
 
   it("공개 API 어휘(none/minimal)와 다른 provider 어휘, 오타는 조용히 미지정으로 바꾼다", () => {
@@ -36,6 +38,7 @@ describe("resolveOpenAIEffort", () => {
     expect(resolveOpenAIEffort("gpt-5.5", "max")).toBeUndefined();
     expect(resolveOpenAIEffort("gpt-5.4", "ultra")).toBeUndefined();
     expect(resolveOpenAIEffort("gpt-5.6-luna", "ultra")).toBeUndefined();
+    expect(resolveOpenAIEffort("gpt-6-luna", "ultra")).toBeUndefined();
     expect(resolveOpenAIEffort("gpt-5.3-codex-spark", "xhigh")).toBe("xhigh");
   });
 

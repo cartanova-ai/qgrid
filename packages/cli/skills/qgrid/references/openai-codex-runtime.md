@@ -39,7 +39,7 @@ availability or identical limits on qgrid's ChatGPT-subscription route.
    Report mocked tests separately from any live smoke test. Model registration does not authorize
    a release, version bump, deployment, or remote migration.
 
-### GPT-6 Astra
+### GPT-6 Astra, Sol, and Luna
 
 `openai/gpt-6-astra` uses the existing text generation, streaming and structured-output paths.
 The model supports image input, but qgrid keeps its existing SDK restriction: image parts are
@@ -55,13 +55,28 @@ through `max`. The Codex subscription catalog checked on the same date lists `co
 and `low | medium | high | xhigh | max | ultra`; qgrid therefore permits `ultra` on this route.
 Do not present the public 1.05M context as a verified subscription-route limit.
 
+`openai/gpt-6-sol` and `openai/gpt-6-luna` (released 2026-09-22) use the same paths. Standard prices per
+million tokens: Sol input $2, cached input $0.20, cache write $2.50, output $10; Luna input $0.10, cached
+input $0.01, cache write $0.125, output $0.50. Both apply the same 272K long-context multipliers. The Codex
+subscription catalog checked 2026-09-23 lists `context_window=272000` for both, effort through `ultra` for
+Sol and through `max` for Luna, and default `medium`. Sources: [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol),
+[Luna](https://developers.openai.com/api/docs/models/gpt-6-luna), and [pricing](https://developers.openai.com/api/docs/pricing).
+The same check confirmed no price changes for Astra, GPT-5.6 Sol/Terra/Luna, or GPT-5.5.
+Live generation with qgrid's exact request shape and identity headers (`codex_cli_rs/0.147.0`) succeeded for
+both on 2026-09-23, while Codex CLI 0.154.0 received `400 The 'gpt-6-sol' model is not supported when using Codex
+with a ChatGPT account` and its catalog fetch omitted both models until 0.156.1. The backend gate is therefore tied
+to something the newer CLI sends, not to the User-Agent version alone; a Codex CLI failure does not imply a qgrid failure.
+
 ## Existing OpenAI model pricing and limits
 
-Checked 2026-09-07 against the official [Standard pricing table](https://developers.openai.com/api/docs/pricing)
+Checked 2026-09-23 against the official [Standard pricing table](https://developers.openai.com/api/docs/pricing)
 and the local Codex subscription catalog. Prices are USD per million tokens:
 
 | Model | Input | Cached input | Cache write | Output | Codex context | Maximum Codex effort |
 |---|---:|---:|---:|---:|---:|---|
+| GPT-6 Astra | 10 | 1 | 12.50 | 50 | 272K | ultra |
+| GPT-6 Sol | 2 | 0.20 | 2.50 | 10 | 272K | ultra |
+| GPT-6 Luna | 0.10 | 0.01 | 0.125 | 0.50 | 272K | max |
 | GPT-5.6 Sol | 4 | 0.40 | 5 | 20 | 272K | ultra |
 | GPT-5.6 Terra | 2 | 0.20 | 2.50 | 12 | 272K | ultra |
 | GPT-5.6 Luna | 0.20 | 0.02 | 0.25 | 1.20 | 272K | max |
@@ -71,13 +86,13 @@ GPT-5.3-Codex-Spark has a 128K catalog context and effort through `xhigh`; its t
 remains an explicitly documented generic estimate. Retired model pricing rows remain for legacy logs.
 The catalog does not establish a maximum output size. GPT-5.6 public API specifications list 1.05M
 context, 922K maximum input and 128K maximum output; do not conflate them with the subscription limits.
-Codex default effort is `low` for Sol, `medium` for Terra/Luna/GPT-5.5, and `high` for Spark.
+Codex default effort is `low` for GPT-5.6 Sol, `medium` for GPT-6 Astra/Sol/Luna, GPT-5.6 Terra/Luna and GPT-5.5, and `high` for Spark.
 The SDK default remains `low` regardless of the backend default.
 
 [Sol's model page](https://developers.openai.com/api/docs/models/gpt-5.6-sol) guarantees promotional
 pricing at least through 2026-11-21. That is not an announced expiration date. Keep the latest verified
 rates until another official rate is published; never guess a future reversion. Above 272K input,
-GPT-5.6 and GPT-5.5 apply 2x input/cache and 1.5x output to the full request.
+GPT-6, GPT-5.6 and GPT-5.5 apply 2x input/cache and 1.5x output to the full request.
 
 Changing the price table affects new calculations and legacy estimates that resolve rates on read.
 It does not rewrite persisted request-log costs or backfill historical records. Report a historical

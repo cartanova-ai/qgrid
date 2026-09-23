@@ -13,6 +13,8 @@ describe("calculateCostUsd", () => {
   });
   it.each([
     ["gpt-6-astra", 10, 50, 1, 12.5],
+    ["gpt-6-sol", 2, 10, 0.2, 2.5],
+    ["gpt-6-luna", 0.1, 0.5, 0.01, 0.125],
     ["gpt-5.6-sol", 4, 20, 0.4, 5],
     ["gpt-5.6-terra", 2, 12, 0.2, 2.5],
     ["gpt-5.6-luna", 0.2, 1.2, 0.02, 0.25],
@@ -54,6 +56,8 @@ describe("calculateCostUsd", () => {
     ["claude-opus-4-7", 5, 25, 0.5, 10],
     ["claude-opus-4-8", 5, 25, 0.5, 10],
     ["claude-opus-5", 5, 25, 0.5, 10],
+    // Opus 5.5 는 cache read 만 0.05x 특례($0.20), cache write 배율은 표준(5m $5 / 1h $8).
+    ["claude-opus-5-5", 4, 20, 0.2, 8],
     ["claude-sonnet-5", 2, 10, 0.2, 4],
   ])(
     "%s official Anthropic rates for 5m/1h cache writes",
@@ -92,6 +96,8 @@ describe("calculateCostUsd", () => {
 
   it.each([
     ["gpt-6-astra", 10, 50, 1, 12.5, 5.6125],
+    ["gpt-6-sol", 2, 10, 0.2, 2.5, 1.1225],
+    ["gpt-6-luna", 0.1, 0.5, 0.01, 0.125, 0.056125],
     ["gpt-5.6-sol", 4, 20, 0.4, 5, 2.245],
     ["gpt-5.6-terra", 2, 12, 0.2, 2.5, 1.3225],
     ["gpt-5.6-luna", 0.2, 1.2, 0.02, 0.25, 0.13225],
@@ -118,6 +124,8 @@ describe("calculateCostUsd", () => {
 
   it.each([
     ["gpt-6-astra", 2.475],
+    ["gpt-6-sol", 0.495],
+    ["gpt-6-luna", 0.02475],
     ["gpt-5.6-sol", 0.99],
     ["gpt-5.6-terra", 0.498],
     ["gpt-5.6-luna", 0.0498],
@@ -133,6 +141,8 @@ describe("calculateCostUsd", () => {
 
   it.each([
     ["gpt-6-astra", 2.725],
+    ["gpt-6-sol", 0.545],
+    ["gpt-6-luna", 0.02725],
     ["gpt-5.6-sol", 1.09],
     ["gpt-5.6-terra", 0.548],
     ["gpt-5.6-luna", 0.0548],
@@ -202,6 +212,18 @@ describe("calculateCostUsd", () => {
     };
     // Fable 5: 5.8. cache read 50K 가 $1 → $0.25 로 바뀌면 0.05 → 0.0125 만큼 줄어든다.
     expect(calculateCostUsd("claude-fable-5-1", usage)).toBeCloseTo(5.7625, 10);
+  });
+
+  it("Opus 5.5 는 $4/$20 에 cache read 0.05x($0.20), 1h cache write $8 을 적용한다", () => {
+    // uncached 30K*$4 + output 10K*$20 + cache read 50K*$0.20 + 1h write 20K*$8 = 0.12+0.2+0.01+0.16
+    expect(
+      calculateCostUsd("anthropic/claude-opus-5-5", {
+        inputTokens: 100_000,
+        outputTokens: 10_000,
+        cachedInputTokens: 50_000,
+        cacheCreationInputTokens1h: 20_000,
+      }),
+    ).toBeCloseTo(0.49, 10);
   });
 
   it("Fable 의 5분/1시간 cache write 단가도 구분한다", () => {

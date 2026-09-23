@@ -122,6 +122,8 @@ export type QgridInputPart =
 
 export type QgridSupportedModel =
   | "openai/gpt-6-astra"
+  | "openai/gpt-6-sol"
+  | "openai/gpt-6-luna"
   | "openai/gpt-5.6-sol"
   | "openai/gpt-5.6-terra"
   | "openai/gpt-5.6-luna"
@@ -145,7 +147,8 @@ export type QgridSupportedModel =
   | "anthropic/claude-opus-4-6"
   | "anthropic/claude-opus-4-7"
   | "anthropic/claude-opus-4-8"
-  | "anthropic/claude-opus-5";
+  | "anthropic/claude-opus-5"
+  | "anthropic/claude-opus-5-5";
 
 /** Observed image response values. Usage is response-level and appears on the first image only. */
 export type QgridImageGenerationMetadata = {

@@ -34,7 +34,7 @@ export interface ModelCosts {
 
 // ── OpenAI ─────────────────────────────────────────────────────────
 //
-// Standard pricing verified 2026-09-07: https://developers.openai.com/api/docs/pricing
+// Standard pricing verified 2026-09-23 (기존 모델 단가 변동 없음): https://developers.openai.com/api/docs/pricing
 // 신모델 출시마다 단가가 바뀌므로(5.2→5.4→5.5) 모델 추가 시 반드시 공식 페이지 재확인해야함
 
 // GPT-5.4에서 처음 도입된 long-context 할증 (5.2/5.3-codex는 해당 없음, 5.4-mini/nano는 공식 표에서 long-context 단가 없음)
@@ -63,6 +63,26 @@ const OPENAI_COSTS: Record<string, OpenAIModelSpec> = {
     outputTokens: 50,
     cachedInputTokens: 1,
     cacheCreationInputTokens: 12.5,
+    longContext: LONG_CONTEXT_272K,
+  },
+  // GPT-6 Sol, Luna (2026-09-22 출시): Standard API pricing verified 2026-09-23. GPT-5.6 Sol/Luna 의 절반 단가.
+  // Codex 카탈로그(2026-09-23)는 Sol 에 ultra, Luna 에 max 까지 허용하고 기본 effort 는 둘 다 medium 이다.
+  // @see https://developers.openai.com/api/docs/models/gpt-6-sol
+  // @see https://developers.openai.com/api/docs/models/gpt-6-luna
+  "gpt-6-sol": {
+    maxEffort: "ultra",
+    inputTokens: 2,
+    outputTokens: 10,
+    cachedInputTokens: 0.2,
+    cacheCreationInputTokens: 2.5,
+    longContext: LONG_CONTEXT_272K,
+  },
+  "gpt-6-luna": {
+    maxEffort: "max",
+    inputTokens: 0.1,
+    outputTokens: 0.5,
+    cachedInputTokens: 0.01,
+    cacheCreationInputTokens: 0.125,
     longContext: LONG_CONTEXT_272K,
   },
   // GPT-5.6 Sol, Terra, Luna. cache write 단가는 외부 logger/manual usage 입력을 위해
@@ -140,7 +160,7 @@ function anthropicCosts(
   };
 }
 
-// 가격 출처: https://platform.claude.com/docs/en/about-claude/pricing (2026-09-02 확인)
+// 가격 출처: https://platform.claude.com/docs/en/about-claude/pricing (2026-09-23 확인, 기존 모델 단가 변동 없음)
 const ANTHROPIC_COSTS: Record<string, ModelCosts> = {
   // Fable 5.1 (2026-09-01 출시): input/output 은 Fable 5 와 같고 cache read 만 0.025x($0.25) 특례.
   // @see https://platform.claude.com/docs/en/models/fable-5-1/overview
@@ -162,6 +182,9 @@ const ANTHROPIC_COSTS: Record<string, ModelCosts> = {
   "claude-opus-4-7": anthropicCosts(5, 25),
   "claude-opus-4-8": anthropicCosts(5, 25),
   "claude-opus-5": anthropicCosts(5, 25),
+  // Opus 5.5 (2026-09-22 출시): $4/$20. cache read 는 0.05x($0.20) 특례, cache write 는 표준 배율($5/$8).
+  // @see https://platform.claude.com/docs/en/models/opus-5-5/overview
+  "claude-opus-5-5": anthropicCosts(4, 20, { cachedInputTokens: 0.2 }),
   // Sonnet 5 의 introductory $2/$10 이 정식 단가로 확정됐다. 2026-09-01 에 예정됐던 $3/$15 인상은
   // 취소됐으므로 날짜 분기 없이 고정 단가로 계산한다.
   "claude-sonnet-5": anthropicCosts(2, 10),
