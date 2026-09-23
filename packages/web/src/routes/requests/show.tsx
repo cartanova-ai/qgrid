@@ -13,6 +13,7 @@ import CopyIcon from "~icons/lucide/copy";
 import XIcon from "~icons/lucide/x";
 
 import { cacheHitRate, formatMicroUsd } from "@/lib/cost";
+import { requestModelDisplay } from "@/lib/request-model";
 import { type ToolDefinitions, type ToolView } from "@/services/request-log/request-log.types";
 import { RequestLogService, RequestLogStepService } from "@/services/services.generated";
 import {
@@ -312,11 +313,12 @@ function ErrorPanel({ message }: { message: string }) {
 
 function HeaderBar({ data }: { data: RequestLog }) {
   const isRunning = data.status === "running";
-  const hasFallback =
-    !isRunning &&
-    data.requested_model_name !== null &&
-    data.model_name !== null &&
-    data.requested_model_name !== data.model_name;
+  const modelDisplay = requestModelDisplay({
+    status: data.status,
+    requestedModel: data.requested_model_name,
+    servedModel: data.model_name,
+    imageCostMethod: data.image_cost_method,
+  });
   const hasRequestedOnly =
     !isRunning && data.requested_model_name !== null && data.model_name === null;
 
@@ -324,12 +326,16 @@ function HeaderBar({ data }: { data: RequestLog }) {
     // 모델명이 길어 한 줄에 안 들어가면 나머지 배지가 밖으로 밀린다. wrap 으로 접히게 한다.
     <div className="panel overflow-hidden px-4 py-3 flex flex-wrap items-center gap-x-2 gap-y-1.5 sm:px-5">
       <span className="text-[15px] font-semibold text-sand-900 break-all">
-        {isRunning
-          ? "실행 중"
-          : hasFallback
-            ? `${data.requested_model_name} → ${data.model_name}`
-            : (data.model_name ?? data.requested_model_name ?? "Unknown model")}
+        {modelDisplay.label === "—" ? "Unknown model" : modelDisplay.label}
       </span>
+      {modelDisplay.assumedImageModel && (
+        <span
+          className="text-[10px] text-sand-400"
+          title="이미지 모델은 비용 계산에 사용한 추정값입니다"
+        >
+          추정
+        </span>
+      )}
       {hasRequestedOnly && <span className="text-[10px] text-sand-400">요청</span>}
       {!isRunning && (data.fallback_count ?? 0) > 0 && (
         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-caution-400/15 text-caution-500 font-medium uppercase">

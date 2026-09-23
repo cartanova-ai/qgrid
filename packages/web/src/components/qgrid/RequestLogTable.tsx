@@ -3,6 +3,7 @@ import ChevronLeftIcon from "~icons/lucide/chevron-left";
 import ChevronRightIcon from "~icons/lucide/chevron-right";
 
 import { cacheHitRate, formatMicroUsd, formatUsd } from "@/lib/cost";
+import { requestModelDisplay } from "@/lib/request-model";
 import { type LogsSearch } from "@/routes/logs";
 import { QgridService, RequestLogService, TokenService } from "@/services/services.generated";
 import { type RequestLogOrderBy } from "@/services/sonamu.generated";
@@ -34,11 +35,13 @@ function RequestModel({
   status,
   requestedModel,
   servedModel,
+  imageCostMethod,
   fallbackCount,
 }: {
   status: string;
   requestedModel: string | null;
   servedModel: string | null;
+  imageCostMethod: string | null;
   fallbackCount: number | null;
 }) {
   if (status === "running") {
@@ -49,17 +52,25 @@ function RequestModel({
     );
   }
 
-  const hasFallback =
-    requestedModel !== null && servedModel !== null && requestedModel !== servedModel;
+  const modelDisplay = requestModelDisplay({
+    status,
+    requestedModel,
+    servedModel,
+    imageCostMethod,
+  });
   const hasRequestedOnly = requestedModel !== null && servedModel === null;
 
   return (
     <>
-      <span className="text-xs text-sand-500">
-        {hasFallback
-          ? `${requestedModel} → ${servedModel}`
-          : (servedModel ?? requestedModel ?? "—")}
-      </span>
+      <span className="text-xs text-sand-500">{modelDisplay.label}</span>
+      {modelDisplay.assumedImageModel && (
+        <span
+          className="ml-1 text-[9px] text-sand-400"
+          title="이미지 모델은 비용 계산에 사용한 추정값입니다"
+        >
+          추정
+        </span>
+      )}
       {hasRequestedOnly && <span className="ml-1 text-[9px] text-sand-400">요청</span>}
       {(fallbackCount ?? 0) > 0 && (
         <span className="ml-1 text-[9px] text-caution-500">×{fallbackCount}</span>
@@ -304,6 +315,7 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                         status={row.status}
                         requestedModel={row.requested_model_name}
                         servedModel={row.model_name}
+                        imageCostMethod={row.image_cost_method}
                         fallbackCount={row.fallback_count}
                       />
                       {row.response_json_ok === false && (
