@@ -42,6 +42,8 @@ Use this reference before changing token storage, OAuth flows, token activation,
 On creation, the database defaults `reauth_required = false`; `TokenModel.save` also applies `quota_threshold = 80` and `weight = 1` independently for any field not provided (skipped entirely when `id` is present).
 `TokenModel.save` is internal only; callers use the curated qgrid token APIs so they cannot write lifecycle fields directly.
 
+Dashboard credential previews must tolerate legacy credentials without `accessToken`. System-keychain credentials, including a remaining Antigravity row, display `System Keychain` rather than crashing on `.length`. This 2.9.8 display fix neither deletes legacy rows nor enables Antigravity provider execution.
+
 OpenAI credentials:
 
 ```ts

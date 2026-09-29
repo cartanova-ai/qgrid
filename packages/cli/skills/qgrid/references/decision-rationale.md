@@ -218,15 +218,24 @@ Sources:
 - `docs/plans/2026-07-05-001-feat-codex-image-generation-plan.md`
 - `docs/brainstorms/2026-07-06-qgrid-image-persistence-requirements.md`
 - `docs/brainstorms/2026-07-06-codex-image-cost-estimate.md`
+- `docs/solutions/architecture-patterns/qgrid-native-auto-image-generation-2.9.8.md`
 
 Key decisions:
 
-- Image generation is OpenAI/Codex-only and request-level opt-in. Most requests use the Codex-hosted `image_generation` tool. Explicit transparent backgrounds use Codex standalone Images because the hosted route rejected them in live probes. Always-on image tools would change every turn's tool configuration and threaten prompt-cache stability.
+- Image generation is OpenAI/Codex-only and request-level opt-in outside dashboard chat. In 2.9.8, chat explicitly opts into raw `imageGeneration: "auto"` each turn. Most requests use the Codex-hosted `image_generation` tool. Transparent backgrounds use Codex standalone Images because the hosted route rejected them in live probes. Do not globally enable image tools for other callers: that would change their tool framing and cache behavior.
 - It is non-stream only. Codex returns completed base64 image payloads, not useful image deltas.
 - Image turns send full input directly and retain no provider conversation state. This prevents base64 payloads from entering reusable state.
-- qgrid performs preflight capability/model gates and postflight "image count must be greater than zero" checks. Codex can otherwise silently return text when image generation is unavailable or unused.
+- qgrid performs preflight capability/model gates. Explicit `imageGeneration: true` requires an image; `"auto"` allows normal text replies but still rejects attempted image generation without a completed image. The public AI SDK retains its boolean option and image-required contract.
 - Returned images are inline base64 content parts for consumers and AI SDK `file` parts. Reference images are accepted through AI SDK multimodal message parts only on the `imageGeneration` path, and are transported as JSON data URLs with SDK-side size guarding.
 - `imageGenerationOptions` supports quality, size, and background. Hosted-route pricing assumptions use `gpt-image-2`, `medium`, and `1536x1024` when omitted; these do not establish actual output settings. Transparent-route image usage and observed settings are recorded separately, and no background-removal fallback is allowed.
 - qgrid does not manage generated or reference images as durable assets through a `generated_images` table or object-storage layer. Current request logs can still contain inline image data URLs for inspection and synthetic `image_generation` tool-call steps; reference input images live in the first synthetic step's `tool_args.inputImages`.
 - Image cost is stored separately in `request_logs.image_cost_usd`; `request_logs.cost_usd` remains the Codex driver model token cost. Because Codex does not expose exact image tool usage, `image_cost_usd` is a price-table estimate and may be inaccurate.
 - Inspect current plans, tests, and implementation before changing behavior; the Codex tool surface can change underneath qgrid.
+
+The 2.9.8 chat design removes the discarded client `request_image_generation` decision step, which asked GPT to choose a tool and then called GPT again for ordinary generation. Native `image_generation` handles ordinary generation directly. A separate qgrid-defined `generate_transparent_image` function is necessary to reach the standalone transparent endpoint, but the server executes it with the same token and cancellation signal without another GPT request. Routing belongs to the server; the chat only sends context and displays results.
+
+Image edits need complete prior image bytes, not just text history or an assumption that the backend remembers earlier outputs. Chat replays uploaded and generated images, representing generated images as user visual references because assistant `input_image` blocks are invalid. Image previews report actual extension, decoded byte size, and natural dimensions. Uploaded images describe the existing resized JPEG sent to the model; generated images retain their returned bytes.
+
+Model labels show requested model to image model using serving metadata or the image model encoded in the logged cost method. The cost-method fallback remains an accounting assumption, not new evidence of the upstream model version. The UI has no image-generation or assumption badge and never fixes the name to `gpt-image-2.5`. Hosted and auto transparent logs retain driver identity and token costs separately from image metadata/cost.
+
+Prompt wording alone is not a reliable format control: a 2026-09-29 probe returned PNG for a WebP prompt and WebP with explicit `outputFormat: "webp"`. Model prose contradicted the output and must not be used as evidence. Transparent generation remains PNG-only, and this release does not infer format from chat prose or introduce post-generation conversion.

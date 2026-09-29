@@ -10,16 +10,22 @@ export function requestModelDisplay({
   requestedModel,
   servedModel,
   imageCostMethod,
-}: RequestModelFields): { label: string; assumedImageModel: boolean } {
-  if (status === "running") return { label: "실행 중", assumedImageModel: false };
+}: RequestModelFields): { label: string } {
+  if (status === "running") return { label: "실행 중" };
 
-  const assumedImageModel = /^assumed:([^:]+):/.exec(imageCostMethod ?? "")?.[1];
-  const sourceModel = requestedModel ?? servedModel;
-  if (assumedImageModel && sourceModel) {
-    const imageModel = `openai/${assumedImageModel}`;
+  const loggedImageModel = /^(?:assumed|estimated):(gpt-image-[^:]+):/.exec(
+    imageCostMethod ?? "",
+  )?.[1];
+  const imageModel = servedModel?.startsWith("openai/gpt-image-")
+    ? servedModel
+    : loggedImageModel
+      ? `openai/${loggedImageModel}`
+      : null;
+  if (imageModel) {
+    const sourceModel = requestedModel ?? servedModel;
     return {
-      label: sourceModel === imageModel ? imageModel : `${sourceModel} → ${imageModel}`,
-      assumedImageModel: servedModel !== imageModel,
+      label:
+        sourceModel && sourceModel !== imageModel ? `${sourceModel} → ${imageModel}` : imageModel,
     };
   }
 
@@ -28,6 +34,5 @@ export function requestModelDisplay({
       requestedModel && servedModel && requestedModel !== servedModel
         ? `${requestedModel} → ${servedModel}`
         : (servedModel ?? requestedModel ?? "—"),
-    assumedImageModel: false,
   };
 }

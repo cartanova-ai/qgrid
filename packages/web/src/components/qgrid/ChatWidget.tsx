@@ -10,9 +10,15 @@ import SquareIcon from "~icons/lucide/square";
 import XIcon from "~icons/lucide/x";
 
 import chatIcon from "@/assets/chat-icon.png";
-import { type QgridThreadCoord } from "@/services/qgrid/qgrid.types";
+import {
+  type QgridThreadCoord,
+  type QueryInput,
+  type QueryOutput,
+} from "@/services/qgrid/qgrid.types";
 import { QgridService, TokenService } from "@/services/services.generated";
+import { fetch as serviceFetch } from "@/services/sonamu.shared";
 
+import { buildChatHistory, chatGeneratedImages } from "./chat-image-generation";
 import {
   chatConfigChanged,
   chatTokenOptions,
@@ -22,6 +28,7 @@ import {
   type ChatTokenOption,
   type ChatConfig,
 } from "./chat-token-selection";
+import { ChatImagePreview } from "./ChatImagePreview";
 
 const CHAT_PROJECT_NAME = "qgrid_chat";
 const DEFAULT_MODEL = "anthropic/claude-fable-5-1";
@@ -85,34 +92,11 @@ type ChatMessage =
   | {
       role: "assistant";
       text: string;
+      images?: string[];
       status: "streaming" | "done" | "aborted" | "error";
       meta?: DoneMeta;
       error?: string;
     };
-
-// codex ResponseItem 포맷 (ai-sdk extractPromptAndHistory 와 동일). Anthropic 경로는
-// threadCoord 재사용이 없어 이 history 가 유일한 문맥이고, OpenAI 경로는 cold 폴백에 쓴다.
-// 과거 turn 의 이미지는 history 에 싣지 않는다 — warm thread 에는 이미 남아 있고,
-// cold 폴백에서만 텍스트로 축약되는 것을 감수한다(테스트 도구 범위).
-function buildHistory(messages: ChatMessage[]): unknown[] {
-  const items: unknown[] = [];
-  for (const m of messages) {
-    if (m.role === "user") {
-      items.push({
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: m.text }],
-      });
-    } else if (m.text) {
-      items.push({
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: m.text }],
-      });
-    }
-  }
-  return items;
-}
 
 function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
@@ -171,6 +155,10 @@ export function ChatWidget() {
   const [streamId, setStreamId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const requestAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => requestAbortRef.current?.abort(), []);
 
   const threadCoordRef = useRef<QgridThreadCoord | undefined>(undefined);
   const lastConfigRef = useRef<ChatConfig | undefined>(undefined);
@@ -201,7 +189,9 @@ export function ChatWidget() {
     tokensData?.rows !== undefined && providerTokenMissing(tokensData.rows, provider);
 
   useEffect(() => {
-    if (!supportsImages) setAttachments([]);
+    if (!supportsImages) {
+      setAttachments([]);
+    }
   }, [supportsImages]);
 
   useEffect(() => {
@@ -258,6 +248,7 @@ export function ChatWidget() {
         patchLastAssistant((m) => ({
           ...m,
           text: data.text || m.text,
+          images: chatGeneratedImages(Array.isArray(data.content) ? data.content : [data.content]),
           status: "done",
           meta: {
             model: data.model,
@@ -317,7 +308,9 @@ export function ChatWidget() {
     lastConfigRef.current = currentConfig;
 
     const images = supportsImages ? attachments : [];
-    const history = buildHistory(messages);
+    const history = buildChatHistory(messages, supportsImages);
+    const controller = new AbortController();
+    requestAbortRef.current = controller;
     setMessages((prev) => [
       ...prev,
       { role: "user", text: prompt, ...(images.length > 0 ? { images } : {}) },
@@ -328,7 +321,7 @@ export function ChatWidget() {
     setBusy(true);
 
     try {
-      const { streamId: id } = await QgridService.prepareStream({
+      const args: QueryInput = {
         prompt,
         model,
         projectName: CHAT_PROJECT_NAME,
@@ -341,15 +334,48 @@ export function ChatWidget() {
           : {}),
         ...(history.length > 0 ? { history: JSON.stringify(history) } : {}),
         ...(threadCoordRef.current ? { runContext: { threadCoord: threadCoordRef.current } } : {}),
-      });
+      };
+      if (supportsImages) {
+        const result: QueryOutput = await serviceFetch({
+          method: "POST",
+          url: "/api/qgrid/query",
+          data: { args: { ...args, imageGeneration: "auto" } satisfies QueryInput },
+          signal: controller.signal,
+        });
+        if (requestAbortRef.current !== controller || controller.signal.aborted) return;
+        threadCoordRef.current = result.runContext?.threadCoord;
+        patchLastAssistant((m) => ({
+          ...m,
+          text: result.text,
+          images: chatGeneratedImages(result.content),
+          status: "done",
+          meta: {
+            model: result.model,
+            tokenName: result.tokenName,
+            durationMs: result.durationMs,
+            costUsd: result.costUsd,
+            requestLogId: result.runContext?.requestLogId,
+            fallback: (result.modelFallbacks?.length ?? 0) > 0,
+          },
+        }));
+        setBusy(false);
+        requestAbortRef.current = null;
+        return;
+      }
+      const { streamId: id } = await QgridService.prepareStream(args);
+      if (requestAbortRef.current !== controller || controller.signal.aborted) return;
       setStreamId(id);
     } catch (e) {
+      if (requestAbortRef.current !== controller || controller.signal.aborted) return;
       failStreaming(errorMessage(e));
+      requestAbortRef.current = null;
     }
   };
 
   // EventSource 를 닫으면 서버 sse.onClose 가 abort 와 run 마감을 처리한다.
   const stop = () => {
+    requestAbortRef.current?.abort();
+    requestAbortRef.current = null;
     patchLastAssistant((m) => (m.status === "streaming" ? { ...m, status: "aborted" } : m));
     setStreamId(null);
     setBusy(false);
@@ -374,6 +400,13 @@ export function ChatWidget() {
 
   return (
     <div className="fixed bottom-5 right-5 z-40">
+      {previewImage && (
+        <ChatImagePreview
+          key={previewImage}
+          url={previewImage}
+          onClose={() => setPreviewImage(null)}
+        />
+      )}
       {open ? (
         <div
           onAnimationEnd={() => {
@@ -515,12 +548,15 @@ export function ChatWidget() {
                       {m.images && (
                         <div className="flex flex-wrap justify-end gap-1">
                           {m.images.map((url, j) => (
-                            <img
+                            <button
                               key={j}
-                              src={url}
-                              alt=""
-                              className="size-24 rounded-xl object-cover"
-                            />
+                              type="button"
+                              onClick={() => setPreviewImage(url)}
+                              aria-label={`첨부 이미지 ${j + 1} 크게 보기`}
+                              className="cursor-zoom-in rounded-xl"
+                            >
+                              <img src={url} alt="" className="size-24 rounded-xl object-cover" />
+                            </button>
                           ))}
                         </div>
                       )}
@@ -531,6 +567,34 @@ export function ChatWidget() {
                   ) : (
                     <div key={i} className="self-start max-w-[88%] min-w-0">
                       <div className="rounded-[18px] rounded-bl-[5px] bg-sand-100 px-3.5 py-2">
+                        {m.images?.map((url, imageIndex) => (
+                          <div key={imageIndex} className="my-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setPreviewImage(url)}
+                              aria-label={`생성된 이미지 ${imageIndex + 1} 크게 보기`}
+                              className="block w-full cursor-zoom-in rounded-xl"
+                            >
+                              <img
+                                src={url}
+                                alt={`생성된 이미지 ${imageIndex + 1}`}
+                                onLoad={() =>
+                                  scrollRef.current?.scrollTo({
+                                    top: scrollRef.current.scrollHeight,
+                                  })
+                                }
+                                className="w-full rounded-xl object-contain bg-white"
+                              />
+                            </button>
+                            <a
+                              href={url}
+                              download={`qgrid-image-${imageIndex + 1}.${url.startsWith("data:image/jpeg;") ? "jpg" : url.startsWith("data:image/webp;") ? "webp" : "png"}`}
+                              className="mt-1 inline-block text-[11px] text-sienna-500 hover:underline"
+                            >
+                              이미지 다운로드
+                            </a>
+                          </div>
+                        ))}
                         {m.text ? (
                           <div className="prose prose-sm prose-qgrid max-w-none text-[13px] leading-relaxed break-words">
                             <Markdown remarkPlugins={[remarkGfm]}>{m.text}</Markdown>
@@ -590,7 +654,14 @@ export function ChatWidget() {
               <div className="flex gap-1.5 pb-2">
                 {attachments.map((url, i) => (
                   <div key={i} className="relative">
-                    <img src={url} alt="" className="size-12 rounded-xl object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => setPreviewImage(url)}
+                      aria-label={`첨부할 이미지 ${i + 1} 크게 보기`}
+                      className="cursor-zoom-in rounded-xl"
+                    >
+                      <img src={url} alt="" className="size-12 rounded-xl object-cover" />
+                    </button>
                     <button
                       type="button"
                       onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}

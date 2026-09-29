@@ -167,8 +167,8 @@ export const QueryInput = z.looseObject({
   logger: z.boolean().optional(),
   runContext: QgridRunContext.optional(),
   toolResults: z.array(QgridToolResultInput).optional(),
-  // OpenAI Responses image_generation tool 을 켠다(OpenAI 경로 전용, opt-in, non-stream).
-  imageGeneration: z.boolean().optional(),
+  // OpenAI only, non-stream: true requires an image; auto permits text or native image tools.
+  imageGeneration: z.union([z.boolean(), z.literal("auto")]).optional(),
   // qgrid 가격 추정 및 Codex 이미지 요청 힌트. 이미지 모델은 gpt-image-2 로 고정 가정한다.
   imageGenerationOptions: ImageGenerationOptions.optional(),
 });

@@ -8,6 +8,11 @@ import {
 } from "./openai-backend-protocol";
 
 describe("OpenAI Codex backend protocol", () => {
+  it("distinguishes partial function items from completed arguments", () => {
+    const item = { type: "function_call", call_id: "call", name: "generate_transparent_image", arguments: "{}" };
+    expect(normalizeOpenAIEvent({ type: "response.output_item.added", item })).toEqual({ type: "output-item", item, completed: false });
+    expect(normalizeOpenAIEvent({ type: "response.output_item.done", item })).toEqual({ type: "output-item", item, completed: true });
+  });
   it("uses returned bytes rather than a mismatched format label", () => {
     expect(normalizeOpenAIEvent({ type: "response.output_item.done", item: {
       type: "image_generation_call", result: "UklGRgAAAABXRUJQ", output_format: "png",

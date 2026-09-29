@@ -135,7 +135,7 @@ export async function beforeQuery(args: QueryInput): Promise<{
       project_name: args.projectName,
       history: filterHistoryForStorage(args.history),
       tools: args.tools?.length ? args.tools : undefined,
-      is_image_generation: args.imageGeneration,
+      is_image_generation: args.imageGeneration === "auto" ? false : args.imageGeneration,
       json_schema: args.jsonSchema ?? null,
     });
   }
@@ -240,6 +240,7 @@ export async function afterQuery(
         cost_usd: agg.cost_usd,
         cost_source: agg.cost_source,
         image_cost_usd: imageCostMicroUsd,
+        ...(imageParts.length > 0 ? { is_image_generation: true } : {}),
         image_cost_method:
           imageCostMicroUsd !== null
             ? imageGenerationCostMethod(args.imageGenerationOptions, result)

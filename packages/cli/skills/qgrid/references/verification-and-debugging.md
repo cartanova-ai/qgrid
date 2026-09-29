@@ -125,6 +125,9 @@ Image generation:
 - `packages/api/scripts/smoke-test-image-generation.ts`
 - Human-initiated only.
 - Requires active OpenAI token with image entitlement and applicable migration.
+- For 2.9.8 chat, verify the actual browser POST and served bundle, not only a direct function test. A globally installed CLI on port 44900 can serve stale assets while repository tests pass; identify the listening process and its executable before assuming a rebuild or refresh affects it.
+- Cover auto text-only replies, native ordinary generation, server-side transparent editing, and replay of prior generated images. Explicit `true` must retain its image-required behavior. Verify driver usage stays separate from image usage and auto text replies are not image logs.
+- Verify extension, decoded bytes, and natural dimensions in chat image previews. A format request in prose is not evidence: the 2026-09-29 WebP probe returned PNG from a prompt-only request and WebP from explicit `outputFormat: "webp"`. Transparent output remains PNG.
 - Env: `QGRID_URL`, `QGRID_OPENAI_MODEL`.
 - Not part of CI; it consumes ChatGPT subscription quota.
 
@@ -201,7 +204,7 @@ Other scripts under `scripts/smoke-test-*` and `scripts/debug-*` are ad hoc prob
 OpenAI `ImageGenerationError` kinds:
 
 - `gate`: capability/model check failed before the turn.
-- `not_called`: model completed but did not call Codex `image_generation`.
+- `not_called`: model completed but did not call an image tool for explicit `imageGeneration: true`. Auto mode permits text-only completion when no image tool was attempted.
 - `incomplete`: image tool was attempted but no completed base64 image was produced.
 
 `OpenAI refresh failed`:

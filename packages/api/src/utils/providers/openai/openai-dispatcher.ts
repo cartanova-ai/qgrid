@@ -26,6 +26,7 @@ const logger = getLogger(["qgrid", "openai-dispatcher"]);
 // 교체된 codex worker 가 강제하던 watchdog. 호출자가 timeoutMs 를 생략해도 요청이
 // 영원히 매달리지 않도록 direct transport 도 유한한 기본 상한을 유지한다.
 const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
+const TRANSPARENT_IMAGE_TOOL = "generate_transparent_image";
 
 export type ImageFailureKind = "gate" | "not_called" | "incomplete";
 
@@ -113,9 +114,48 @@ function asReasoning(req: GenerateRequest): OpenAIResponsesOptions["reasoning"] 
 
 function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
   const { outputFormat, ...imageControls } = req.imageGenerationOptions ?? {};
+  const auto = req.imageGeneration === "auto";
+  if (auto && req.outputSchema) {
+    throw new ImageGenerationError(
+      "gate",
+      "Automatic image generation does not support structured output or external tools",
+    );
+  }
   return {
     model: req.model ?? "",
     ...(req.systemPrompt ? { instructions: req.systemPrompt } : {}),
+    ...(auto
+      ? {
+          instructions: [
+            req.systemPrompt,
+            "Use image_generation for ordinary image generation or editing. Use generate_transparent_image only when a transparent background is requested. Text replies are allowed when no image is needed. Use only one kind of image tool per response, and at most one generate_transparent_image call.",
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+          parallelToolCalls: false,
+          tools: [
+            {
+              type: "function",
+              name: TRANSPARENT_IMAGE_TOOL,
+              description:
+                "Generate or edit an image with a transparent background using the conversation's reference images.",
+              strict: true,
+              parameters: {
+                type: "object",
+                properties: {
+                  prompt: {
+                    type: "string",
+                    description:
+                      "Complete instructions for the transparent image generation or edit.",
+                  },
+                },
+                required: ["prompt"],
+                additionalProperties: false,
+              },
+            },
+          ],
+        }
+      : {}),
     history: inputItems(req),
     ...(asReasoning(req) ? { reasoning: asReasoning(req) } : {}),
     ...(req.verbosity ? { verbosity: req.verbosity as OpenAIResponsesOptions["verbosity"] } : {}),
@@ -129,6 +169,7 @@ function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
           imageGeneration: req.imageGenerationOptions
             ? {
                 ...imageControls,
+                ...(auto ? { background: "auto" } : {}),
                 ...(outputFormat ? { output_format: outputFormat } : {}),
               }
             : true,
@@ -312,6 +353,11 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     };
     const images: GeneratedImage[] = [];
     let imageAttempted = false;
+    const auto = req.imageGeneration === "auto";
+    const transparentCalls = new Map<string, string>();
+    const transparentCallIds = new Set<unknown>();
+    let transparentAttempted = false;
+    let driverCompleted = false;
     let servingModel = req.model ?? "";
     const metadata = selection.metadata;
     const clientEntry = this.acquireClient(selection);
@@ -334,7 +380,42 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           });
         } else if (event.type === "output-item" && event.item.type === "image_generation_call") {
           imageAttempted = true;
+        } else if (auto && event.type === "output-item" && event.item.type === "function_call") {
+          if (event.item.name !== TRANSPARENT_IMAGE_TOOL) {
+            throw new ImageGenerationError("incomplete", "Unexpected automatic image tool call");
+          }
+          transparentAttempted = true;
+          transparentCallIds.add(event.item.call_id);
+          if (!event.completed) continue;
+          const id = event.item.call_id;
+          let args: unknown;
+          try {
+            args = JSON.parse(String(event.item.arguments));
+          } catch {
+            throw new ImageGenerationError("incomplete", "Invalid transparent image arguments");
+          }
+          if (
+            typeof id !== "string" ||
+            !id ||
+            !args ||
+            typeof args !== "object" ||
+            Array.isArray(args) ||
+            Object.keys(args).length !== 1 ||
+            !("prompt" in args) ||
+            typeof args.prompt !== "string" ||
+            !args.prompt.trim()
+          ) {
+            throw new ImageGenerationError("incomplete", "Invalid transparent image arguments");
+          }
+          if (transparentCalls.has(id) && transparentCalls.get(id) !== args.prompt) {
+            throw new ImageGenerationError(
+              "incomplete",
+              "Conflicting transparent image tool calls",
+            );
+          }
+          transparentCalls.set(id, args.prompt);
         } else if (event.type === "completed" && event.usage) {
+          driverCompleted = true;
           servingModel = event.model ?? servingModel;
           usage = {
             totalTokens: event.usage.totalTokens,
@@ -344,6 +425,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             reasoningOutputTokens: event.usage.reasoningTokens,
           };
         } else if (event.type === "completed") {
+          driverCompleted = true;
           servingModel = event.model ?? servingModel;
         } else if (event.type === "error") {
           if (req.imageGeneration)
@@ -351,10 +433,63 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           throw event.error;
         }
       }
+      if (auto && transparentAttempted) {
+        if (
+          !driverCompleted ||
+          transparentCalls.size !== 1 ||
+          transparentCallIds.size !== 1 ||
+          imageAttempted
+        ) {
+          throw new ImageGenerationError(
+            "incomplete",
+            "Expected one completed transparent image call without another image tool",
+          );
+        }
+        if (req.abortSignal?.aborted) throw abortError(req.abortSignal);
+        const prompt = [...transparentCalls.values()][0]!;
+        let imageCompleted = false;
+        for await (const event of clientEntry.client.responses(
+          {
+            model: req.model ?? "",
+            ...(req.systemPrompt ? { instructions: req.systemPrompt } : {}),
+            history: [
+              ...inputItems(req),
+              { type: "message", role: "user", content: [{ type: "input_text", text: prompt }] },
+            ],
+            imageGeneration: {
+              quality: req.imageGenerationOptions?.quality,
+              size: req.imageGenerationOptions?.size,
+              output_format: "png",
+              background: "transparent",
+            },
+          },
+          req.abortSignal,
+        )) {
+          if (event.type === "image")
+            images.push({
+              data: event.base64,
+              mediaType: event.mimeType,
+              revisedPrompt: event.revisedPrompt ?? null,
+              ...(event.generation ? { generation: event.generation } : {}),
+            });
+          else if (event.type === "completed") imageCompleted = true;
+          else if (event.type === "error")
+            throw new ImageGenerationError("incomplete", event.error.message);
+        }
+        imageAttempted = true;
+        if (!imageCompleted)
+          throw new ImageGenerationError(
+            "incomplete",
+            "Transparent image generation did not complete",
+          );
+      }
+      if (auto && imageAttempted && !driverCompleted)
+        throw new ImageGenerationError("incomplete", "Image generation response did not complete");
+      if (req.abortSignal?.aborted) throw abortError(req.abortSignal);
     } finally {
       this.releaseClient(clientEntry);
     }
-    if (req.imageGeneration && images.length === 0) {
+    if ((req.imageGeneration === true || (auto && imageAttempted)) && images.length === 0) {
       throw new ImageGenerationError(
         imageAttempted ? "incomplete" : "not_called",
         imageAttempted

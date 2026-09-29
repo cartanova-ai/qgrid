@@ -179,7 +179,7 @@ export type OpenAINormalizedEvent =
       revisedPrompt?: string;
       generation?: ImageGenerationMetadata;
     }
-  | { type: "output-item"; item: OpenAIResponseItem }
+  | { type: "output-item"; item: OpenAIResponseItem; completed?: boolean }
   | { type: "completed"; responseId: string; usage?: OpenAIUsage; model?: string }
   | { type: "error"; error: OpenAIProtocolError };
 
@@ -256,7 +256,7 @@ export function normalizeOpenAIEvent(raw: unknown): OpenAINormalizedEvent | unde
             : {}),
       };
     }
-    return { type: "output-item", item };
+    return { type: "output-item", item, completed: type === "response.output_item.done" };
   }
   if (type === "response.completed") {
     const response = (event.response ?? {}) as Record<string, unknown>;

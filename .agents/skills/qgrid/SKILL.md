@@ -53,7 +53,15 @@ Request logging is enabled by default. Use `providerOptions.qgrid.logger: false`
 - Prefer `getPuri()` for Sonamu model queries. Treat `getDB()` as a legacy escape hatch only when Puri cannot express the required query. Inside `@transactional` methods, all participating queries must use `getPuri()`; `getDB()` does not reuse Sonamu's ambient transaction connection.
 - Never hand-author migration files for Sonamu-managed schema. In the qgrid source repository, change the entity definition, inspect `sonamu migrate status`, and create migration files with `mise exec -- pnpm --dir packages/api sonamu migrate generate`. Inspect the generated files before applying them. If Sonamu cannot express a required schema change, stop and ask rather than silently replacing its workflow with a custom migration.
 - Keep OpenAI Codex built-in tools, apps, plugins, skills, web search, shell, and environment instruction blocks disabled unless the user explicitly asks for agentic Codex behavior.
-- Treat OpenAI image generation as opt-in. Transparent background requests use Codex standalone Images endpoints with subscription credentials; other image requests use the hosted Responses image tool. Inspect current code before modifying either route; image costs remain API-price estimates.
+- Treat OpenAI image generation as opt-in outside dashboard chat. In 2.9.8, OpenAI `qgrid_chat` opts into raw API `imageGeneration: "auto"` on every turn; the public AI SDK option remains boolean. Ordinary images use the hosted Responses image tool; a server-executed transparent-image function calls Codex standalone Images directly with subscription credentials. Do not reintroduce a client decision tool followed by another GPT generation request. Image costs remain API-price estimates.
+
+## Automatic chat images (2.9.8+)
+
+- Raw `imageGeneration: "auto"` permits text-only replies; explicit `true` still requires an image. Both use non-stream requests. Auto mode rejects caller tools and output schemas.
+- Dashboard chat sends complete text and image history, including prior generated images as user visual references. Do not assume provider conversation state retains image bytes or send assistant `input_image` blocks.
+- The model chooses ordinary `image_generation` or `generate_transparent_image`; the server runs the latter directly with the selected token and cancellation signal. Preserve driver usage separately from image usage.
+- Request-log model labels show requested model to image model using serving/image-cost metadata. Do not hardcode `gpt-image-2.5` or restore image-generation/assumption badges. In auto mode, mark image generation only when an image was produced.
+- Read `references/decision-rationale.md` and `references/openai-codex-runtime.md` before changing this routing or its cache boundary.
 
 ## Image output formats (2.9.6+)
 
@@ -61,6 +69,7 @@ Request logging is enabled by default. Use `providerOptions.qgrid.logger: false`
 - Preserve the actual returned MIME type in qgrid content, AI SDK files, and request-log image URLs; do not relabel bytes as the requested format.
 - Transparent generation keeps the standalone Codex Images route and accepts PNG only. Reject transparent JPEG/WebP requests before generation.
 - Keep the AI SDK standard `GeneratedFile.mediaType: string` contract. Do not add a qgrid-specific image wrapper or conditional return type.
+- A 2026-09-29 live probe returned PNG for a prompt-only WebP request and WebP when `outputFormat: "webp"` was supplied. Model prose is not format evidence; inspect file bytes. Chat does not infer output format from prose, and no post-generation conversion is performed.
 
 ## Verification
 

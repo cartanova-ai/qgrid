@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { estimateImageGenerationCostMicroUsd, imageGenerationCostMethod } from "./qgrid-image-generation";
-import { type ImageGenerationMetadata, type QgridContent, type QueryOutput } from "./qgrid.types";
+import { QueryInput, type ImageGenerationMetadata, type QgridContent, type QueryOutput } from "./qgrid.types";
 
 const options = { quality: "high" as const, size: "1024x1024" as const, background: "transparent" as const };
 const generation: ImageGenerationMetadata = {
@@ -17,6 +17,12 @@ function result(content: QgridContent[]): QueryOutput {
 }
 
 describe("standalone image cost estimates", () => {
+  it("accepts automatic image mode while preserving boolean requests", () => {
+    for (const imageGeneration of [true, false, "auto"] as const) {
+      expect(QueryInput.parse({ prompt: "chat", imageGeneration }).imageGeneration).toBe(imageGeneration);
+    }
+    expect(QueryInput.safeParse({ prompt: "chat", imageGeneration: "required" }).success).toBe(false);
+  });
   it("uses response usage once for multiple outputs without pricing requested settings or driver tokens", () => {
     const output = result([
       { type: "image", data: "first", generation: { ...generation,

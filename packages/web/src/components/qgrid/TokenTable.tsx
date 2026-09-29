@@ -4,6 +4,7 @@ import { useState } from "react";
 import PencilIcon from "~icons/lucide/pencil";
 import TrashIcon from "~icons/lucide/trash-2";
 
+import { maskAccessToken } from "@/lib/token-label";
 import { QgridService } from "@/services/services.generated";
 import { type TokenSubsetMapping } from "@/services/sonamu.generated";
 import { useUpdateTokenMutation } from "@/services/token/use-update-token-mutation";
@@ -27,12 +28,6 @@ function formatExpiry(expiresAt: number | null): { text: string; color: string }
   const text = h > 0 ? `${h}h ${m}m` : `${m}m`;
   if (diff < 3_600_000) return { text, color: "text-amber-500" };
   return { text, color: "text-sand-400" };
-}
-
-function maskAccessToken(token: Token): string {
-  const at = token.credentials.accessToken;
-  if (at.length <= 12) return at;
-  return `${at.slice(0, 8)}...${at.slice(-4)}`;
 }
 
 interface TokenTableProps {
@@ -154,7 +149,7 @@ export function TokenTable({ data, isLoading }: TokenTableProps) {
                     </td>
                     <td className="px-5 py-3">
                       <code className="text-[13px] font-mono text-sand-800">
-                        {maskAccessToken(token)}
+                        {maskAccessToken(token.credentials)}
                       </code>
                     </td>
                     <td className="px-5 py-3">
@@ -270,7 +265,7 @@ export function TokenTable({ data, isLoading }: TokenTableProps) {
               <p className="text-sm text-sand-700 mt-2">
                 Are you sure you want to remove{" "}
                 <code className="text-[13px] font-mono text-sand-800">
-                  {maskAccessToken(deleteTarget)}
+                  {maskAccessToken(deleteTarget.credentials)}
                 </code>
                 {deleteTarget.name && <span className="text-sand-500"> ({deleteTarget.name})</span>}
                 ?

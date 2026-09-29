@@ -63,14 +63,6 @@ function RequestModel({
   return (
     <>
       <span className="text-xs text-sand-500">{modelDisplay.label}</span>
-      {modelDisplay.assumedImageModel && (
-        <span
-          className="ml-1 text-[9px] text-sand-400"
-          title="이미지 모델은 비용 계산에 사용한 추정값입니다"
-        >
-          추정
-        </span>
-      )}
       {hasRequestedOnly && <span className="ml-1 text-[9px] text-sand-400">요청</span>}
       {(fallbackCount ?? 0) > 0 && (
         <span className="ml-1 text-[9px] text-caution-500">×{fallbackCount}</span>

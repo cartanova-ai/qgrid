@@ -804,12 +804,12 @@ describe("QgridFrame.prepareStream", () => {
     requestLogSaveMock.mockReset();
   });
 
-  it("rejects imageGeneration before creating an SSE stream", async () => {
+  it.each([true, "auto"] as const)("rejects imageGeneration=%s before creating an SSE stream", async (imageGeneration) => {
     await expect(
       QgridFrame.prepareStream({
         prompt: "draw",
         model: "openai/gpt-5-codex",
-        imageGeneration: true,
+        imageGeneration,
       }),
     ).rejects.toThrow(/imageGeneration is not supported with streaming/);
 

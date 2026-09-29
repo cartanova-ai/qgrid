@@ -122,6 +122,18 @@ describe("qgrid run lifecycle start", () => {
     });
   });
 
+  it.each([false, true])("classifies automatic image output only when produced (%s)", async (hasImage) => {
+    const args = { prompt: "chat", model: "openai/gpt-6-astra", imageGeneration: "auto" as const };
+    const run = await beforeQuery(args);
+    expect(createRunMock).toHaveBeenCalledWith(expect.objectContaining({ is_image_generation: false }));
+    await afterQuery(run.requestLogId, run.stepIndex, args, queryOutput({
+      content: hasImage ? [{ type: "image", data: "png" }] : [{ type: "text", text: "hello" }],
+    }));
+    const finish = finishRunMock.mock.calls[0]![1];
+    expect(finish.is_image_generation).toBe(hasImage ? true : undefined);
+    expect(finish.image_cost_method).toBe(hasImage ? "assumed:gpt-image-2:medium:1536x1024:png" : null);
+  });
+
   it("stores attached tool definitions on the run and omits them when absent", async () => {
     const tools = [
       { name: "getWeather", description: "Get weather for a city", inputSchema: { type: "object" } },
@@ -542,6 +554,7 @@ describe("qgrid run lifecycle TTFT", () => {
       10,
       expect.objectContaining({
         image_cost_usd: 41000,
+        is_image_generation: true,
         image_cost_method: "assumed:gpt-image-2:medium:1536x1024:png",
       }),
     );

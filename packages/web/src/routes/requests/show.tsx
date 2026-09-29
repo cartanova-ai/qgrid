@@ -328,14 +328,6 @@ function HeaderBar({ data }: { data: RequestLog }) {
       <span className="text-[15px] font-semibold text-sand-900 break-all">
         {modelDisplay.label === "—" ? "Unknown model" : modelDisplay.label}
       </span>
-      {modelDisplay.assumedImageModel && (
-        <span
-          className="text-[10px] text-sand-400"
-          title="이미지 모델은 비용 계산에 사용한 추정값입니다"
-        >
-          추정
-        </span>
-      )}
       {hasRequestedOnly && <span className="text-[10px] text-sand-400">요청</span>}
       {!isRunning && (data.fallback_count ?? 0) > 0 && (
         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-caution-400/15 text-caution-500 font-medium uppercase">

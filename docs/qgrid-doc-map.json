@@ -185,6 +185,24 @@
         "title": "저장소 구조",
         "url": "https://app.notion.com/p/3a5f753e4fb981e99bdbde27bcaa9e7c"
       }
+    },
+    {
+      "id": "automatic-image-generation",
+      "code": [
+        "packages/api/src/utils/providers/openai/openai-dispatcher.ts",
+        "packages/api/src/application/qgrid/qgrid.types.ts",
+        "packages/web/src/components/qgrid/ChatWidget.tsx",
+        "packages/web/src/components/qgrid/ChatImagePreview.tsx"
+      ],
+      "skill": [
+        "packages/cli/skills/qgrid/references/openai-codex-runtime.md",
+        "packages/cli/skills/qgrid/references/decision-rationale.md",
+        "packages/cli/skills/qgrid/references/sonamu-api-web-flow.md"
+      ],
+      "notion": {
+        "title": "ADR-015 채팅 이미지 생성은 서버 네이티브 도구로 처리합니다",
+        "url": "https://app.notion.com/p/3eaf753e4fb9816ca7fcd72ac1ae82fa"
+      }
     }
   ]
 }

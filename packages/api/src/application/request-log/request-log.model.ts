@@ -552,6 +552,7 @@ class RequestLogModelClass extends BaseModelClass<
       tool_call_count?: number;
       image_cost_usd?: number | null;
       image_cost_method?: string | null;
+      is_image_generation?: boolean;
       response_json_ok?: boolean | null;
     },
   ): Promise<void> {
@@ -578,6 +579,7 @@ class RequestLogModelClass extends BaseModelClass<
       "tool_call_count",
       "image_cost_usd",
       "image_cost_method",
+      "is_image_generation",
       "response_json_ok",
     ] as const;
     for (const key of fields) {

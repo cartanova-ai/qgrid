@@ -79,7 +79,7 @@ export interface GenerateRequest {
   reuseInput?: Array<UserInput>;
   // OpenAI image_generation tool 을 켠다(OpenAI 경로 전용, opt-in).
   // 이 플래그가 있으면 dispatcher 는 항상 cold thread 로 실행하고 재사용 라우팅을 건너뛴다.
-  imageGeneration?: boolean;
+  imageGeneration?: boolean | "auto";
   imageGenerationOptions?: ImageGenerationOptions;
 }
 

@@ -327,7 +327,8 @@ Content-Type: application/json
     "imageGenerationOptions": {
       "quality": "low",
       "size": "1024x1024",
-      "background": "auto"
+      "background": "auto",
+      "outputFormat": "png"
     }
   }
 }
@@ -390,7 +391,8 @@ Content-Type: application/json
     "imageGenerationOptions": {
       "quality": "low",
       "size": "1024x1024",
-      "background": "auto"
+      "background": "auto",
+      "outputFormat": "png"
     }
   }
 }
