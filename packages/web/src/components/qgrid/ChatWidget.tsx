@@ -40,6 +40,10 @@ const DEFAULT_MODEL = "anthropic/claude-fable-5-1";
 //  - `gpt-5.4`, `gpt-5.4-mini`: qgrid 가 쓰는 ChatGPT 구독 Codex 경로에서 2026-08-31 retired
 //    (대체 gpt-5.6-terra / gpt-5.6-luna).
 //  - `gpt-5.2`, `gpt-5.3-codex`: 같은 경로에서 이미 제공 종료.
+//  - `gpt-5.3-codex-spark`: 같은 경로에서 400("not supported when using Codex with a ChatGPT account"),
+//    Codex 카탈로그에서도 빠짐(2026-09-29 확인).
+//  - `claude-opus-4`, `claude-sonnet-4`: 2026-06-15 retired, Claude Code 에서 모델 오류.
+//  - `claude-opus-4-1`: 2026-08-05 retired, Claude Code 가 claude-opus-5-5 로 대체 서빙.
 //  - `claude-sonnet-4-7`: 공식 카탈로그에 없는 유령 항목.
 const MODEL_PRESET_GROUPS: { label: string; models: string[] }[] = [
   {
@@ -52,7 +56,6 @@ const MODEL_PRESET_GROUPS: { label: string; models: string[] }[] = [
       "openai/gpt-5.6-sol",
       "openai/gpt-5.6-luna",
       "openai/gpt-5.5",
-      "openai/gpt-5.3-codex-spark",
     ],
   },
   {
@@ -62,6 +65,7 @@ const MODEL_PRESET_GROUPS: { label: string; models: string[] }[] = [
       "anthropic/claude-fable-5",
       "anthropic/claude-opus-5-5",
       "anthropic/claude-opus-5",
+      "anthropic/claude-sonnet-5-5",
       "anthropic/claude-sonnet-5",
       "anthropic/claude-opus-4-8",
       "anthropic/claude-opus-4-7",
@@ -70,9 +74,6 @@ const MODEL_PRESET_GROUPS: { label: string; models: string[] }[] = [
       "anthropic/claude-sonnet-4-6",
       "anthropic/claude-sonnet-4-5",
       "anthropic/claude-haiku-4-5",
-      "anthropic/claude-opus-4-1",
-      "anthropic/claude-opus-4",
-      "anthropic/claude-sonnet-4",
     ],
   },
 ];

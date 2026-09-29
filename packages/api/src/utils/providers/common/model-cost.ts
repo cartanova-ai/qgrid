@@ -188,6 +188,9 @@ const ANTHROPIC_COSTS: Record<string, ModelCosts> = {
   // Sonnet 5 의 introductory $2/$10 이 정식 단가로 확정됐다. 2026-09-01 에 예정됐던 $3/$15 인상은
   // 취소됐으므로 날짜 분기 없이 고정 단가로 계산한다.
   "claude-sonnet-5": anthropicCosts(2, 10),
+  // Sonnet 5.5 (2026-09-29 출시): Sonnet 5 와 같은 $2/$10, cache read 는 표준 0.1x($0.20).
+  // @see https://platform.claude.com/docs/en/about-claude/pricing
+  "claude-sonnet-5-5": anthropicCosts(2, 10),
 };
 
 // gpt-5.3-codex-spark 는 research preview 로 공식 token 단가가 아직 final 이 아니다.

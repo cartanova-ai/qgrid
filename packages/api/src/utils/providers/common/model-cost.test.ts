@@ -59,6 +59,7 @@ describe("calculateCostUsd", () => {
     // Opus 5.5 는 cache read 만 0.05x 특례($0.20), cache write 배율은 표준(5m $5 / 1h $8).
     ["claude-opus-5-5", 4, 20, 0.2, 8],
     ["claude-sonnet-5", 2, 10, 0.2, 4],
+    ["claude-sonnet-5-5", 2, 10, 0.2, 4],
   ])(
     "%s official Anthropic rates for 5m/1h cache writes",
     (model, inputTokens, outputTokens, cachedInputTokens, cacheCreationInputTokens) => {

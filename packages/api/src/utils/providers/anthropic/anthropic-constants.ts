@@ -49,6 +49,7 @@ const ONE_MILLION_CONTEXT_MODELS = new Set([
   "claude-fable-5",
   "claude-opus-5",
   "claude-opus-5-5",
+  "claude-sonnet-5-5",
   "claude-sonnet-5",
   "claude-sonnet-4-6",
   "claude-opus-4-6",
@@ -56,8 +57,8 @@ const ONE_MILLION_CONTEXT_MODELS = new Set([
 ]);
 
 const CLI_ONE_MILLION_SUFFIX_MODELS = new Set(["claude-sonnet-4-6", "claude-opus-4-6"]);
-// Fable 5/5.1 과 Opus 5.5 는 adaptive thinking 이 유일한 모드다(Fable: CLI 카탈로그 `rejects_disabled_thinking`,
-// Opus 5.5: 공식 사양 "can't be turned off", 2026-09-22 출시). Opus 5 는
+// Fable 5/5.1, Opus 5.5, Sonnet 5.5 는 thinking disabled 를 거부한다(Fable: CLI 카탈로그 `rejects_disabled_thinking`,
+// Opus 5.5: 공식 사양 "can't be turned off", 2026-09-22 출시. Sonnet 5.5: API `{type: "disabled"}` 400, CLI 카탈로그 `rejects_disabled_thinking`, 2026-09-29 출시). Opus 5 는
 // disabled 를 high 이하에서 지원하지만, 공식 기본값·권장 동작인 adaptive thinking 을 유지한다. qgrid
 // 기본 effort=low 가 비용/지연 제어를 맡으며, 이 정책은 disabled+xhigh/max 400 오류와 disabled 시
 // tool/XML 출력 오염도 피한다.
@@ -66,6 +67,7 @@ const ADAPTIVE_THINKING_MODELS = new Set([
   "claude-fable-5",
   "claude-opus-5",
   "claude-opus-5-5",
+  "claude-sonnet-5-5",
 ]);
 
 // Fable 계열: 구독 플랜에서 usage credits 가 필요한 최상위 티어. 구독 usage API 의

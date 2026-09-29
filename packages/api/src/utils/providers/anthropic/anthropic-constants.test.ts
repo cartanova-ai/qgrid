@@ -35,6 +35,7 @@ describe("Anthropic 1M context policy", () => {
     expect(supports1MContext("claude-opus-5")).toBe(true);
     expect(supports1MContext("claude-opus-5-5")).toBe(true);
     expect(supports1MContext("claude-sonnet-5")).toBe(true);
+    expect(supports1MContext("claude-sonnet-5-5")).toBe(true);
     expect(supports1MContext("claude-sonnet-4-6")).toBe(true);
     expect(supports1MContext("claude-opus-4-6")).toBe(true);
     expect(supports1MContext("claude-opus-4-8")).toBe(true);
@@ -51,6 +52,7 @@ describe("Anthropic 1M context policy", () => {
     expect(needsCli1mSuffix("claude-opus-5")).toBe(false);
     expect(needsCli1mSuffix("claude-opus-5-5")).toBe(false);
     expect(needsCli1mSuffix("claude-sonnet-5")).toBe(false);
+    expect(needsCli1mSuffix("claude-sonnet-5-5")).toBe(false);
     expect(needsCli1mSuffix("claude-sonnet-4-6")).toBe(true);
     expect(needsCli1mSuffix("claude-opus-4-6")).toBe(true);
     expect(needsCli1mSuffix("claude-opus-4-8")).toBe(false);
@@ -80,7 +82,7 @@ describe("Anthropic 1M context policy", () => {
 });
 
 describe("Anthropic thinking policy", () => {
-  it("Fable 5/5.1, Opus 5, Opus 5.5 는 adaptive thinking 을 보존한다", () => {
+  it("Fable 5/5.1, Opus 5, Opus 5.5, Sonnet 5.5 는 adaptive thinking 을 보존한다", () => {
     expect(usesAdaptiveThinking("claude-fable-5-1")).toBe(true);
     expect(usesAdaptiveThinking("anthropic/claude-fable-5-1")).toBe(true);
     expect(usesAdaptiveThinking("claude-fable-5")).toBe(true);
@@ -89,6 +91,8 @@ describe("Anthropic thinking policy", () => {
     expect(usesAdaptiveThinking("anthropic/claude-opus-5")).toBe(true);
     expect(usesAdaptiveThinking("claude-opus-5-5")).toBe(true);
     expect(usesAdaptiveThinking("anthropic/claude-opus-5-5[1m]")).toBe(true);
+    expect(usesAdaptiveThinking("claude-sonnet-5-5")).toBe(true);
+    expect(usesAdaptiveThinking("anthropic/claude-sonnet-5-5[1m]")).toBe(true);
     expect(usesAdaptiveThinking("claude-sonnet-5")).toBe(false);
     expect(usesAdaptiveThinking("claude-opus-4-8")).toBe(false);
   });

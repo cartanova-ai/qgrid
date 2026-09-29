@@ -432,6 +432,7 @@ type QgridSupportedModel =
   | "anthropic/claude-opus-4-8"
   | "anthropic/claude-opus-5"
   | "anthropic/claude-opus-5-5"
+  | "anthropic/claude-sonnet-5-5"
 ```
 
 `openai/gpt-5.4`, `openai/gpt-5.4-mini`, `openai/gpt-5.2`, and `openai/gpt-5.3-codex` remain in the type for backward compatibility, but the ChatGPT-subscription Codex route that qgrid uses no longer serves them. `gpt-5.4` and `gpt-5.4-mini` retired on 2026-08-31 (replacements: `openai/gpt-5.6-terra` and `openai/gpt-5.6-luna`); `gpt-5.2` and `gpt-5.3-codex` were removed from that route earlier. Requests for these ids fail at the backend.
@@ -465,6 +466,8 @@ Qgrid uses [Standard API pricing](https://developers.openai.com/api/docs/pricing
 `anthropic/claude-opus-5` has a default 1M context window and 128K max output. Its prices per 1M tokens are $5 input, $0.50 cache read, $6.25 five-minute cache write, $10 one-hour cache write, and $25 output. qgrid keeps Opus 5's default adaptive thinking behavior and uses `effort` to control reasoning depth. This also avoids the invalid `thinking: disabled` combination at `xhigh` or `max` effort.
 
 `anthropic/claude-opus-5-5` (released 2026-09-22) has a 1M context window and 128K max output. Its prices per 1M tokens are $4 input, $0.20 cache read (0.05x the input price), $5 five-minute cache write, $8 one-hour cache write, and $20 output. Adaptive thinking is always on and cannot be disabled, so qgrid preserves it and uses `effort` to control depth, as it does for Fable. Opus 5.5's API-level breaking changes (forced `tool_choice` rejection, model-bound thinking blocks) do not affect qgrid for the same reason as Fable 5.1. Opus 5 pricing did not change.
+
+`anthropic/claude-sonnet-5-5` (released 2026-09-29) has a 1M context window and 128K max output at Sonnet 5's prices: $2 input, $0.20 cache read, $2.50 five-minute cache write, $4 one-hour cache write, and $10 output per 1M tokens. It rejects disabled thinking, so qgrid keeps adaptive thinking on and uses `effort` to control depth, as it does for Opus 5.5.
 
 Claude Code may automatically retry a Fable safety refusal on another Opus model; the current CLI picks Opus 5 or Opus 4.8 by refusal category. In that case, the AI SDK response's `response.modelId` and `providerMetadata.qgrid.model` identify Opus as the actual serving model. `providerMetadata.qgrid.requestedModel` remains Fable, and `providerMetadata.qgrid.modelFallbacks` contains the refusal fallback history. The metadata also exposes `costSource` and the 5m/1h cache-write token split.
 
