@@ -23,6 +23,7 @@ describe("resolveOpenAIEffort", () => {
     expect(resolveOpenAIEffort("gpt-5.6-terra", "max")).toBe("max");
     expect(resolveOpenAIEffort("gpt-5.6-terra", "ultra")).toBe("ultra");
     expect(resolveOpenAIEffort("gpt-5.6-luna", "max")).toBe("max");
+    expect(resolveOpenAIEffort("gpt-6.1-sol", "ultra")).toBe("ultra");
     expect(resolveOpenAIEffort("gpt-6-sol", "ultra")).toBe("ultra");
     expect(resolveOpenAIEffort("gpt-6-luna", "max")).toBe("max");
   });

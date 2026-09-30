@@ -65,6 +65,18 @@ const OPENAI_COSTS: Record<string, OpenAIModelSpec> = {
     cacheCreationInputTokens: 12.5,
     longContext: LONG_CONTEXT_272K,
   },
+  // GPT-6.1 Sol (2026-09-29 DevDay 출시): Standard API pricing verified 2026-09-30. GPT-6 Sol 과 같고 cached input 만 절반.
+  // Codex 카탈로그(2026-09-30)는 ultra 까지 허용하고 기본 effort 는 low 다(GPT-6 Sol 은 medium).
+  // qgrid 의 요청 형태 + codex_cli_rs/0.147.0 헤더로 2026-09-30 구독 경로 라이브 생성 성공.
+  // @see https://developers.openai.com/api/docs/models/gpt-6.1-sol
+  "gpt-6.1-sol": {
+    maxEffort: "ultra",
+    inputTokens: 2,
+    outputTokens: 10,
+    cachedInputTokens: 0.1,
+    cacheCreationInputTokens: 2.5,
+    longContext: LONG_CONTEXT_272K,
+  },
   // GPT-6 Sol, Luna (2026-09-22 출시): Standard API pricing verified 2026-09-23. GPT-5.6 Sol/Luna 의 절반 단가.
   // Codex 카탈로그(2026-09-23)는 Sol 에 ultra, Luna 에 max 까지 허용하고 기본 effort 는 둘 다 medium 이다.
   // @see https://developers.openai.com/api/docs/models/gpt-6-sol

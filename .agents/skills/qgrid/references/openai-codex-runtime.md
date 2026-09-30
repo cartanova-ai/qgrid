@@ -39,7 +39,7 @@ availability or identical limits on qgrid's ChatGPT-subscription route.
    Report mocked tests separately from any live smoke test. Model registration does not authorize
    a release, version bump, deployment, or remote migration.
 
-### GPT-6 Astra, Sol, and Luna
+### GPT-6 Astra, Sol, Luna, and GPT-6.1 Sol
 
 `openai/gpt-6-astra` uses the existing text generation, streaming and structured-output paths.
 The model supports image input, but qgrid keeps its existing SDK restriction: image parts are
@@ -67,6 +67,18 @@ both on 2026-09-23, while Codex CLI 0.154.0 received `400 The 'gpt-6-sol' model 
 with a ChatGPT account` and its catalog fetch omitted both models until 0.156.1. The backend gate is therefore tied
 to something the newer CLI sends, not to the User-Agent version alone; a Codex CLI failure does not imply a qgrid failure.
 
+`openai/gpt-6.1-sol` (released 2026-09-29 at DevDay) uses the same paths. Standard prices per million tokens:
+input $2, cached input $0.10, cache write $2.50, output $10, with the same 272K multipliers; only cached input
+differs from GPT-6 Sol. The Codex subscription catalog fetched 2026-09-30 with `client_version=0.159.2` lists
+`context_window=272000`, effort through `ultra`, default `low`, and text+image input. The
+[model page](https://developers.openai.com/api/docs/models/gpt-6.1-sol) separately lists 1.05M context, 922K
+maximum input, 128K maximum output, effort through `max`, and a 2026-04-30 knowledge cutoff. Live generation with
+qgrid's exact request shape and `codex_cli_rs/0.147.0` headers succeeded on 2026-09-30, while Codex CLI 0.157.1
+received `400 The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account` and 0.159.2
+succeeded; the pinned User-Agent version did not need to change. The catalog now labels GPT-6 Sol
+"Previous generation workhorse model" without a retirement date. Ultrafast (`service_tier: "ultrafast"`, $60 /
+$6 / $300) is a public-API tier for GPT-6 Astra only; the subscription catalog exposes just the `fast` tier.
+
 ## Existing OpenAI model pricing and limits
 
 Checked 2026-09-23 against the official [Standard pricing table](https://developers.openai.com/api/docs/pricing)
@@ -75,6 +87,7 @@ and the local Codex subscription catalog. Prices are USD per million tokens:
 | Model | Input | Cached input | Cache write | Output | Codex context | Maximum Codex effort |
 |---|---:|---:|---:|---:|---:|---|
 | GPT-6 Astra | 10 | 1 | 12.50 | 50 | 272K | ultra |
+| GPT-6.1 Sol | 2 | 0.10 | 2.50 | 10 | 272K | ultra |
 | GPT-6 Sol | 2 | 0.20 | 2.50 | 10 | 272K | ultra |
 | GPT-6 Luna | 0.10 | 0.01 | 0.125 | 0.50 | 272K | max |
 | GPT-5.6 Sol | 4 | 0.40 | 5 | 20 | 272K | ultra |
@@ -86,7 +99,8 @@ GPT-5.3-Codex-Spark has a 128K catalog context and effort through `xhigh`; its t
 remains an explicitly documented generic estimate. Retired model pricing rows remain for legacy logs.
 The catalog does not establish a maximum output size. GPT-5.6 public API specifications list 1.05M
 context, 922K maximum input and 128K maximum output; do not conflate them with the subscription limits.
-Codex default effort is `low` for GPT-5.6 Sol, `medium` for GPT-6 Astra/Sol/Luna, GPT-5.6 Terra/Luna and GPT-5.5, and `high` for Spark.
+Codex default effort is `low` for GPT-6.1 Sol and GPT-5.6 Sol, `medium` for GPT-6 Astra/Sol/Luna, GPT-5.6 Terra/Luna and GPT-5.5, and `high` for Spark.
+GPT-5.5 retires from the Codex/ChatGPT route on 2026-10-14 (the API-key route is unaffected); it stays in the SDK type and price table but is excluded from chat presets.
 The SDK default remains `low` regardless of the backend default.
 
 [Sol's model page](https://developers.openai.com/api/docs/models/gpt-5.6-sol) guarantees promotional

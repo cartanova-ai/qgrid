@@ -13,6 +13,7 @@ describe("calculateCostUsd", () => {
   });
   it.each([
     ["gpt-6-astra", 10, 50, 1, 12.5],
+    ["gpt-6.1-sol", 2, 10, 0.1, 2.5],
     ["gpt-6-sol", 2, 10, 0.2, 2.5],
     ["gpt-6-luna", 0.1, 0.5, 0.01, 0.125],
     ["gpt-5.6-sol", 4, 20, 0.4, 5],
@@ -97,6 +98,7 @@ describe("calculateCostUsd", () => {
 
   it.each([
     ["gpt-6-astra", 10, 50, 1, 12.5, 5.6125],
+    ["gpt-6.1-sol", 2, 10, 0.1, 2.5, 1.1175],
     ["gpt-6-sol", 2, 10, 0.2, 2.5, 1.1225],
     ["gpt-6-luna", 0.1, 0.5, 0.01, 0.125, 0.056125],
     ["gpt-5.6-sol", 4, 20, 0.4, 5, 2.245],
@@ -125,6 +127,7 @@ describe("calculateCostUsd", () => {
 
   it.each([
     ["gpt-6-astra", 2.475],
+    ["gpt-6.1-sol", 0.455],
     ["gpt-6-sol", 0.495],
     ["gpt-6-luna", 0.02475],
     ["gpt-5.6-sol", 0.99],
@@ -142,6 +145,7 @@ describe("calculateCostUsd", () => {
 
   it.each([
     ["gpt-6-astra", 2.725],
+    ["gpt-6.1-sol", 0.505],
     ["gpt-6-sol", 0.545],
     ["gpt-6-luna", 0.02725],
     ["gpt-5.6-sol", 1.09],

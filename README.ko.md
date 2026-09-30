@@ -276,7 +276,7 @@ QGRID_PROJECT_NAME=my-service   # request log 프로젝트 라벨
 
 | Provider | 모델 |
 |---|---|
-| OpenAI | `openai/gpt-6-astra`, `openai/gpt-6-sol`, `openai/gpt-6-luna`, `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`, `openai/gpt-5.5`, `openai/gpt-5.3-codex-spark` |
+| OpenAI | `openai/gpt-6-astra`, `openai/gpt-6.1-sol`, `openai/gpt-6-sol`, `openai/gpt-6-luna`, `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`, `openai/gpt-5.5`, `openai/gpt-5.3-codex-spark` |
 | Anthropic | `anthropic/claude-fable-5-1`, `anthropic/claude-fable-5`, `anthropic/claude-opus-5-5`, `anthropic/claude-opus-5`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-sonnet-5`, `anthropic/claude-opus-4-8`, `anthropic/claude-opus-4-7`, `anthropic/claude-opus-4-6`, `anthropic/claude-opus-4-5`, `anthropic/claude-opus-4-1`, `anthropic/claude-opus-4`, `anthropic/claude-sonnet-4-7`, `anthropic/claude-sonnet-4-6`, `anthropic/claude-sonnet-4-5`, `anthropic/claude-sonnet-4`, `anthropic/claude-haiku-4-5` |
 
 > `openai/gpt-5.4`, `openai/gpt-5.4-mini`, `openai/gpt-5.2`, `openai/gpt-5.3-codex`는 하위 호환을 위해 SDK 타입에는 남아 있지만, qgrid가 사용하는 ChatGPT 구독 Codex 경로에서는 더 이상 제공되지 않습니다. `gpt-5.4`와 `gpt-5.4-mini`는 2026-08-31에 retire되었으며 `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`로 대체하세요.
@@ -288,10 +288,11 @@ QGRID_PROJECT_NAME=my-service   # request log 프로젝트 라벨
 | 모델 | Context (Codex 카탈로그) | 최대 출력 (공개 API) | 1M tokens당 input / cached input / cache write / output |
 |---|---:|---:|---:|
 | `openai/gpt-6-astra` | 272K | 128K | $10 / $1 / $12.50 / $50 |
+| `openai/gpt-6.1-sol` | 272K | 128K | $2 / $0.10 / $2.50 / $10 |
 | `openai/gpt-6-sol` | 272K | 128K | $2 / $0.20 / $2.50 / $10 |
 | `openai/gpt-6-luna` | 272K | 128K | $0.10 / $0.01 / $0.125 / $0.50 |
 
-2026-09-23에 조회한 Codex 카탈로그는 세 모델 모두 272K context window를 제공합니다. Astra와 Sol은 `ultra`까지, Luna는 `max`까지 reasoning effort를 지원합니다. 백엔드 기본값은 세 모델 모두 `medium`이며, qgrid SDK의 기본값은 기존대로 `low`이니 다른 깊이가 필요하면 effort를 명시하세요. [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)의 공개 API 문서는 별도로 1.05M context, 최대 입력 922K, 최대 출력 128K와 `max`까지의 effort를 명시하며 `ultra`는 포함하지 않습니다. 이 공개 API 한도를 구독 경로의 한도로 간주하지 않습니다. Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/docs/pricing)를 사용합니다. Cache write는 uncached input 단가의 1.25x이며, 입력이 272K tokens를 넘으면 요청 전체에 input/cache 2x, output 1.5x 단가가 적용됩니다. GPT-6 Sol과 Luna(2026-09-22 출시)는 GPT-5.6 Sol/Luna의 절반 단가이며, 기존 모델 단가는 2026-09-23에 재확인했고 변동이 없습니다.
+2026-09-23에 조회한 Codex 카탈로그는 Astra, Sol, Luna 모두 272K context window를 제공합니다. Astra와 Sol은 `ultra`까지, Luna는 `max`까지 reasoning effort를 지원합니다. 백엔드 기본값은 세 모델 모두 `medium`이며, qgrid SDK의 기본값은 기존대로 `low`이니 다른 깊이가 필요하면 effort를 명시하세요. [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)의 공개 API 문서는 별도로 1.05M context, 최대 입력 922K, 최대 출력 128K와 `max`까지의 effort를 명시하며 `ultra`는 포함하지 않습니다. 이 공개 API 한도를 구독 경로의 한도로 간주하지 않습니다. Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/docs/pricing)를 사용합니다. Cache write는 uncached input 단가의 1.25x이며, 입력이 272K tokens를 넘으면 요청 전체에 input/cache 2x, output 1.5x 단가가 적용됩니다. GPT-6 Sol과 Luna(2026-09-22 출시)는 GPT-5.6 Sol/Luna의 절반 단가이며, 기존 모델 단가는 2026-09-23에 재확인했고 변동이 없습니다. [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)(2026-09-29 출시)은 GPT-6 Sol과 단가가 같고 cached input만 $0.10입니다. 2026-09-30에 조회한 Codex 카탈로그는 272K context window, `ultra`까지의 effort, 백엔드 기본값 `low`를 명시하며, 같은 날 qgrid 요청 형태로 라이브 생성에 성공했습니다. `openai/gpt-5.5`는 2026-10-14에 Codex/ChatGPT 경로에서 은퇴하므로 `openai/gpt-6.1-sol` 또는 `openai/gpt-6-luna`로 옮기세요.
 
 ### GPT-5.6 사양
 

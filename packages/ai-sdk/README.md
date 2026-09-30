@@ -314,7 +314,7 @@ import { generateText } from "ai";
 import { qgrid, type QgridProviderOptions } from "@cartanova/qgrid-ai-sdk";
 
 const result = await generateText({
-  model: qgrid("openai/gpt-5.5", { projectName: "deti" }),
+  model: qgrid("openai/gpt-6.1-sol", { projectName: "deti" }),
   prompt: "An isolated character. Everything outside the character must be transparent, with no backdrop or checkerboard.",
   providerOptions: {
     qgrid: {
@@ -404,6 +404,7 @@ The `qgrid()` provider has its own lifecycle, so the logger automatically suppre
 type QgridSupportedModel =
   // OpenAI (direct private Codex Responses backend)
   | "openai/gpt-6-astra"
+  | "openai/gpt-6.1-sol"
   | "openai/gpt-6-sol"
   | "openai/gpt-6-luna"
   | "openai/gpt-5.6-sol"
@@ -442,10 +443,11 @@ type QgridSupportedModel =
 | Model | Context (Codex catalog) | Max output (public API) | Input / cached input / cache write / output per 1M tokens |
 |---|---:|---:|---:|
 | `openai/gpt-6-astra` | 272K | 128K | $10 / $1 / $12.50 / $50 |
+| `openai/gpt-6.1-sol` | 272K | 128K | $2 / $0.10 / $2.50 / $10 |
 | `openai/gpt-6-sol` | 272K | 128K | $2 / $0.20 / $2.50 / $10 |
 | `openai/gpt-6-luna` | 272K | 128K | $0.10 / $0.01 / $0.125 / $0.50 |
 
-The Codex catalog fetched on 2026-09-23 advertises a 272K context window for all three models. Astra and Sol support reasoning effort through `ultra`; Luna supports it through `max`. The backend default is `medium` for all three, while qgrid's SDK defaults to `low`; select an effort explicitly to override it. The public API model pages for [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), and [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) separately list a 1.05M context window, 922K maximum input, 128K maximum output, and reasoning effort through `max` (no `ultra`). Those public limits do not establish the subscription route's limits. [Standard API pricing](https://developers.openai.com/api/docs/pricing) is used for qgrid's cost estimate: cache writes cost 1.25x the uncached input rate, and input over 272K tokens applies 2x input/cache and 1.5x output rates to the full request. GPT-6 Sol and Luna (released 2026-09-22) are priced at half of GPT-5.6 Sol and Luna; existing model prices were re-verified on 2026-09-23 and did not change.
+The Codex catalog fetched on 2026-09-23 advertises a 272K context window for Astra, Sol, and Luna. Astra and Sol support reasoning effort through `ultra`; Luna supports it through `max`. The backend default is `medium` for all three, while qgrid's SDK defaults to `low`; select an effort explicitly to override it. The public API model pages for [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), and [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) separately list a 1.05M context window, 922K maximum input, 128K maximum output, and reasoning effort through `max` (no `ultra`). Those public limits do not establish the subscription route's limits. [Standard API pricing](https://developers.openai.com/api/docs/pricing) is used for qgrid's cost estimate: cache writes cost 1.25x the uncached input rate, and input over 272K tokens applies 2x input/cache and 1.5x output rates to the full request. GPT-6 Sol and Luna (released 2026-09-22) are priced at half of GPT-5.6 Sol and Luna; existing model prices were re-verified on 2026-09-23 and did not change. [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) (released 2026-09-29) keeps GPT-6 Sol's prices except cached input at $0.10; the Codex catalog fetched on 2026-09-30 lists a 272K context window, effort through `ultra`, and a `low` backend default, and a live generation through qgrid's request shape succeeded the same day. `openai/gpt-5.5` retires from the Codex/ChatGPT route on 2026-10-14; migrate to `openai/gpt-6.1-sol` or `openai/gpt-6-luna`.
 
 ### GPT-5.6 specifications
 
