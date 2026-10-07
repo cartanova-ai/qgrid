@@ -56,8 +56,8 @@ jobs:
       - name: Check
         run: mise run check
 
-      - name: Test CLI packaging contract
-        run: mise exec -- pnpm --filter @cartanova/qgrid-cli test
+      - name: Test API units, SDK, and CLI packaging contract
+        run: mise run test
 
       - name: Build
         run: mise run build

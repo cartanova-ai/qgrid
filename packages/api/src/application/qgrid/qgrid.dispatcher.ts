@@ -48,8 +48,9 @@ export type InternalQueryInput = QueryInput & {
 export class QgridDispatcherClass {
   tokens = new Map<number, TokenSubsetA>();
 
-  // TokenStats shape 보존용. 실제 provider 요청 카운팅은 각 dispatcher 로 이동했다.
-  requestCounts = new Map<string, number>();
+  // 프로세스 시작 이후 완료된 provider generation 수. 실패/중간 시도는 제외하며,
+  // 후속 tool turn도 한 generation으로 센다. 동명 토큰은 provider별로 분리한다.
+  private requestCounts = new Map<string, number>();
 
   // sonamu.config onStart 에서 처리하는 변수
   subscriber: TokenSubscriber | null = null;
@@ -61,7 +62,7 @@ export class QgridDispatcherClass {
    * HTTP 리스닝은 dispatcher 준비보다 먼저 열리므로(sonamu.config onStart),
    * 그 사이 들어온 요청은 "잠시 후 되는" 상태와 "재시도해도 안 되는" 상태가 다르다.
    *
-   * - `starting`: 워커 spawn 중. dev0 기준 25 워커 × 500ms 간격이라 1~2분 걸린다 → 재시도 가능
+   * - `starting`: provider 토큰·런타임 초기화 중 → 재시도 가능
    * - `ready`: 정상
    * - `failed`: start() 가 예외로 끝남 → 재시도해도 같은 결과
    */
@@ -84,8 +85,9 @@ export class QgridDispatcherClass {
       : new ServiceUnavailableException(SD("qgrid.dispatcherStarting")(label));
   }
 
-  countOf(name: string): number {
-    return this.requestCounts.get(name) ?? 0;
+  private recordCompleted(provider: string, tokenName: string): void {
+    const key = `${provider}\0${tokenName}`;
+    this.requestCounts.set(key, (this.requestCounts.get(key) ?? 0) + 1);
   }
 
   // TokenSubscriber 콜백 — 캐시 mutation
@@ -106,7 +108,7 @@ export class QgridDispatcherClass {
       token: maskToken(getAccessToken(r.credentials)),
       name: r.name,
       provider: r.provider,
-      requests: this.countOf(r.name),
+      requests: this.requestCounts.get(`${r.provider}\0${r.name}`) ?? 0,
     }));
   }
 
@@ -143,6 +145,7 @@ export class QgridDispatcherClass {
         imageGeneration: input.imageGeneration,
         imageGenerationOptions: input.imageGenerationOptions,
       });
+      this.recordCompleted("openai", result.tokenName);
 
       // 이미지 요청은 cold-only(R8)라 재사용 좌표를 발급하지 않는다. 좌표를 실으면
       // sessionKey 소비자의 warm 좌표를 죽은 좌표로 덮어써 다음 텍스트 turn 이 cold 로 떨어진다.
@@ -175,6 +178,7 @@ export class QgridDispatcherClass {
         imageGeneration: input.imageGeneration,
         imageGenerationOptions: input.imageGenerationOptions,
       });
+      this.recordCompleted("anthropic", result.tokenName);
 
       return applyToolCallEmulation(toEmulationResult(result), input.tools, {
         threadCoord: issueConvContext(result.threadCoord, decision),
@@ -227,6 +231,7 @@ export class QgridDispatcherClass {
           onThreadId: cb.onThreadId,
           onTurnId: cb.onTurnId,
           onComplete: (turnResult) => {
+            this.recordCompleted("openai", turnResult.tokenName);
             cb.onComplete(
               applyToolCallEmulation(toEmulationResult(turnResult), input.tools, {
                 threadCoord: issueConvContext(
@@ -276,6 +281,7 @@ export class QgridDispatcherClass {
           onDelta: emitDelta,
           onThreadId: cb.onThreadId,
           onComplete: (turnResult) => {
+            this.recordCompleted("anthropic", turnResult.tokenName);
             // 홀드백 잔여(닫는 펜스가 아니었던 tail)를 done 전에 마저 방출한다 —
             // 델타를 조립하는 클라이언트(EnvelopeStreamParser 등)의 무손실 보장.
             const rest = fenceStrip?.flush();

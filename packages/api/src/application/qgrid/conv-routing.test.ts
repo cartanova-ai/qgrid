@@ -14,8 +14,6 @@ describe("decideConvRouting", () => {
   it("일반 cold 첫 turn 은 기존 prompt 를 실행 input 으로 유지한다", () => {
     const decision = decideConvRouting(input({ prompt: "first turn" }));
 
-    expect(decision.reuse).toBeUndefined();
-    expect(decision.reuseInput).toBeUndefined();
     expect(decision.coldInput).toEqual([{ type: "text", text: "first turn", text_elements: [] }]);
   });
 
@@ -46,7 +44,6 @@ describe("decideConvRouting", () => {
       }),
     );
 
-    expect(decision.reuse).toBeUndefined();
     expect(decision.coldHistory).toHaveLength(2);
     expect(decision.coldInput).toEqual([
       {
@@ -88,32 +85,6 @@ describe("decideConvRouting", () => {
     ]);
   });
 
-  it("reuse 가능한 tool result follow-up 은 reuseInput 과 coldInput 이 같은 continuation 을 쓴다", () => {
-    const decision = decideConvRouting(
-      input({
-        prompt: "",
-        system: "same",
-        runContext: {
-          threadCoord: {
-            workerId: 1,
-            threadId: "S1",
-            epoch: 0,
-            systemHash: systemHash("same"),
-          },
-        },
-        toolResults: [{ toolCallId: "call_1", output: "ok" }],
-      }),
-    );
-
-    expect(decision.reuse).toEqual({ workerId: 1, threadId: "S1", epoch: 0 });
-    expect(decision.reuseInput).toEqual(decision.coldInput);
-    expect(decision.coldInput[0]).toMatchObject({
-      type: "text",
-      text: expect.stringContaining("Tool result for call call_1"),
-    });
-    expect(decision.coldInput[0]).not.toMatchObject({ type: "text", text: "" });
-  });
-
   it("direct OpenAI는 epoch=-1 좌표를 opaque cache affinity로 해석하고 전체 history를 유지한다", () => {
     const cacheAffinityKey = "a".repeat(64);
     const model = "openai/gpt-5.5";
@@ -136,8 +107,6 @@ describe("decideConvRouting", () => {
       { directOpenAI: true, modelNamespace: model },
     );
 
-    expect(decision.reuse).toBeUndefined();
-    expect(decision.reuseInput).toBeUndefined();
     expect(decision.coldHistory).toEqual([{ role: "user", content: "first" }]);
     expect(decision.coldInput).toEqual([{ type: "text", text: "next", text_elements: [] }]);
     expect(decision.promptCacheKey).toBe(cacheAffinityKey);
@@ -164,7 +133,6 @@ describe("decideConvRouting", () => {
 
     expect(decision.promptCacheKey).toBe(cacheAffinityKey);
     expect(decision.preferredTokenId).toBeUndefined();
-    expect(decision.reuse).toBeUndefined();
   });
 
   it("system hash separates model namespaces", () => {

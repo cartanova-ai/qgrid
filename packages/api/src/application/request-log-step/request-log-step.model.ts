@@ -41,6 +41,7 @@ class RequestLogStepModelClass extends BaseModelClass<
       id,
       num: 1,
       page: 1,
+      queryMode: "list",
     });
     if (!rows[0]) {
       throw new NotFoundException(SD("error.entityNotFound")("RequestLogStep", id));
@@ -57,6 +58,7 @@ class RequestLogStepModelClass extends BaseModelClass<
       ...listParams,
       num: 1,
       page: 1,
+      queryMode: "list",
     });
 
     return rows[0] ?? null;
@@ -77,7 +79,7 @@ class RequestLogStepModelClass extends BaseModelClass<
     } satisfies RequestLogStepListParams;
 
     // build queries
-    const { qb, onSubset: _ } = this.getSubsetQueries(subset);
+    const { qb } = this.getSubsetQueries(subset);
 
     if (params.id) {
       qb.whereIn("request_log_steps.id", asArray(params.id));
@@ -91,8 +93,6 @@ class RequestLogStepModelClass extends BaseModelClass<
     if (params.search && params.keyword && params.keyword.length > 0) {
       if (params.search === "id") {
         qb.where("request_log_steps.id", Number(params.keyword));
-        // } else if (params.search === "field") {
-        //   qb.where("request_log_steps.field", "like", `%${params.keyword}%`);
       } else {
         throw new BadRequestException(SD("error.unknownSearchField")(params.search));
       }
@@ -109,22 +109,10 @@ class RequestLogStepModelClass extends BaseModelClass<
       }
     }
 
-    const enhancers = this.createEnhancers({
-      A: (row) => ({
-        ...row,
-        // 서브셋별로 virtual 필드 계산로직 추가
-      }),
-      T: (row) => ({
-        ...row,
-      }),
-    });
-
     return this.executeSubsetQuery({
       subset,
       qb,
       params,
-      enhancers,
-      debug: false,
     });
   }
 

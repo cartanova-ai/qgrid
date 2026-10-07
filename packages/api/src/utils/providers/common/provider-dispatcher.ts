@@ -1,7 +1,7 @@
 /**
  * ProviderDispatcher — provider 별 LLM 요청 실행 인터페이스.
  *
- * MVP 에서는 stream() 만. getRateLimits(), listModels() 는 future.
+ * Provider 실행 결과와 stream callback의 공통 계약.
  */
 
 import {
@@ -18,8 +18,7 @@ export type ProviderTokenUsageBreakdown = TokenUsageBreakdown & {
   cacheCreationInputTokens1h?: number;
 };
 
-// thread 재사용 라우팅 좌표. 상위(qgrid.dispatcher)에서 conv 핸들 검증을 통과한 경우에만 전달.
-// dispatcher 는 이 좌표가 가리키는 worker 의 기존 thread 에 turn 만 실행한다.
+// 공개 thread 좌표의 provider 결과 부분. 이름은 호환성을 위해 유지한다.
 export interface ReuseThreadCoord {
   workerId: number;
   threadId: string;
@@ -61,9 +60,8 @@ export interface GenerateRequest {
   // provider 실행 제한(ms). Queue selection 이후의 active provider request 전체에 적용한다.
   timeoutMs?: number;
   abortSignal?: AbortSignal;
-  // 첫 turn / 재사용 폴백 시 보낼 input — 전체 prompt. 항상 설정.
+  // 매 turn에 전달하는 현재 input과 전체 history.
   coldInput: Array<UserInput>;
-  // 첫 turn / 폴백 시 inject 할 전체 history.
   coldHistory?: Array<JsonValue>;
   // Provider-neutral cache affinity hints. Direct OpenAI currently receives these while still
   // replaying coldInput + coldHistory on every turn; a dispatcher may use them for token choice
@@ -72,13 +70,8 @@ export interface GenerateRequest {
   preferredTokenId?: number;
   // 사람이 지정한 exact target. Cache affinity 선호와 달리 부적격 시 다른 토큰으로 대체하지 않는다.
   requirePreferredToken?: boolean;
-  // 재사용 좌표 + delta input. 둘은 한 쌍 — 검증 통과 시에만 설정한다.
-  // dispatcher 가 worker/thread 생존을 재검증해 성공하면 reuseInput(delta)을, 실패하면
-  // coldInput + coldHistory 로 폴백한다(전체 history 로 문맥 복구).
-  reuse?: ReuseThreadCoord;
-  reuseInput?: Array<UserInput>;
   // OpenAI image_generation tool 을 켠다(OpenAI 경로 전용, opt-in).
-  // 이 플래그가 있으면 dispatcher 는 항상 cold thread 로 실행하고 재사용 라우팅을 건너뛴다.
+  // 이 플래그가 있으면 OpenAI prompt-cache affinity 라우팅을 건너뛴다.
   imageGeneration?: boolean | "auto";
   imageGenerationOptions?: ImageGenerationOptions;
 }

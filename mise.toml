@@ -20,6 +20,9 @@ run = "pnpm exec oxlint --type-aware . --fix && pnpm exec oxfmt ."
 depends = ["qgrid-docs:check"]
 run = "pnpm exec oxlint && pnpm exec oxfmt --check ."
 
+[tasks.test]
+run = "pnpm --filter qgrid-api test:unit && pnpm --filter @cartanova/qgrid-ai-sdk test && pnpm --filter @cartanova/qgrid-cli test"
+
 [tasks."qgrid-docs:sync"]
 run = "node scripts/qgrid-doc-consistency.mjs --sync"
 

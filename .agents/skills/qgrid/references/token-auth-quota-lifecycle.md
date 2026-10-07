@@ -42,6 +42,8 @@ Use this reference before changing token storage, OAuth flows, token activation,
 On creation, the database defaults `reauth_required = false`; `TokenModel.save` also applies `quota_threshold = 80` and `weight = 1` independently for any field not provided (skipped entirely when `id` is present).
 `TokenModel.save` is internal only; callers use the curated qgrid token APIs so they cannot write lifecycle fields directly.
 
+Account re-login reads, deletes, and replaces matching token rows in one explicit Puri transaction. A failed insert rolls back deletion. The oldest matching row supplies quota threshold (including null), weight, and dashboard order unless the caller explicitly supplies them; keepalive stays enabled if any replaced row enabled it. The new login still receives a new ID and resets active/reauth state. Internal full-pool reads use unlimited list mode rather than a 100-row page.
+
 Dashboard credential previews must tolerate legacy credentials without `accessToken`. System-keychain credentials, including a remaining Antigravity row, display `System Keychain` rather than crashing on `.length`. This 2.9.8 display fix neither deletes legacy rows nor enables Antigravity provider execution.
 
 OpenAI credentials:

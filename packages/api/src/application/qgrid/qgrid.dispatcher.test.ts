@@ -8,6 +8,7 @@ import {
 import { systemHash } from "./conv-routing";
 import { buildStrictOutputSchema, QgridDispatcherClass } from "./qgrid.dispatcher";
 import { type QueryOutput } from "./qgrid.types";
+import { type TokenSubsetA } from "../sonamu.generated";
 
 function providerResult(overrides: Partial<GenerateResult> = {}): GenerateResult {
   return {
@@ -33,6 +34,40 @@ function deeplyNestedOutputSchema(depth: number): string {
 }
 
 describe("QgridDispatcherClass", () => {
+  it("counts completed query and stream generations separately for providers sharing a token name", async () => {
+    const dispatcher = new QgridDispatcherClass();
+    dispatcher.replaceCache(
+      ["openai", "anthropic"].map((provider, index) => ({
+        id: index + 1,
+        provider,
+        name: "shared",
+        credentials: { accessToken: "test-token" },
+      }) as TokenSubsetA),
+    );
+
+    const generate = vi.fn(async () => providerResult({ tokenName: "shared" }));
+    const generateStream = vi.fn(async (_request: GenerateRequest, cb: GenerateStreamCallbacks) => {
+      cb.onComplete(providerResult({ tokenName: "shared" }));
+    });
+    dispatcher.openaiDispatcher = { generate, generateStream } as never;
+    dispatcher.anthropicDispatcher = { generate, generateStream } as never;
+    const callbacks = { onDelta: vi.fn(), onComplete: vi.fn(), onError: vi.fn() };
+
+    await dispatcher.query({ prompt: "hi", model: "openai/gpt-5.5" });
+    expect(dispatcher.getStats().map((row) => row.requests)).toEqual([1, 0]);
+    await dispatcher.queryStream({ prompt: "hi", model: "openai/gpt-5.5" }, callbacks);
+    await dispatcher.query({ prompt: "hi", model: "anthropic/claude-sonnet-4-6" });
+    await dispatcher.queryStream({ prompt: "hi", model: "anthropic/claude-sonnet-4-6" }, callbacks);
+    expect(dispatcher.getStats().map((row) => row.requests)).toEqual([2, 2]);
+
+    generate.mockRejectedValueOnce(new Error("provider failed"));
+    await expect(dispatcher.query({ prompt: "hi", model: "openai/gpt-5.5" })).rejects.toThrow("provider failed");
+    generateStream.mockImplementationOnce(async (_request, cb) => cb.onError(new Error("stream failed")));
+    await dispatcher.queryStream({ prompt: "hi", model: "anthropic/claude-sonnet-4-6" }, callbacks);
+    expect(callbacks.onError).toHaveBeenCalledOnce();
+    expect(dispatcher.getStats().map((row) => row.requests)).toEqual([2, 2]);
+  });
+
   const toolsAndSchema = {
     tools: [
       {
@@ -113,45 +148,6 @@ describe("QgridDispatcherClass", () => {
       /Direct LLM API fallback not implemented/,
     );
     expect(generate).not.toHaveBeenCalled();
-  });
-
-  it("Anthropic queryStream 은 abortSignal 을 provider request 로 전달한다", async () => {
-    const dispatcher = new QgridDispatcherClass();
-    const generateStream = vi.fn(async (_req: GenerateRequest, _cb: GenerateStreamCallbacks) => {});
-    dispatcher.anthropicDispatcher = { generateStream } as never;
-    const abortSignal = new AbortController().signal;
-
-    await dispatcher.queryStream(
-      { prompt: "hi", model: "anthropic/claude-sonnet-4-6", timeout: 360_000 },
-      {
-        onDelta: vi.fn(),
-        onComplete: vi.fn(),
-        onError: vi.fn(),
-      },
-      abortSignal,
-    );
-
-    expect(generateStream.mock.calls[0]![0].abortSignal).toBe(abortSignal);
-    expect(generateStream.mock.calls[0]![0].timeoutMs).toBe(360_000);
-  });
-
-  it("Anthropic query 는 timeoutMs와 abortSignal을 provider request로 전달한다", async () => {
-    const dispatcher = new QgridDispatcherClass();
-    const generate = vi.fn(async (_req: GenerateRequest) =>
-      providerResult({ model: "claude-opus-5" }),
-    );
-    dispatcher.anthropicDispatcher = { generate } as never;
-    const abortSignal = new AbortController().signal;
-
-    await dispatcher.query(
-      { prompt: "hi", model: "anthropic/claude-opus-5", timeout: 360_000 },
-      abortSignal,
-    );
-
-    expect(generate.mock.calls[0]![0]).toMatchObject({
-      timeoutMs: 360_000,
-      abortSignal,
-    });
   });
 
   it("Anthropic queryStream provider error 는 상위 onError 로 전달한다", async () => {
@@ -246,72 +242,50 @@ describe("QgridDispatcherClass", () => {
     });
   });
 
-  it("Anthropic query 는 reuse/reuseInput 을 provider 로 전달하지 않는다", async () => {
+  it("Anthropic query 는 실행 옵션을 전달하고 legacy reuse 필드는 제외한다", async () => {
     const dispatcher = new QgridDispatcherClass();
     const generate = vi.fn(async (_req: GenerateRequest) =>
       providerResult({ model: "claude-sonnet-4-6" }),
     );
     dispatcher.anthropicDispatcher = { generate } as never;
+    const abortSignal = new AbortController().signal;
 
-    await dispatcher.query({
-      prompt: "next",
-      model: "anthropic/claude-sonnet-4-6",
-      system: "same-system",
-      runContext: {
-        threadCoord: {
-          workerId: 1,
-          threadId: "thread-1",
-          epoch: 0,
-          systemHash: "800ddd9ba811b821",
+    await dispatcher.query(
+      {
+        prompt: "next",
+        model: "anthropic/claude-sonnet-4-6",
+        system: "same-system",
+        timeout: 360_000,
+        preferredTokenId: 7,
+        imageGeneration: true,
+        runContext: {
+          threadCoord: {
+            workerId: 1,
+            threadId: "thread-1",
+            epoch: 0,
+            systemHash: "800ddd9ba811b821",
+          },
         },
       },
-    });
+      abortSignal,
+    );
 
     const req = generate.mock.calls[0]![0];
+    expect(req).toMatchObject({ timeoutMs: 360_000, preferredTokenId: 7, imageGeneration: true });
+    expect(req.abortSignal).toBe(abortSignal);
     expect(req).not.toHaveProperty("reuse");
     expect(req).not.toHaveProperty("reuseInput");
     expect(req.coldInput).toEqual([{ type: "text", text: "next", text_elements: [] }]);
   });
 
-  it("Anthropic query 는 내부 preferredTokenId 를 provider 로 전달한다", async () => {
+  it("Anthropic stream 은 실행 옵션과 delta/complete 를 보존하고 legacy reuse 필드는 제외한다", async () => {
     const dispatcher = new QgridDispatcherClass();
-    const generate = vi.fn(async (_req: GenerateRequest) =>
-      providerResult({ model: "claude-sonnet-4-6" }),
-    );
-    dispatcher.anthropicDispatcher = { generate } as never;
-
-    await dispatcher.query({
-      prompt: "keepalive",
-      model: "anthropic/claude-haiku-4-5",
-      preferredTokenId: 7,
-    });
-
-    expect(generate.mock.calls[0]![0].preferredTokenId).toBe(7);
-  });
-
-  it("Anthropic query 에도 imageGeneration 플래그를 전달해 provider 가 명시적으로 거부하게 한다", async () => {
-    const dispatcher = new QgridDispatcherClass();
-    const generate = vi.fn(async (_req: GenerateRequest) =>
-      providerResult({ model: "claude-sonnet-4-6" }),
-    );
-    dispatcher.anthropicDispatcher = { generate } as never;
-
-    await dispatcher.query({
-      prompt: "draw",
-      model: "anthropic/claude-sonnet-4-6",
-      imageGeneration: true,
-    });
-
-    expect(generate.mock.calls[0]![0].imageGeneration).toBe(true);
-  });
-
-  it("Anthropic queryStream 도 reuse/reuseInput 을 provider 로 전달하지 않고 delta/complete 를 보존한다", async () => {
-    const dispatcher = new QgridDispatcherClass();
-    const generateStream = vi.fn(async (_req, cb) => {
+    const generateStream = vi.fn(async (_req: GenerateRequest, cb: GenerateStreamCallbacks) => {
       cb.onDelta("d");
       cb.onComplete(providerResult({ model: "claude-sonnet-4-6" }));
     });
     dispatcher.anthropicDispatcher = { generateStream } as never;
+    const abortSignal = new AbortController().signal;
 
     const onDelta = vi.fn();
     const onComplete = vi.fn();
@@ -320,6 +294,9 @@ describe("QgridDispatcherClass", () => {
         prompt: "next",
         model: "anthropic/claude-sonnet-4-6",
         system: "same-system",
+        timeout: 360_000,
+        preferredTokenId: 7,
+        imageGeneration: true,
         runContext: {
           threadCoord: {
             workerId: 1,
@@ -330,9 +307,12 @@ describe("QgridDispatcherClass", () => {
         },
       },
       { onDelta, onComplete, onError: vi.fn() },
+      abortSignal,
     );
 
     const req = generateStream.mock.calls[0]![0];
+    expect(req).toMatchObject({ timeoutMs: 360_000, preferredTokenId: 7, imageGeneration: true });
+    expect(req.abortSignal).toBe(abortSignal);
     expect(req).not.toHaveProperty("reuse");
     expect(req).not.toHaveProperty("reuseInput");
     expect(req.coldInput).toEqual([{ type: "text", text: "next", text_elements: [] }]);
@@ -345,42 +325,6 @@ describe("QgridDispatcherClass", () => {
         }),
       }),
     );
-  });
-
-  it("Anthropic queryStream 은 내부 preferredTokenId 를 provider 로 전달한다", async () => {
-    const dispatcher = new QgridDispatcherClass();
-    const generateStream = vi.fn(async (_req, cb) => {
-      cb.onComplete(providerResult({ model: "claude-sonnet-4-6" }));
-    });
-    dispatcher.anthropicDispatcher = { generateStream } as never;
-
-    await dispatcher.queryStream(
-      {
-        prompt: "keepalive",
-        model: "anthropic/claude-haiku-4-5",
-        preferredTokenId: 7,
-      },
-      { onDelta: vi.fn(), onComplete: vi.fn(), onError: vi.fn() },
-    );
-
-    expect(generateStream.mock.calls[0]![0].preferredTokenId).toBe(7);
-  });
-
-  it("Anthropic queryStream 에도 imageGeneration 플래그를 전달해 provider 가 명시적으로 거부하게 한다", async () => {
-    const dispatcher = new QgridDispatcherClass();
-    const generateStream = vi.fn(async (_req, _cb) => {});
-    dispatcher.anthropicDispatcher = { generateStream } as never;
-
-    await dispatcher.queryStream(
-      {
-        prompt: "draw",
-        model: "anthropic/claude-sonnet-4-6",
-        imageGeneration: true,
-      },
-      { onDelta: vi.fn(), onComplete: vi.fn(), onError: vi.fn() },
-    );
-
-    expect(generateStream.mock.calls[0]![0].imageGeneration).toBe(true);
   });
 
   it("jsonSchema 를 required + additionalProperties:false 로 strictify 한다", () => {

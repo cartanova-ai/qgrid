@@ -20,6 +20,7 @@ import {
   type RequestLogStepSubsetMapping,
   type RequestLogSubsetMapping,
 } from "@/services/sonamu.generated";
+import { isSonamuError } from "@/services/sonamu.shared";
 
 type RequestLog = RequestLogSubsetMapping["A"];
 type RequestLogStep = RequestLogStepSubsetMapping["T"];
@@ -1207,16 +1208,17 @@ function ResponseTypePanel({ id }: { id: number }) {
 }
 
 function RequestDetail({ id }: { id: number }) {
-  const { data, isLoading } = RequestLogService.useRequestLog("A", id);
-  const { data: stepsData, isLoading: isStepsLoading } = RequestLogStepService.useRequestLogSteps(
-    "T",
-    {
-      request_log_id: id,
-      num: 0,
-      page: 1,
-      orderBy: "id-asc" as const,
-    },
-  );
+  const { data, isLoading, error, isError } = RequestLogService.useRequestLog("A", id);
+  const {
+    data: stepsData,
+    isLoading: isStepsLoading,
+    isError: isStepsError,
+  } = RequestLogStepService.useRequestLogSteps("T", {
+    request_log_id: id,
+    num: 0,
+    page: 1,
+    orderBy: "id-asc" as const,
+  });
   const steps = stepsData?.rows ?? [];
   const stepTree = buildStepTree(steps);
 
@@ -1230,7 +1232,7 @@ function RequestDetail({ id }: { id: number }) {
     );
   }
 
-  if (!data) {
+  if (isError || isStepsError || !data) {
     return (
       <div className="max-w-6xl mx-auto">
         <Link
@@ -1240,7 +1242,15 @@ function RequestDetail({ id }: { id: number }) {
           <ArrowLeftIcon className="size-3.5" />
           Back to Logs
         </Link>
-        <p className="text-sand-400 text-sm">Request not found.</p>
+        <p role="alert" className="text-danger-500 text-sm">
+          {isError
+            ? isSonamuError(error) && error.code === 404
+              ? "Request not found."
+              : "Failed to load request."
+            : isStepsError
+              ? "Failed to load request steps."
+              : "Request not found."}
+        </p>
       </div>
     );
   }

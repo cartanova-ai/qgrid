@@ -1,6 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { extractPromptAndHistory } from "./utils";
+import { extractPromptAndHistory, parseSSE } from "./utils";
+
+it.each(["done", "error", "eof"])("releases the SSE reader after %s", async (terminal) => {
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(`event: ${terminal}\ndata: {}\n\n`));
+      if (terminal === "eof") controller.close();
+    },
+    cancel,
+  });
+  for await (const event of parseSSE(body)) {
+    expect(event.type).toBe(terminal);
+    if (terminal !== "eof") break;
+  }
+  expect(body.locked).toBe(false);
+  expect(cancel).toHaveBeenCalledTimes(terminal === "eof" ? 0 : 1);
+});
 
 describe("image generation conversation history", () => {
   const messages = [

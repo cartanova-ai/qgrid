@@ -212,7 +212,7 @@ const { text } = await generateText({
 | `timeoutMs` | 양의 정수, 최대 `1_800_000` | Anthropic 전용 | 서버의 Claude Code 프로세스 제한시간(ms). SDK의 non-stream HTTP 제한은 이 값보다 60초 길게 설정. 기본값은 240초 |
 | `imageGeneration` | `boolean` | OpenAI 전용, non-stream | codex 내장 `image_generation` tool 활성화 ([아래](#image-generation) 참조) |
 | `imageGenerationOptions` | `{ quality?, size?, background? }` | OpenAI 전용 | 이미지 생성 옵션. `background: "transparent"`는 전용 경로 사용. 실제 크기·품질은 응답 metadata 확인 ([아래](#image-generation)). |
-| `fallbackModels` | `string[]` | 예약 | 향후 qgrid 서버 fallback routing용 예약 필드. 현재 동작하지 않으며 Claude Code의 Fable refusal fallback과 무관 |
+| `fallbackModels` | `string[]` | deprecated | 호환용으로만 남긴 무시되는 필드. 사용하면 unsupported-option 경고를 반환하므로 호출부에서 제거하세요. Claude Code의 Fable refusal fallback과 무관 |
 
 ```typescript
 await generateText({
@@ -493,6 +493,21 @@ qgrid(modelId, {
 - Anthropic 경로에서는 최종 합성 schema가 Claude Code 전송의 안전한 단일 argv
   한도인 64 KiB도 넘지 않아야 합니다.
 - AI SDK의 `toolChoice`는 현재 qgrid에서 지원하지 않습니다.
+
+## 저장소 테스트
+
+`mise run test`는 provider 계정·DB 없이 API·SDK·CLI 테스트를 실행합니다. OAuth relay 테스트는 로컬 loopback 포트를 사용합니다. DB 통합 검증은 PostgreSQL 테스트 템플릿을 준비한 뒤 `mise exec -- pnpm --dir packages/api test:db`로 별도 실행합니다. API의 `test` 명령은 두 suite를 모두 실행합니다.
+
+실제 provider E2E는 토큰이 등록된 격리 qgrid 서버와 명시적인 opt-in이 필요합니다.
+
+```bash
+QGRID_REAL_PROVIDER_ACCEPTANCE=1 QGRID_URL=http://localhost:44900 QGRID_MODEL=openai/gpt-6.1-sol \
+  mise exec -- pnpm --dir packages/ai-sdk e2e
+```
+
+기본 suite는 일반 응답·스트리밍·툴+구조화 출력과 반환된 ID의 요청 로그를 확인합니다. Anthropic 경로는 해당 모델을 지정하고, 두 경로를 모두 검사하려면 모델을 쉼표로 나열합니다. `e2e:tools-output`은 구조화 출력의 집중 회귀 검증, `e2e:logger`는 telemetry가 native 로그를 중복 생성하지 않는지 확인합니다. 모두 같은 opt-in·서버·모델 설정을 요구하며 실제 쿼터를 사용합니다. 기본 CI에는 포함하지 않고, 실패를 자동 재시도로 감추거나 서버 로그를 삭제하지 않습니다.
+
+테스트는 외부에서 관측되는 계약이나 구체적인 회귀 위험에 한해 추가합니다. 실패 경로·비용·데이터 무결성 검증은 유지하고, 중복 정상 경로를 통합합니다. 새 범용 harness는 만들지 않습니다. DB·provider 환경이 없으면 성공이 아니라 미검증으로 기록합니다.
 
 ## 요구사항
 

@@ -1,21 +1,20 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
-import { QgridService } from "@/services/services.generated";
+import { QgridService, TokenService } from "@/services/services.generated";
 
 export type Provider = "anthropic" | "openai";
 
 const OPENAI_POLL_INTERVAL_MS = 3000;
 const OPENAI_POLL_TIMEOUT_MS = 300_000;
 
-/** 캐시에 적재된 토큰 행 수. 폴링 조기 종료 판정에만 쓰는 근사치다. */
-function countTokens(queryClient: ReturnType<typeof useQueryClient>): number {
-  let total = 0;
-  for (const query of queryClient.getQueryCache().findAll({ queryKey: ["Token"] })) {
-    const rows = (query.state.data as { rows?: unknown[] } | undefined)?.rows;
-    if (Array.isArray(rows)) total = Math.max(total, rows.length);
-  }
-  return total;
+async function getTokenIds(provider: Provider, name: string): Promise<Set<number>> {
+  const { rows } = await TokenService.getTokens("A", { num: 0, queryMode: "list" });
+  return new Set(
+    rows
+      .filter((token) => token.provider === provider && token.name === name)
+      .map((token) => token.id),
+  );
 }
 
 /**
@@ -37,7 +36,9 @@ export function useOAuthLoginFlow() {
   // 폴링 타이머는 언마운트 시 반드시 정리한다 — 안 하면 모달을 닫거나 페이지를 떠나도
   // 최대 5분간 계속 refetch 가 돈다.
   const pollTimers = useRef<{ interval?: number; timeout?: number }>({});
+  const attemptRef = useRef(0);
   const stopPolling = () => {
+    attemptRef.current += 1;
     if (pollTimers.current.interval !== undefined) clearInterval(pollTimers.current.interval);
     if (pollTimers.current.timeout !== undefined) clearTimeout(pollTimers.current.timeout);
     pollTimers.current = {};
@@ -54,13 +55,25 @@ export function useOAuthLoginFlow() {
     const trimmed = name.trim();
     if (!trimmed) return;
 
+    stopPolling();
+    const attempt = attemptRef.current;
     // popup 을 동기적으로 열어야 브라우저가 차단하지 않음
     const popup = window.open("about:blank", "_blank");
     setLoadingProvider(provider);
 
     try {
       if (provider === "openai") {
+        // 로그인 페이지를 열기 전에 전체 대상 ID를 읽는다. 재로그인은 행 수가 같아도 ID가 바뀐다.
+        const before = await getTokenIds(provider, trimmed);
+        if (attempt !== attemptRef.current) {
+          popup?.close();
+          return;
+        }
         const { authUrl, mode } = await oauthStartOpenAIMutation.mutateAsync({ name: trimmed });
+        if (attempt !== attemptRef.current) {
+          popup?.close();
+          return;
+        }
         if (popup) popup.location.href = authUrl;
         else window.open(authUrl, "_blank");
 
@@ -70,20 +83,23 @@ export function useOAuthLoginFlow() {
           return;
         }
 
-        // 콜백은 새 탭에서 끝나므로(OpenAI 등록 콜백 포트 → 서버 /auth/callback) 토큰이
-        // 늘어날 때까지 폴링한다. 로그인이 끝나면 바로 멈춰서, 성공한 뒤에도 남은
-        // 타임아웃 동안 계속 refetch 하지 않는다.
-        const before = countTokens(queryClient);
-        stopPolling();
+        // 다른 계정의 변경은 무시하고, 이번 이름으로 새 토큰이 저장되면 종료한다.
         pollTimers.current.interval = window.setInterval(() => {
-          void invalidateTokens().then(() => {
-            if (countTokens(queryClient) > before) {
-              stopPolling();
-              setLoadingProvider(null);
-            }
-          });
+          void getTokenIds(provider, trimmed)
+            .then((ids) => {
+              if (attempt !== attemptRef.current) return;
+              if ([...ids].some((id) => !before.has(id))) {
+                stopPolling();
+                setLoadingProvider(null);
+                void invalidateTokens();
+              }
+            })
+            .catch(() => {
+              // 일시적인 조회 실패는 다음 폴링에서 재시도한다.
+            });
         }, OPENAI_POLL_INTERVAL_MS);
         pollTimers.current.timeout = window.setTimeout(() => {
+          if (attempt !== attemptRef.current) return;
           stopPolling();
           setLoadingProvider(null);
         }, OPENAI_POLL_TIMEOUT_MS);
@@ -91,6 +107,10 @@ export function useOAuthLoginFlow() {
       }
 
       const { authUrl, mode } = await oauthStartMutation.mutateAsync({ name: trimmed });
+      if (attempt !== attemptRef.current) {
+        popup?.close();
+        return;
+      }
       if (mode === "code") {
         // 원격 접속: 새 탭에서 인증 → 표시된 코드를 붙여넣는다.
         if (popup) popup.location.href = authUrl;
@@ -103,6 +123,7 @@ export function useOAuthLoginFlow() {
       }
     } catch (e) {
       popup?.close();
+      if (attempt !== attemptRef.current) return;
       console.error("OAuth start failed:", e);
       setLoadingProvider(null);
     }

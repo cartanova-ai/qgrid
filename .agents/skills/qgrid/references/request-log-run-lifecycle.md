@@ -63,6 +63,8 @@ Provider-qualified ids widen `model_name` and `requested_model_name` from 50 to 
 
 ## Usage fields
 
+The dashboard total includes driver `cost_usd` and `image_cost_usd` once each. Both the stored sum and legacy driver-price adjustment apply the same normalized Sonamu filters as the list. The `/api/qgrid/stats` `requests` field is an in-memory count of completed provider generations since process start, separated by provider and token name; tool follow-up generations count separately. It is not a persisted lifetime count or a count of failed attempts.
+
 Stored request log usage uses qgrid-standard semantics:
 
 - `input_tokens`: total input, including cache read/write.

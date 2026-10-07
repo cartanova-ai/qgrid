@@ -79,6 +79,66 @@ function sseDone(data: unknown) {
 }
 
 describe("qgrid AI SDK provider", () => {
+  it.each(["consumer", "caller"] as const)("releases the SSE body on %s cancellation", async (source) => {
+    const cancelBody = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel: cancelBody });
+    const signals: AbortSignal[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      signals.push(init!.signal!);
+      return url.includes("prepareStream")
+        ? Response.json({ streamId: "cancel" })
+        : new Response(body);
+    }));
+    const caller = new AbortController();
+    const result = await qgrid("openai/gpt-5.5").doStream({
+      prompt: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+      abortSignal: caller.signal,
+    });
+    const reader = result.stream.getReader();
+    await reader.read(); // stream-start; the parser is waiting for the first SSE byte.
+    const reason = new Error("cancel generation");
+    if (source === "consumer") {
+      await reader.cancel(reason);
+      expect((await reader.read()).done).toBe(true);
+      expect(caller.signal.aborted).toBe(false);
+    } else {
+      caller.abort(reason);
+      await expect(reader.read()).rejects.toBe(reason);
+    }
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    expect(cancelBody).toHaveBeenCalledOnce();
+    expect(body.locked).toBe(false);
+  });
+
+  it("bounds retained session coordinates and stops replaying expired entries", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 600_001);
+    let lastArgs: Record<string, unknown> = {};
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      lastArgs = JSON.parse(String(init?.body)).args;
+      return Response.json({
+        text: "ok", model: "gpt-5.5", usage, durationMs: 1, costUsd: 0,
+        runContext: { threadCoord: { threadId: lastArgs.cacheAffinityKey, workerId: 1, epoch: -1 } },
+      });
+    }));
+    const model = qgrid("openai/gpt-5.5");
+    const generate = (id: number) => model.doGenerate({
+      prompt: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+      providerOptions: { qgrid: { sessionKey: `bounded-cache-${id}` } },
+    });
+    try {
+      for (let id = 0; id <= 1_000; id++) await generate(id);
+      await generate(1_000);
+      expect(lastArgs.runContext).toBeDefined();
+      await generate(0);
+      expect(lastArgs.runContext).toBeUndefined();
+      clock.mockReturnValue(Date.now() + 600_001);
+      await generate(1_000);
+      expect(lastArgs.runContext).toBeUndefined();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it.each(["generate", "stream"] as const)(
     "forwards GPT-6 Astra and ultra effort through %s and preserves response model metadata",
     async (mode) => {
@@ -214,7 +274,7 @@ describe("qgrid AI SDK provider", () => {
       }),
     );
 
-    await qgrid("openai/gpt-5.5", { defaultEffort: "low" }).doGenerate({
+    const result = await qgrid("openai/gpt-5.5", { defaultEffort: "low" }).doGenerate({
       prompt: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
       providerOptions: {
         qgrid: {
@@ -244,6 +304,9 @@ describe("qgrid AI SDK provider", () => {
     expect((queryBody as { args: Record<string, unknown> }).args).not.toHaveProperty(
       "fallbackModels",
     );
+    expect(result.warnings).toEqual([expect.objectContaining({
+      type: "unsupported", feature: "providerOptions.qgrid.fallbackModels",
+    })]);
   });
 
   it("uses a request-scoped dispatcher for Anthropic generate requests", async () => {
@@ -924,12 +987,16 @@ describe("qgrid AI SDK provider", () => {
     const result = await qgrid("openai/gpt-5.5").doStream({
       prompt: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
       providerOptions: {
-        qgrid: { logger: false, timeoutMs: 360_000, tokenName: "openai/yds" },
+        qgrid: { logger: false, timeoutMs: 360_000, tokenName: "openai/yds", fallbackModels: [] },
       },
     } as never);
-    for await (const _part of result.stream) {
-      // drain
+    const parts = [];
+    for await (const part of result.stream) {
+      parts.push(part);
     }
+    expect(parts[0]).toMatchObject({ type: "stream-start", warnings: [
+      { type: "unsupported", feature: "providerOptions.qgrid.fallbackModels" },
+    ] });
 
     const prepareCall = calls.find((c) => c.url.includes("/prepareStream"));
     expect(prepareCall?.body.args).toMatchObject({
@@ -938,6 +1005,7 @@ describe("qgrid AI SDK provider", () => {
       tokenName: "openai/yds",
     });
     expect(prepareCall?.body.args).not.toHaveProperty("logMode");
+    expect(prepareCall?.body.args).not.toHaveProperty("fallbackModels");
 
     // SDK는 직접 lifecycle 호출 안 함
     expect(calls.filter((c) => c.url.includes("/createRun"))).toHaveLength(0);
@@ -1210,6 +1278,7 @@ describe("qgrid AI SDK provider", () => {
         providerOptions,
       } as never);
       const reader = result.stream.getReader();
+      expect(await reader.read()).toMatchObject({ done: false, value: { type: "stream-start", warnings: [] } });
       expect(await reader.read()).toMatchObject({ done: false, value: { type: "text-start" } });
       expect(await reader.read()).toMatchObject({ done: false, value: { type: "text-delta" } });
       expect(await reader.read()).toMatchObject({ done: false, value: { type: "text-end" } });
@@ -1336,8 +1405,16 @@ describe("qgrid AI SDK provider", () => {
     expect(secondQuery?.body.args).not.toHaveProperty("logMode");
   });
 
-  it("sends imageGeneration flag and maps image content to a file part", async () => {
+  it("sends image generation options and maps files with optional generation metadata", async () => {
     let queryBody: unknown;
+    const generation = {
+      route: "codex-images",
+      model: "gpt-image-2",
+      quality: "medium",
+      size: "1254x1254",
+      background: "transparent",
+      usage: { input_tokens: 10, output_tokens: 100, total_tokens: 110 },
+    };
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
@@ -1349,64 +1426,8 @@ describe("qgrid AI SDK provider", () => {
               content: [
                 { type: "text", text: "here is your image" },
                 { type: "image", data: "iVBORw0KGgoBAgM", revisedPrompt: "a red circle" },
+                { type: "image", data: "second-image", generation },
               ],
-              finishReason: "stop",
-              model: "gpt-5.5",
-              usage,
-              durationMs: 100,
-              costUsd: 0,
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
-        }
-        return new Response("{}", { status: 200 });
-      }),
-    );
-
-    const result = await qgrid("openai/gpt-5.5").doGenerate({
-      prompt: [{ role: "user", content: [{ type: "text", text: "draw a red circle" }] }],
-      providerOptions: { qgrid: { imageGeneration: true } },
-    } as never);
-
-    expect((queryBody as { args: Record<string, unknown> }).args).toMatchObject({
-      imageGeneration: true,
-    });
-    // image → LanguageModelV3File 파트로 매핑, tool-call 오인 없음.
-    expect(result.content).toEqual([
-      { type: "text", text: "here is your image" },
-      { type: "file", mediaType: "image/png", data: "iVBORw0KGgoBAgM" },
-    ]);
-  });
-
-  it.each(["png", "jpeg", "webp"] as const)("passes %s output format and uses the returned MIME", async (outputFormat) => {
-    let queryBody: { args: Record<string, unknown> } | undefined;
-    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
-      queryBody = JSON.parse(String(init?.body));
-      return Response.json({ text: "", content: [{ type: "image", data: "image-data", mediaType: `image/${outputFormat}` }], finishReason: "stop", model: "gpt-5.5", usage, durationMs: 1, costUsd: 0 });
-    }));
-    const result = await qgrid("openai/gpt-5.5").doGenerate({
-      prompt: [{ role: "user", content: [{ type: "text", text: "draw" }] }],
-      providerOptions: { qgrid: { imageGeneration: true, logger: false, imageGenerationOptions: { outputFormat } } },
-    });
-    expect(queryBody?.args.imageGenerationOptions).toEqual({ outputFormat });
-    expect(result.content).toContainEqual({ type: "file", data: "image-data", mediaType: `image/${outputFormat}` });
-  });
-
-  it("passes imageGenerationOptions through to qgrid", async () => {
-    let queryBody: unknown;
-    const generation = {
-      route: "codex-images", model: "gpt-image-2", quality: "medium", size: "1254x1254",
-      background: "transparent", usage: { input_tokens: 10, output_tokens: 100, total_tokens: 110 },
-    };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        if (url.includes("/query")) {
-          queryBody = init?.body ? JSON.parse(String(init.body)) : {};
-          return new Response(
-            JSON.stringify({
-              text: "",
-              content: [{ type: "image", data: "iVBORw0KGgoBAgM", revisedPrompt: "a red circle", generation }],
               finishReason: "stop",
               model: "gpt-5.5",
               usage,
@@ -1434,11 +1455,34 @@ describe("qgrid AI SDK provider", () => {
       imageGeneration: true,
       imageGenerationOptions: { quality: "high", size: "1024x1024", background: "transparent" },
     });
-    expect(result.content).toContainEqual({
-      type: "file", mediaType: "image/png", data: "iVBORw0KGgoBAgM",
-      providerMetadata: { qgrid: { imageGeneration: generation } },
+    // image → LanguageModelV3File 파트로 매핑, tool-call 오인 없음.
+    expect(result.content).toEqual([
+      { type: "text", text: "here is your image" },
+      { type: "file", mediaType: "image/png", data: "iVBORw0KGgoBAgM" },
+      {
+        type: "file",
+        mediaType: "image/png",
+        data: "second-image",
+        providerMetadata: { qgrid: { imageGeneration: generation } },
+      },
+    ]);
+    expect(result.providerMetadata?.qgrid?.imageGeneration).toEqual([
+      { contentIndex: 2, ...generation },
+    ]);
+  });
+
+  it.each(["png", "jpeg", "webp"] as const)("passes %s output format and uses the returned MIME", async (outputFormat) => {
+    let queryBody: { args: Record<string, unknown> } | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      queryBody = JSON.parse(String(init?.body));
+      return Response.json({ text: "", content: [{ type: "image", data: "image-data", mediaType: `image/${outputFormat}` }], finishReason: "stop", model: "gpt-5.5", usage, durationMs: 1, costUsd: 0 });
+    }));
+    const result = await qgrid("openai/gpt-5.5").doGenerate({
+      prompt: [{ role: "user", content: [{ type: "text", text: "draw" }] }],
+      providerOptions: { qgrid: { imageGeneration: true, logger: false, imageGenerationOptions: { outputFormat } } },
     });
-    expect(result.providerMetadata?.qgrid?.imageGeneration).toEqual([{ contentIndex: 0, ...generation }]);
+    expect(queryBody?.args.imageGenerationOptions).toEqual({ outputFormat });
+    expect(result.content).toContainEqual({ type: "file", data: "image-data", mediaType: `image/${outputFormat}` });
   });
 
   it("sends reference image file parts as qgrid multimodal input", async () => {

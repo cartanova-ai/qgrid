@@ -2,15 +2,16 @@ import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 
 import { RequestLogTable } from "@/components/qgrid/RequestLogTable";
+import { RequestLogBaseListParams, RequestLogOrderBy } from "@/services/sonamu.generated";
 
 const logsSearchSchema = z.object({
   token: z.string().optional(),
   project: z.string().optional(),
   model: z.string().optional(),
   /** `컬럼-방향` (예: cost_usd-desc). 미지정이면 기본 정렬(id-desc). */
-  sort: z.string().optional(),
+  sort: RequestLogOrderBy.optional(),
   /** 페이지 번호 */
-  page: z.number().optional().default(1),
+  page: RequestLogBaseListParams.shape.page.default(1),
 });
 export type LogsSearch = z.infer<typeof logsSearchSchema>;
 

@@ -90,6 +90,7 @@ class SettingModelClass extends BaseModelClass<
       id,
       num: 1,
       page: 1,
+      queryMode: "list",
     });
     if (!rows[0]) {
       throw new NotFoundException(SD("error.entityNotFound")("Setting", id));
@@ -106,6 +107,7 @@ class SettingModelClass extends BaseModelClass<
       ...listParams,
       num: 1,
       page: 1,
+      queryMode: "list",
     });
 
     return rows[0] ?? null;
@@ -126,7 +128,7 @@ class SettingModelClass extends BaseModelClass<
     } satisfies SettingListParams;
 
     // build queries
-    const { qb, onSubset: _ } = this.getSubsetQueries(subset);
+    const { qb } = this.getSubsetQueries(subset);
 
     // id
     if (params.id) {
@@ -157,19 +159,10 @@ class SettingModelClass extends BaseModelClass<
       }
     }
 
-    const enhancers = this.createEnhancers({
-      A: (row) => ({
-        ...row,
-        // 서브셋별로 virtual 필드 계산로직 추가
-      }),
-    });
-
     return this.executeSubsetQuery({
       subset,
       qb,
       params,
-      enhancers,
-      debug: false,
     });
   }
 
@@ -202,30 +195,21 @@ class SettingModelClass extends BaseModelClass<
 
   /** 저장된 설정 전체를 key→value 로. 부팅 시 한 번 읽어 메모리에 올린다. */
   async findAllAsMap(): Promise<Map<string, string>> {
-    const { rows } = await this.findMany("A", { num: 0, page: 1 });
+    const { rows } = await this.findMany("A", { num: 0, page: 1, queryMode: "list" });
     return new Map(rows.map((r) => [r.key, r.value]));
   }
 
-  /**
-   * key 로 upsert 한다. `save` 는 id 기준이라 key 중복을 걸러내지 못해, 기존 행을 먼저 찾아
-   * id 를 실어 보낸다.
-   */
+  /** 최초 동시 저장도 key unique constraint로 원자적으로 처리한다. */
   async setByKey(key: string, value: string): Promise<void> {
-    const existing = await this.findOne("A", { key, num: 1, page: 1 });
-    await this.save([
-      {
-        ...(existing ? { id: existing.id } : {}),
-        key,
-        value,
-        updated_at: new Date(),
-      },
-    ]);
+    await this.getPuri("w")
+      .table("settings")
+      .insert({ key, value, updated_at: new Date() })
+      .onConflict("key", { update: ["value", "updated_at"] });
   }
 
   /** 저장값을 지워 env 기본값으로 되돌린다. */
   async clearByKey(key: string): Promise<void> {
-    const existing = await this.findOne("A", { key, num: 1, page: 1 });
-    if (existing) await this.del([existing.id]);
+    await this.getPuri("w").table("settings").where("key", key).delete();
   }
 
   /**

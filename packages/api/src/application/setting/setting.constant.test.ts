@@ -10,6 +10,7 @@ describe("validateSettingValue", () => {
     // 저장을 막지 않으면 런타임에서 조용히 기본값으로 떨어져 원인을 찾기 어렵다.
     expect(validateSettingValue(intDef, "24")).toMatchObject({ ok: false });
     expect(validateSettingValue(intDef, "-1")).toMatchObject({ ok: false });
+    expect(validateSettingValue(intDef, "0")).toMatchObject({ ok: true, value: "0" });
     expect(validateSettingValue(intDef, "23")).toMatchObject({ ok: true, value: "23" });
   });
 
@@ -45,19 +46,6 @@ describe("preset 검증", () => {
     expect(validateSettingValue(presetDef, "45")).toMatchObject({ ok: false });
     expect(validateSettingValue(presetDef, "0")).toMatchObject({ ok: false });
     expect(validateSettingValue(presetDef, "많이")).toMatchObject({ ok: false });
-  });
-});
-
-describe("조용 시간 설정", () => {
-  // fallback("20"/"8")은 quiet-hours.ts 의 DEFAULT_QUIET_* 와 같아야 하지만 테스트로 묶지
-  // 않는다 — 두 모듈을 한 파일에서 import 하면 setting.store → token.model 이 딸려와,
-  // token.model 을 mock 하는 테스트가 같은 워커에 배치될 때 실제 모듈을 먼저 로드해 버린다.
-  it("0..23 을 벗어나면 거부한다", () => {
-    const fromDef = findSettingDef("slack.quietFromHour")!;
-    expect(validateSettingValue(fromDef, "24")).toMatchObject({ ok: false });
-    expect(validateSettingValue(fromDef, "-1")).toMatchObject({ ok: false });
-    expect(validateSettingValue(fromDef, "0")).toMatchObject({ ok: true });
-    expect(validateSettingValue(fromDef, "23")).toMatchObject({ ok: true });
   });
 });
 

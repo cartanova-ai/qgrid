@@ -50,7 +50,7 @@ class TokenModelClass extends BaseModelClass<
 
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"], resourceName: "Token" })
   async findById<T extends TokenSubsetKey>(subset: T, id: number): Promise<TokenSubsetMapping[T]> {
-    const { rows } = await this.findMany(subset, { id, num: 1, page: 1 });
+    const { rows } = await this.findMany(subset, { id, num: 1, page: 1, queryMode: "list" });
     if (!rows[0]) {
       throw new NotFoundException(SD("error.entityNotFound")("Token", id));
     }
@@ -61,7 +61,12 @@ class TokenModelClass extends BaseModelClass<
     subset: T,
     listParams: TokenListParams,
   ): Promise<TokenSubsetMapping[T] | null> {
-    const { rows } = await this.findMany(subset, { ...listParams, num: 1, page: 1 });
+    const { rows } = await this.findMany(subset, {
+      ...listParams,
+      num: 1,
+      page: 1,
+      queryMode: "list",
+    });
     return rows[0] ?? null;
   }
 
@@ -78,7 +83,7 @@ class TokenModelClass extends BaseModelClass<
       ...rawParams,
     } satisfies TokenListParams;
 
-    const { qb, onSubset: _ } = this.getSubsetQueries(subset);
+    const { qb } = this.getSubsetQueries(subset);
 
     if (params.id) {
       qb.whereIn("tokens.id", asArray(params.id));
@@ -105,11 +110,7 @@ class TokenModelClass extends BaseModelClass<
       }
     }
 
-    const enhancers = this.createEnhancers({
-      A: (row) => ({ ...row }),
-    });
-
-    return this.executeSubsetQuery({ subset, qb, params, enhancers, debug: false });
+    return this.executeSubsetQuery({ subset, qb, params });
   }
 
   async findByAccountIdentifier<T extends TokenSubsetKey>(
@@ -121,13 +122,10 @@ class TokenModelClass extends BaseModelClass<
     qb.where("tokens.provider", provider);
     const jsonKey = provider === "anthropic" ? "accountUuid" : "accountId";
     qb.whereRaw(`tokens.credentials->>'${jsonKey}' = ?`, [accountId]);
-    const enhancers = this.createEnhancers({ A: (row) => ({ ...row }) });
     const result = await this.executeSubsetQuery({
       subset,
       qb,
-      params: { num: 100, page: 1 },
-      enhancers,
-      debug: false,
+      params: { num: 0, page: 1, queryMode: "list" },
     });
     return result.rows;
   }
@@ -139,13 +137,10 @@ class TokenModelClass extends BaseModelClass<
     const { qb } = this.getSubsetQueries(subset);
     qb.where("tokens.active", true);
     qb.where("tokens.provider", provider);
-    const enhancers = this.createEnhancers({ A: (row) => ({ ...row }) });
     const result = await this.executeSubsetQuery({
       subset,
       qb,
-      params: { num: 100, page: 1 },
-      enhancers,
-      debug: false,
+      params: { num: 0, page: 1, queryMode: "list" },
     });
     return result.rows;
   }
@@ -159,13 +154,10 @@ class TokenModelClass extends BaseModelClass<
     qb.where("tokens.active", true);
     qb.where("tokens.provider", provider);
     qb.where("tokens.name", name);
-    const enhancers = this.createEnhancers({ A: (row) => ({ ...row }) });
     const result = await this.executeSubsetQuery({
       subset,
       qb,
-      params: { num: 1, page: 1 },
-      enhancers,
-      debug: false,
+      params: { num: 1, page: 1, queryMode: "list" },
     });
     return result.rows[0];
   }
@@ -175,13 +167,10 @@ class TokenModelClass extends BaseModelClass<
     const { qb } = this.getSubsetQueries(subset);
     qb.where("tokens.reauth_required", true);
     qb.orderBy("tokens.name", "asc");
-    const enhancers = this.createEnhancers({ A: (row) => ({ ...row }) });
     const result = await this.executeSubsetQuery({
       subset,
       qb,
-      params: { num: 100, page: 1 },
-      enhancers,
-      debug: false,
+      params: { num: 0, page: 1, queryMode: "list" },
     });
     return result.rows;
   }
@@ -189,13 +178,10 @@ class TokenModelClass extends BaseModelClass<
   async findActive<T extends TokenSubsetKey>(subset: T): Promise<TokenSubsetMapping[T][]> {
     const { qb } = this.getSubsetQueries(subset);
     qb.where("tokens.active", true);
-    const enhancers = this.createEnhancers({ A: (row) => ({ ...row }) });
     const result = await this.executeSubsetQuery({
       subset,
       qb,
-      params: { num: 100, page: 1 },
-      enhancers,
-      debug: false,
+      params: { num: 0, page: 1, queryMode: "list" },
     });
     return result.rows;
   }
@@ -246,24 +232,53 @@ class TokenModelClass extends BaseModelClass<
     accountId: string | undefined,
     saveParams: TokenSaveParams,
   ): Promise<void> {
-    let keepaliveEnabled = saveParams.keepalive_enabled;
-    if (accountId) {
-      const oldEntries = await this.findByAccountIdentifier("A", provider, accountId);
-      if (keepaliveEnabled === undefined && oldEntries.length > 0) {
-        keepaliveEnabled = oldEntries.some((entry) => entry.keepalive_enabled);
+    await this.getPuri("w").transaction(async (trx) => {
+      let replacement = saveParams;
+      if (accountId) {
+        const jsonKey = provider === "anthropic" ? "accountUuid" : "accountId";
+        const oldEntries = await trx
+          .from("tokens")
+          .select({
+            id: "id",
+            quota_threshold: "quota_threshold",
+            weight: "weight",
+            ord: "ord",
+            keepalive_enabled: "keepalive_enabled",
+          })
+          .where("provider", provider)
+          .whereRaw(`credentials->>'${jsonKey}' = ?`, [accountId])
+          .orderBy("id", "asc")
+          .forUpdate();
+        const first = oldEntries[0];
+        if (first) {
+          replacement = {
+            ...saveParams,
+            quota_threshold:
+              saveParams.quota_threshold === undefined
+                ? first.quota_threshold
+                : saveParams.quota_threshold,
+            weight: saveParams.weight ?? first.weight,
+            ord: saveParams.ord ?? first.ord,
+            keepalive_enabled:
+              saveParams.keepalive_enabled ?? oldEntries.some((entry) => entry.keepalive_enabled),
+          };
+          await trx
+            .from("tokens")
+            .whereIn(
+              "id",
+              oldEntries.map((entry) => entry.id),
+            )
+            .delete();
+        }
+      } else {
+        logger.warn(
+          `${provider} login without account identifier: dedup skipped for ${saveParams.name ?? "unnamed"}`,
+        );
       }
-      if (oldEntries.length > 0) await this.del(oldEntries.map((o) => o.id));
-    } else {
-      logger.warn(
-        `${provider} login without account identifier: dedup skipped for ${saveParams.name ?? "unnamed"}`,
-      );
-    }
 
-    await this.save([
-      keepaliveEnabled === undefined
-        ? saveParams
-        : { ...saveParams, keepalive_enabled: keepaliveEnabled },
-    ]);
+      trx.ubRegister("tokens", applyCreateDefaults(replacement));
+      await trx.ubUpsert("tokens");
+    });
   }
 
   /**

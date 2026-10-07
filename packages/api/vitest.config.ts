@@ -2,6 +2,7 @@ import { defineConfig, type ViteUserConfig } from "vitest/config";
 
 import { PrioritySequencer } from "./custom-sequencer";
 import { configureTestRunDatabaseName } from "./src/testing/test-database-name";
+import { databaseTests } from "./vitest.unit.config";
 
 type VitestTestConfig = NonNullable<ViteUserConfig["test"]>;
 
@@ -38,7 +39,7 @@ export default defineConfig(async () => {
   return {
     plugins: [],
     test: await getSonamuTestConfig({
-      include: ["src/**/*.test.ts"],
+      include: databaseTests,
       exclude: ["src/**/*.test-hold.ts", "**/node_modules/**", "**/.yarn/**", "**/dist/**"],
       globals: true,
       globalSetup: ["./src/testing/global.ts"],
@@ -55,6 +56,7 @@ export default defineConfig(async () => {
       },
       coverage: {
         provider: "v8",
+        reportsDirectory: "coverage/db",
         reporter: ["text", "html"],
         include: ["src/**/*.ts"],
         exclude: ["**/*.test.ts", "**/testing/**", "**/node_modules/**", "**/dist/**"],

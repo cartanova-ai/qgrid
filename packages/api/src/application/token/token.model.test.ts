@@ -115,32 +115,99 @@ describe("TokenModel.updateFields", () => {
 });
 
 describe("TokenModel.replaceByAccount", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
+  beforeAll(async () => {
+    await Sonamu.initForTesting();
   });
 
-  it("re-login으로 row가 교체돼도 기존 keepalive 선택을 보존한다", async () => {
-    vi.spyOn(TokenModel, "findByAccountIdentifier").mockResolvedValue([
+  it("replaces duplicate account rows while preserving routing settings and renewing login state", async () => {
+    const accountUuid = randomUUID();
+    const credentials = { ...baseToken.credentials, accountUuid };
+    const ids = await TokenModel.save([
       {
-        id: 1,
-        created_at: new Date(),
+        ...baseToken,
+        name: `replace-first-${accountUuid}`,
+        credentials,
+        active: false,
+        reauth_required: true,
+        ord: 9,
+        quota_threshold: null,
+        weight: 7,
+        keepalive_enabled: false,
+      },
+      { ...baseToken, name: `replace-second-${accountUuid}`, credentials, keepalive_enabled: true },
+    ]);
+    const refreshed = { ...credentials, accessToken: "refreshed-access-token" };
+    try {
+      await TokenModel.replaceByAccount("anthropic", accountUuid, {
+        ...baseToken,
+        name: `replace-first-${accountUuid}`,
+        credentials: refreshed,
+      });
+      const rows = await TokenModel.findByAccountIdentifier("A", "anthropic", accountUuid);
+      expect(rows).toHaveLength(1);
+      expect(ids).not.toContain(rows[0]!.id);
+      expect(rows[0]).toMatchObject({
+        credentials: refreshed,
         active: true,
         reauth_required: false,
-        ord: 0,
-        quota_threshold: 80,
-        weight: 1,
+        ord: 9,
+        quota_threshold: null,
+        weight: 7,
         keepalive_enabled: true,
+      });
+    } finally {
+      const rows = await TokenModel.findByAccountIdentifier("A", "anthropic", accountUuid);
+      await TokenModel.del(rows.map((row) => row.id));
+    }
+  });
+
+  it("rolls back the deletion when the replacement violates a database constraint", async () => {
+    const accountUuid = randomUUID();
+    const original = {
+      ...baseToken,
+      name: `rollback-${accountUuid}`,
+      credentials: { ...baseToken.credentials, accountUuid },
+      quota_threshold: 42,
+      weight: 3,
+      ord: 8,
+      keepalive_enabled: true,
+    };
+    const [id] = await TokenModel.save([original]);
+    try {
+      await expect(
+        TokenModel.replaceByAccount("anthropic", accountUuid, {
+          ...original,
+          provider: "x".repeat(21),
+        }),
+      ).rejects.toThrow();
+      await expect(TokenModel.findById("A", id!)).resolves.toMatchObject(original);
+    } finally {
+      await TokenModel.del([id!]);
+    }
+  });
+
+  it("loads every active or expired token when a pool exceeds 100 accounts", async () => {
+    const suffix = randomUUID();
+    const ids = await TokenModel.save(
+      Array.from({ length: 101 }, (_, index) => ({
         ...baseToken,
-      },
-    ]);
-    vi.spyOn(TokenModel, "del").mockResolvedValue(1);
-    const save = vi.spyOn(TokenModel, "save").mockResolvedValue([2]);
-
-    await TokenModel.replaceByAccount("anthropic", "acc-1", baseToken);
-
-    expect(save).toHaveBeenCalledWith([
-      expect.objectContaining({ keepalive_enabled: true }),
-    ]);
+        name: `pool-${suffix}-${index}`,
+        credentials: { ...baseToken.credentials, accountUuid: suffix },
+        reauth_required: true,
+      })),
+    );
+    try {
+      for (const rows of [
+        await TokenModel.findActive("A"),
+        await TokenModel.findActiveByProvider("A", "anthropic"),
+        await TokenModel.findReauthRequired("A"),
+        await TokenModel.findByAccountIdentifier("A", "anthropic", suffix),
+      ]) {
+        expect(rows.map((row) => row.id)).toEqual(expect.arrayContaining(ids));
+      }
+    } finally {
+      await TokenModel.del(ids);
+    }
   });
 });
 
@@ -176,7 +243,7 @@ describe("TokenModel.findActiveByProviderAndName", () => {
       ["tokens.name", "anthropic/tok-A"],
     ]);
     expect(executeSubsetQuery).toHaveBeenCalledWith(
-      expect.objectContaining({ subset: "A", qb, params: { num: 1, page: 1 } }),
+      expect.objectContaining({ subset: "A", qb, params: { num: 1, page: 1, queryMode: "list" } }),
     );
   });
 });

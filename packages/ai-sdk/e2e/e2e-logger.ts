@@ -1,112 +1,87 @@
-/**
- * @cartanova/qgrid-ai-sdk Logger E2E Test
- *
- * TelemetryIntegration 기반 logger가 실서버에 run lifecycle을 기록하는지 검증.
- * qgrid 서버(localhost:44900)가 떠 있어야 합니다.
- *
- * 사용법: pnpm --filter @cartanova/qgrid-ai-sdk e2e:logger
- */
+/** Opt-in telemetry regression: qgrid's native tool run must not be logged twice. */
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+
 import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
 
-import { createQgridLogger, qgrid } from "../src/index";
-
-const SERVER = process.env.QGRID_URL ?? "http://localhost:44900";
-const MODEL = (process.env.QGRID_MODEL ?? "openai/gpt-5.5") as Parameters<typeof qgrid>[0];
-
-let passed = 0;
-let failed = 0;
-
-async function test(name: string, fn: () => Promise<void>) {
-  try {
-    await fn();
-    passed++;
-    console.log(`  ✓ ${name}`);
-  } catch (e) {
-    failed++;
-    console.error(`  ✗ ${name}`);
-    console.error(`    ${(e as Error).message}`);
-  }
-}
-
-function assert(condition: unknown, message: string): asserts condition {
-  if (!condition) throw new Error(message);
-}
-
-const WEATHER_DB: Record<string, { temperature: number; condition: string }> = {
-  Seoul: { temperature: 22, condition: "sunny" },
-  Busan: { temperature: 26, condition: "partly cloudy" },
-};
+import {
+  createQgridLogger,
+  qgrid,
+  type QgridAnthropicModel,
+  type QgridOpenAIModel,
+} from "../src/index";
 
 async function main() {
-  console.log(`\n@cartanova/qgrid-ai-sdk Logger E2E (server: ${SERVER}, model: ${MODEL})\n`);
+  assert.equal(
+    process.env.QGRID_REAL_PROVIDER_ACCEPTANCE,
+    "1",
+    "Set QGRID_REAL_PROVIDER_ACCEPTANCE=1 to spend provider quota",
+  );
+  const serverUrl = process.env.QGRID_URL;
+  const models = process.env.QGRID_MODEL?.split(",").map((model) => model.trim());
+  assert.ok(serverUrl, "Set QGRID_URL to an isolated test server");
+  assert.ok(
+    models?.length && models.every((model) => /^(openai|anthropic)\/.+/.test(model)),
+    "Set QGRID_MODEL to an explicit provider/model (comma-separated for multiple models)",
+  );
 
-  // 1. 단순 텍스트 + logger
-  await test("logger: simple text generation", async () => {
-    const logger = createQgridLogger({
-      serverUrl: SERVER,
-      projectName: "e2e-logger",
-      tokenName: "e2e-test",
-    });
-
-    const result = await generateText({
-      model: qgrid(MODEL),
-      prompt: 'Say exactly: "logger-ok"',
-      experimental_telemetry: { integrations: [logger] },
-    });
-
-    assert(result.text.length > 0, "empty response");
-    console.log(`    text="${result.text.slice(0, 50)}"`);
-
-    // 대기 후 DB 검증
-    await new Promise((r) => setTimeout(r, 1500));
-
-    const logRes = await fetch(
-      `${SERVER}/api/requestLog/findMany?subset=A&rawParams%5Bnum%5D=1&rawParams%5Bpage%5D=1&rawParams%5BorderBy%5D=id-desc`,
-    );
-    const logData = (await logRes.json()) as { rows: Array<Record<string, unknown>> };
-    const log = logData.rows[0];
-
-    // qgrid provider가 이미 lifecycle을 관리하므로 logger는 skip해야 함
-    // 하지만 단순 호출이라 qgrid provider의 runState도 생성 안 됨 (tools 없음)
-    // 이 경우 둘 다 기록하지 않거나, qgrid provider만 기록
-    console.log(`    latest log id=${log?.id}, status=${log?.status}`);
-  });
-
-  // 2. tool calling + logger (qgrid provider 사용 — logger가 skip하는지 검증)
-  await test("logger: skips when qgrid provider is used", async () => {
+  for (const modelId of models) {
+    const projectName = `qg-log-${randomUUID()}`;
     const errors: Error[] = [];
     const logger = createQgridLogger({
-      serverUrl: SERVER,
-      projectName: "e2e-logger",
-      onLogError: (err) => errors.push(err),
+      serverUrl,
+      projectName,
+      onLogError: (error) => errors.push(error),
     });
-
+    const config: { serverUrl: string; projectName: string } = { serverUrl, projectName };
+    const model = modelId.startsWith("openai/")
+      ? qgrid(modelId as QgridOpenAIModel, config)
+      : qgrid(modelId as QgridAnthropicModel, config);
+    let executions = 0;
     const result = await generateText({
-      model: qgrid(MODEL),
-      prompt: "What is the weather in Seoul? Use the getWeather tool.",
+      model,
+      prompt: "Call lookupMarker once, then report the marker it returns.",
       tools: {
-        getWeather: tool({
-          description: "Get weather for a city",
-          inputSchema: z.object({ city: z.string() }),
-          execute: async ({ city }) => WEATHER_DB[city] ?? { temperature: 0, condition: "unknown" },
+        lookupMarker: tool({
+          description: "Look up a hidden marker.",
+          inputSchema: z.object({}),
+          execute: async () => {
+            executions++;
+            return { marker: randomUUID() };
+          },
         }),
       },
       stopWhen: stepCountIs(3),
-      experimental_telemetry: { integrations: [logger] },
+      maxRetries: 0,
+      experimental_telemetry: logger,
     });
-
-    assert(result.text.length > 0, "empty response");
-    assert(errors.length === 0, `logger errors: ${errors.map((e) => e.message).join(", ")}`);
-    console.log(`    text="${result.text.slice(0, 80)}"`);
-    console.log(`    logger skipped (qgrid provider detected)`);
-  });
-
-  console.log(`\n  ${passed} passed, ${failed} failed\n`);
-  if (failed > 0) process.exit(1);
+    assert.equal(result.finishReason, "stop");
+    assert.ok(result.text.trim());
+    assert.equal(executions, 1);
+    assert.deepEqual(errors, []);
+    const id = result.providerMetadata?.qgrid?.requestLogId;
+    assert.equal(typeof id, "number", "Missing native requestLogId");
+    const params = new URLSearchParams({
+      subset: "A",
+      "rawParams[project_name]": projectName,
+      "rawParams[num]": "2",
+      "rawParams[page]": "1",
+    });
+    const response = await fetch(new URL(`/api/requestLog/findMany?${params}`, serverUrl));
+    assert.ok(response.ok, `Log lookup failed: ${response.status}`);
+    const { rows } = (await response.json()) as {
+      rows: Array<{ id: number; project_name: string; status: string }>;
+    };
+    assert.equal(rows.length, 1, "Telemetry must not duplicate the native qgrid log");
+    assert.equal(rows[0].id, id);
+    assert.equal(rows[0].project_name, projectName);
+    assert.equal(rows[0].status, "succeeded");
+    console.log(`  ✓ ${modelId}: one native log, requestLogId=${id}`);
+  }
 }
 
-main().catch((e) => {
-  console.error("E2E failed:", e);
-  process.exit(1);
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
 });

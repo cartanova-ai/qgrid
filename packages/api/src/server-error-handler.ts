@@ -2,8 +2,7 @@ import { getLogger } from "@logtape/logtape";
 import { type FastifyReply } from "fastify";
 import { SoException } from "sonamu";
 
-// dispatcher 기동은 dev0 기준 1~2분 걸린다(워커 25개 × spawn 간격). 그보다 짧게 잡으면
-// 재시도가 같은 503 을 다시 받는다.
+// provider 초기화 중 즉시 재요청이 몰리지 않도록 재시도 간격을 안내한다.
 const RETRY_AFTER_SECONDS = "30";
 
 // statusCode 를 신뢰하는 범위를 Sonamu 예외로 한정한다. qgrid 는 프록시라 upstream HTTP

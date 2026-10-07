@@ -258,7 +258,7 @@ export function ChatWidget() {
             tokenName: data.tokenName,
             durationMs: data.durationMs,
             costUsd: data.costUsd,
-            requestLogId: data.runContext?.requestLogId,
+            requestLogId: data.requestLogId,
             fallback: (data.modelFallbacks?.length ?? 0) > 0,
           },
         }));
@@ -357,7 +357,7 @@ export function ChatWidget() {
             tokenName: result.tokenName,
             durationMs: result.durationMs,
             costUsd: result.costUsd,
-            requestLogId: result.runContext?.requestLogId,
+            requestLogId: result.requestLogId,
             fallback: (result.modelFallbacks?.length ?? 0) > 0,
           },
         }));

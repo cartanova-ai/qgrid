@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { Client, type ClientConfig } from "pg";
 import { Sonamu } from "sonamu";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -613,7 +615,7 @@ describe("RequestLogModel cost provenance", () => {
     await RequestLogModel.totalCost();
 
     expect(sumChain.select).toHaveBeenCalledTimes(1);
-    // 조건을 걸면 cost_source 가 인덱스에 없어 커버링 인덱스가 무효화된다.
+    // source 없는 행도 저장된 이미지 비용을 포함하고 driver 차액만 별도로 보정한다.
     expect(sumChain.whereRaw).not.toHaveBeenCalled();
     expect(legacyChain.whereRaw).toHaveBeenCalledWith(
       "request_logs.cost_source IS NULL OR request_logs.cost_usd IS NULL",
@@ -723,9 +725,42 @@ describe("RequestLogModel cost provenance", () => {
   });
 });
 
-describe("RequestLogModel PostgreSQL run lock", () => {
+describe("RequestLogModel PostgreSQL", () => {
   beforeAll(async () => {
     await Sonamu.initForTesting();
+  });
+
+  it("includes image costs once and filters both stored totals and legacy adjustments", async () => {
+    const projectName = `cost-${randomUUID()}`;
+    const ids: number[] = [];
+    try {
+      for (const [index, costs] of [
+        { cost_usd: 5_000, image_cost_usd: 10_000, cost_source: "provider" },
+        { cost_usd: 1_000, image_cost_usd: 20_000, cost_source: null },
+        { cost_usd: 900_000, image_cost_usd: 700_000, cost_source: null },
+      ].entries()) {
+        const id = await RequestLogModel.createRun({
+          user_prompt: "cost regression",
+          project_name: index < 2 ? projectName : `${projectName}-other`,
+        });
+        ids.push(id);
+        await RequestLogModel.getPuri("w").table("request_logs").where("id", id).update({
+          ...costs,
+          model_name: "anthropic/claude-sonnet-4-6",
+          token_name: "anthropic/test",
+          input_tokens: 1_000,
+        });
+      }
+
+      const params = { sonamuFilter: { project_name: projectName }, num: 0, page: 1 };
+      const { rows } = await RequestLogModel.findMany("C", params);
+      expect(rows.map((row) => row.id)).toEqual(expect.arrayContaining(ids.slice(0, 2)));
+      expect(rows).toHaveLength(2);
+      // Confirmed: .005 + .010; legacy driver repriced to .003, plus .020 image.
+      await expect(RequestLogModel.totalCost(params)).resolves.toBeCloseTo(0.038, 10);
+    } finally {
+      await RequestLogModel.del(ids);
+    }
   });
 
   it("does not expire a run while another connection holds its follow-up lock", async () => {

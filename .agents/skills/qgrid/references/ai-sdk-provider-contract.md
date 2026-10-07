@@ -68,7 +68,7 @@ Do not write `providerOptions: { ... } satisfies QgridProviderOptions`: the expo
 - `reasoningSummary`: OpenAI/Codex route only.
 - `serviceTier`: OpenAI/Codex route only.
 - `timeoutMs`: Anthropic server-side Claude Code process timeout in milliseconds. It must be a positive integer no greater than 30 minutes and defaults to 240 seconds. For non-stream `generateText`, the SDK derives request-scoped Undici `headersTimeout` and `bodyTimeout` values as `timeoutMs + 60_000` without changing the process-global dispatcher.
-- `fallbackModels`: reserved for future qgrid server-side fallback routing. It is not the Fable 5 safety-refusal fallback, which is owned by Claude Code upstream.
+- `fallbackModels`: deprecated, ignored compatibility field. The provider emits a standard unsupported-option warning when supplied; remove it from callers. It is not Claude Code's upstream Fable safety-refusal fallback.
 - `imageGeneration`: OpenAI/Codex non-stream only. Enables Codex's built-in `image_generation` tool for that request.
 - `imageGenerationOptions`: optional `quality: "low" | "medium" | "high"`, `size: "1024x1024" | "1024x1536" | "1536x1024"`, and `background: "auto" | "opaque" | "transparent"`. Transparent requests use Codex standalone Images with `gpt-image-2`; other requests use the hosted Responses tool. Transparent mode rejects tools/structured output, supports up to five references, validates real transparent and visible PNG pixels, and never invokes background-removal fallback. Returned size/quality may differ from requested settings; read `result.providerMetadata.qgrid.imageGeneration` or per-file `result.content` metadata. `result.files[]` contains bytes/mediaType only. Logs separate `requestedOptions` from `observedGeneration`; image usage is separate from the zero text-driver usage on this route.
 
@@ -199,6 +199,8 @@ Reference images for image generation use normal AI SDK multimodal message parts
 
 ## Response mapping
 
+Cancelling the returned provider stream aborts its HTTP request and releases the SSE reader; caller abort signals propagate through the same request-local cancellation path. Normal completion and error events also release the reader. OpenAI affinity coordinates are swept for expiration on insertion and bounded to the most recently issued 1,000 entries; eviction keeps full-history generation functional.
+
 Since 2.10.0, `generateText` exposes the parent request-log ID at `result.providerMetadata?.qgrid?.requestLogId`. For `streamText`, consume the stream first, then read `(await result.providerMetadata)?.qgrid?.requestLogId`. The raw query response and stream `done` event carry optional top-level `requestLogId`.
 
 Update both server and SDK to use this metadata. The field is omitted when logging is disabled or an older server does not return it. Tool-run steps share the parent ID; `runContext.requestLogId` remains separate continuation state. This does not expose external-provider telemetry logger IDs or add IDs to stream delta/error events.
@@ -226,7 +228,7 @@ For a successful Fable refusal fallback (Fable 5 or 5.1):
 - `providerMetadata.qgrid.modelFallbacks` preserves the refusal route and optional category/explanation.
 - `providerMetadata.qgrid.costSource` reports whether cost came from Claude Code or qgrid's pricing table. Prefer the provider-reported combined cost for this path.
 
-Do not expose the requested Fable model as `response.modelId` after Opus served the answer, and do not map this upstream safety behavior onto the reserved `providerOptions.qgrid.fallbackModels` option.
+Do not expose the requested Fable model as `response.modelId` after Opus served the answer, and do not map this upstream safety behavior onto the deprecated `providerOptions.qgrid.fallbackModels` option.
 
 Usage maps qgrid standard usage into AI SDK V3 usage:
 

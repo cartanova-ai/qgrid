@@ -10,9 +10,11 @@
     "build": "sonamu build",
     "postinstall": "sonamu skills sync",
     "start": "sonamu start",
-    "test": "vitest run",
-    "test:watch": "vitest watch --standalone",
-    "test:coverage": "vitest run --coverage",
+    "test": "pnpm test:unit && pnpm test:db",
+    "test:unit": "vitest run --config vitest.unit.config.ts",
+    "test:db": "vitest run",
+    "test:watch": "vitest watch --config vitest.unit.config.ts --standalone",
+    "test:coverage": "pnpm test:unit --coverage && pnpm test:db --coverage",
     "sonamu": "sonamu"
   },
   "dependencies": {

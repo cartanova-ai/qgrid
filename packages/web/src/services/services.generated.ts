@@ -704,6 +704,7 @@ export namespace QgridService {
           input: string;
         };
         done: {
+          requestLogId?: number;
           text: string;
           model?: string;
           requestedModel?: string;
@@ -794,6 +795,7 @@ export namespace QgridService {
         input: string;
       };
       done: {
+        requestLogId?: number;
         text: string;
         model?: string;
         requestedModel?: string;

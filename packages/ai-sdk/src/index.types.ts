@@ -39,8 +39,8 @@ type QgridCommonProviderOptions = {
    */
   logger?: boolean;
   /**
-   * @todo 향후 qgrid 서버 fallback routing에 사용할 후보 모델 목록.
-   * Claude Code가 처리하는 Fable safety-refusal fallback과는 무관하다.
+   * @deprecated Ignored: qgrid does not implement caller-configured model fallback routing.
+   * Retained for source compatibility. Claude Code's safety fallback is independent.
    */
   fallbackModels?: string[];
 };

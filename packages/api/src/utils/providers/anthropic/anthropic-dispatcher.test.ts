@@ -153,24 +153,6 @@ describe("AnthropicDispatcher", () => {
     expect(call.input).toEqual([{ type: "text", text: "hi", text_elements: [] }]);
   });
 
-  it("reuse/reuseInput 이 실려 와도 무시하고 coldInput/coldHistory 로 실행한다", async () => {
-    const d = new AnthropicDispatcher();
-    d.onTokenAdded(1, "tok-A", creds(), null, 1);
-
-    await d.generate(
-      baseReq({
-        coldHistory: [{ type: "message", role: "assistant", content: [] }],
-        reuse: { workerId: 1, threadId: "S1", epoch: 0 },
-        reuseInput: [{ type: "text", text: "delta", text_elements: [] }],
-      }),
-    );
-
-    const call = firstRunRequest();
-    expect(call).not.toHaveProperty("resumeSessionId");
-    expect(call.coldHistory).toBeDefined();
-    expect(call.input).toEqual([{ type: "text", text: "hi", text_elements: [] }]);
-  });
-
   it("structured(outputSchema): jsonSchema 로 직렬화되어 전달", async () => {
     const d = new AnthropicDispatcher();
     d.onTokenAdded(1, "tok-A", creds(), null, 1);
@@ -245,14 +227,7 @@ describe("AnthropicDispatcher", () => {
     d.onTokenAdded(1, "tok-A", creds(), null, 1);
     runClaudeSessionMock.mockRejectedValueOnce(new Error("closed without result"));
 
-    await expect(
-      d.generate(
-        baseReq({
-          reuse: { workerId: 1, threadId: "S1", epoch: 0 },
-          reuseInput: [{ type: "text", text: "delta", text_elements: [] }],
-        }),
-      ),
-    ).rejects.toThrow("closed without result");
+    await expect(d.generate(baseReq())).rejects.toThrow("closed without result");
     expect(runClaudeSessionMock).toHaveBeenCalledTimes(1);
   });
 

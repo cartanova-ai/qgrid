@@ -221,7 +221,7 @@ const { text } = await generateText({
 | `timeoutMs` | positive integer, max `1_800_000` | Anthropic only | Server-side Claude Code process timeout in milliseconds. The SDK's non-stream HTTP budget is 60 seconds longer. Defaults to 240 seconds |
 | `imageGeneration` | `boolean` | OpenAI only, non-stream | Enables codex's built-in `image_generation` tool (see [below](#image-generation)) |
 | `imageGenerationOptions` | `{ quality?, size?, background?, outputFormat? }` | OpenAI only | Image controls; `outputFormat` selects PNG/JPEG/WebP on Responses. `background: "transparent"` selects standalone Images (PNG only). Read actual size/quality from response metadata ([below](#image-generation)). |
-| `fallbackModels` | `string[]` | reserved | Reserved for future qgrid server-side fallback routing. Not functional yet and unrelated to Claude Code's Fable refusal fallback |
+| `fallbackModels` | `string[]` | deprecated | Ignored compatibility field; emits an unsupported-option warning. Remove it from callers. Unrelated to Claude Code's Fable refusal fallback |
 
 ```typescript
 await generateText({
@@ -532,6 +532,21 @@ If multiple projects/workflows share one qgrid server, set `QGRID_PROJECT_NAME`.
 - On Anthropic routes, the final composed schema must also fit the 64 KiB safe
   single-argument budget used by the Claude Code transport.
 - AI SDK `toolChoice` is not currently supported by qgrid.
+
+## Repository testing
+
+Run `mise run test` for DB-free API, SDK, and CLI tests. The OAuth relay test uses a local loopback port; no provider credentials are needed. Run `mise exec -- pnpm --dir packages/api test:db` separately with the prepared PostgreSQL test template. The API's `test` command still runs both suites.
+
+Real-provider E2E is opt-in and requires an isolated qgrid server with registered tokens:
+
+```bash
+QGRID_REAL_PROVIDER_ACCEPTANCE=1 QGRID_URL=http://localhost:44900 QGRID_MODEL=openai/gpt-6.1-sol \
+  mise exec -- pnpm --dir packages/ai-sdk e2e
+```
+
+The default suite checks text, streaming, and tool-plus-structured output, following returned request-log IDs to persisted results. Set an Anthropic model for that route, or use a comma-separated model list to explicitly run both. `e2e:tools-output` is a focused structured-output regression probe; `e2e:logger` checks native logging is not duplicated by telemetry. All live commands consume quota and require the same explicit opt-in/server/model settings. They are not part of ordinary CI, do not retry failures automatically, and do not delete server logs.
+
+Keep new tests focused on observable contracts or concrete regressions. Preserve failure-path, cost, and data-integrity checks; consolidate duplicate happy paths instead of adding more mocks or a new test harness. Missing DB/provider infrastructure means unverified, not passed.
 
 ## Requirements
 

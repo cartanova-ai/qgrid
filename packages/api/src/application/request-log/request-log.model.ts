@@ -5,6 +5,7 @@ import {
   BadRequestException,
   BaseModelClass,
   type ListResult,
+  normalizeFilterQuery,
   NotFoundException,
   Puri,
   transactional,
@@ -228,6 +229,7 @@ class RequestLogModelClass extends BaseModelClass<
       id,
       num: 1,
       page: 1,
+      queryMode: "list",
     });
     if (!rows[0]) {
       throw new NotFoundException(SD("error.entityNotFound")("RequestLog", id));
@@ -244,6 +246,7 @@ class RequestLogModelClass extends BaseModelClass<
       ...listParams,
       num: 1,
       page: 1,
+      queryMode: "list",
     });
 
     return rows[0] ?? null;
@@ -304,7 +307,7 @@ class RequestLogModelClass extends BaseModelClass<
       ...rawParams,
     } satisfies RequestLogListParams;
 
-    const { qb, onSubset: _ } = this.getSubsetQueries(subset);
+    const { qb } = this.getSubsetQueries(subset);
 
     this.applyListFilters(qb, params);
 
@@ -320,7 +323,6 @@ class RequestLogModelClass extends BaseModelClass<
       qb,
       params,
       enhancers,
-      debug: false,
     });
   }
 
@@ -808,10 +810,8 @@ class RequestLogModelClass extends BaseModelClass<
   /**
    * 화면 표시용 총 비용. 목록과 같은 필터를 적용한다.
    *
-   * 전체를 조건 없이 SUM 한 뒤, `cost_source` 가 없는 legacy row 의 차액만 보정한다.
-   * 조건 없는 SUM 이어야 `(project_name, cost_usd)` 커버링 인덱스가 Index Only Scan 을
-   * 탄다 — `cost_source IS NOT NULL` 을 걸면 그 컬럼이 인덱스에 없어 heap 을 다시 봐야
-   * 하므로 플래너가 인덱스를 버리고 seq scan 으로 돌아간다(실측 230ms → 814ms).
+   * driver와 image 비용을 함께 SUM한 뒤, legacy driver 비용의 차액만 보정한다.
+   * 이미지 비용은 저장값을 한 번만 포함하고 가격표 재계산 대상에서 제외한다.
    *
    * legacy 보정을 남겨둔 이유: 백필로 기존 legacy 는 0 이 되었지만, 외부 로거가
    * `AppendStepInput`/`FinishRunInput` 으로 costSource 없이 넣으면 다시 생길 수 있다.
@@ -830,18 +830,25 @@ class RequestLogModelClass extends BaseModelClass<
 
     const { qb: totalQb } = this.getSubsetQueries("C");
     this.applyListFilters(totalQb, params);
+    const sonamuFilter = params.sonamuFilter
+      ? normalizeFilterQuery(params.sonamuFilter)
+      : undefined;
+    this.applySonamuFilters(totalQb, sonamuFilter);
     // subset qb 는 컬럼 목록이 이미 SELECT 에 박혀 있어 집계를 얹으면 GROUP BY 에러가 난다.
     // executeCountQuery 와 같은 방식으로 select 를 비우고 집계만 남긴다.
     const stored = await totalQb
       .clear("select")
       // 음수 저장값(과거 버그)은 0 으로 눌러서 더한다 — JS 쪽 Math.max 와 같은 규칙.
       .select({
-        total: Puri.rawNumber("COALESCE(SUM(GREATEST(request_logs.cost_usd, 0)), 0)"),
+        total: Puri.rawNumber(
+          "COALESCE(SUM(GREATEST(request_logs.cost_usd, 0) + COALESCE(request_logs.image_cost_usd, 0)), 0)",
+        ),
       })
       .first();
 
     const { qb: legacyQb } = this.getSubsetQueries("C");
     this.applyListFilters(legacyQb, params);
+    this.applySonamuFilters(legacyQb, sonamuFilter);
     const legacyRows = await legacyQb
       .whereRaw("request_logs.cost_source IS NULL OR request_logs.cost_usd IS NULL")
       .clear("select")

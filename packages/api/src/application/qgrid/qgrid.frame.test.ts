@@ -896,47 +896,33 @@ describe("QgridFrame.prepareStream", () => {
 });
 
 describe("QgridFrame raw lifecycle API", () => {
-  it("treats createRun.modelName as the requested model", async () => {
+  it("maps the requested model and structured metadata through the external createRun API", async () => {
     requestLogCreateRunMock.mockReset().mockResolvedValue(81);
-
-    await expect(
-      QgridFrame.createRun({
-        userPrompt: "hi",
-        modelName: "google/gemini-3-flash",
-        projectName: "external",
-      }),
-    ).resolves.toEqual({ requestLogId: 81 });
-
-    expect(requestLogCreateRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requested_model_name: "google/gemini-3-flash",
-      }),
-    );
-    expect(requestLogCreateRunMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({ model_name: expect.anything() }),
-    );
-  });
-
-  it("passes optional structured metadata through the external createRun API", async () => {
-    requestLogCreateRunMock.mockReset().mockResolvedValue(82);
     const jsonSchema = JSON.stringify({
       type: "object",
       properties: { answer: { type: "string" } },
       required: ["answer"],
     });
 
-    await QgridFrame.createRun({
-      userPrompt: "hi",
-      modelName: "google/gemini-3.5-flash-lite",
-      isStructured: true,
-      jsonSchema,
-    });
+    await expect(
+      QgridFrame.createRun({
+        userPrompt: "hi",
+        modelName: "google/gemini-3-flash",
+        projectName: "external",
+        isStructured: true,
+        jsonSchema,
+      }),
+    ).resolves.toEqual({ requestLogId: 81 });
 
     expect(requestLogCreateRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        requested_model_name: "google/gemini-3-flash",
         is_structured: true,
         json_schema: jsonSchema,
       }),
+    );
+    expect(requestLogCreateRunMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ model_name: expect.anything() }),
     );
   });
 

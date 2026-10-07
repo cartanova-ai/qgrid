@@ -48,6 +48,7 @@ import {
 // 모듈 레벨이라 qgrid() 인스턴스를 매 호출 새로 만들어도 공유
 const threadCoordStore = new Map<string, { coord: QgridThreadCoord; expiresAt: number }>();
 const CACHE_AFFINITY_NAMESPACE = "qgrid-cache-affinity-v1";
+const MAX_THREAD_COORDS = 1_000;
 const MAX_IMAGE_INPUT_DATA_URL_CHARS = 9_000_000;
 const MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL = "9M";
 
@@ -103,7 +104,31 @@ function getThreadCoord(sessionKey: string): QgridThreadCoord | undefined {
 }
 
 function setThreadCoord(sessionKey: string, coord: QgridThreadCoord): void {
-  threadCoordStore.set(sessionKey, { coord, expiresAt: Date.now() + THREAD_COORD_TTL_MS });
+  const now = Date.now();
+  for (const [key, entry] of threadCoordStore) {
+    if (entry.expiresAt <= now) threadCoordStore.delete(key);
+  }
+  // Keep the most recently issued coordinates; the full history still works after eviction.
+  threadCoordStore.delete(sessionKey);
+  threadCoordStore.set(sessionKey, { coord, expiresAt: now + THREAD_COORD_TTL_MS });
+  if (threadCoordStore.size > MAX_THREAD_COORDS) {
+    threadCoordStore.delete(threadCoordStore.keys().next().value!);
+  }
+}
+
+function providerWarnings(
+  options: QgridResolvedProviderOptions,
+): LanguageModelV3GenerateResult["warnings"] {
+  return options.fallbackModels === undefined
+    ? []
+    : [
+        {
+          type: "unsupported",
+          feature: "providerOptions.qgrid.fallbackModels",
+          details:
+            "fallbackModels is deprecated and ignored; qgrid does not implement model fallback routing.",
+        },
+      ];
 }
 
 async function deriveCacheAffinityKey(
@@ -411,7 +436,7 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
         content,
         finishReason,
         usage: toAiSdkUsage(data.usage),
-        warnings: [],
+        warnings: providerWarnings(qgridOptions),
         providerMetadata: qgridProviderMetadata(data),
         response: { modelId: data.model },
       };
@@ -465,6 +490,10 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
         runContext = { threadCoord: storedCoord };
       }
 
+      const abortController = new AbortController();
+      const signal = options.abortSignal
+        ? AbortSignal.any([options.abortSignal, abortController.signal])
+        : abortController.signal;
       const prepRes = await fetch(`${serverUrl}/api/qgrid/prepareStream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -489,7 +518,7 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
             ...(toolResultsPayload ? { toolResults: toolResultsPayload } : {}),
           },
         }),
-        signal: options.abortSignal,
+        signal,
       });
       if (!prepRes.ok) {
         const text = await prepRes.text().catch(() => "");
@@ -498,7 +527,7 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
       const { streamId } = (await prepRes.json()) as { streamId: string };
 
       const streamRes = await fetch(`${serverUrl}/api/qgrid/queryStream?streamId=${streamId}`, {
-        signal: options.abortSignal,
+        signal,
       });
       if (!streamRes.ok || !streamRes.body) {
         const text = await streamRes.text().catch(() => "");
@@ -516,118 +545,135 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
         ? createEnvelopeStreamParser(jsonSchema ? "json" : "text")
         : undefined;
 
+      let cancelled = false;
+      let processing: Promise<void>;
       const stream = new ReadableStream<LanguageModelV3StreamPart>({
-        async start(controller) {
-          try {
-            let streamCompleted = false;
-            for await (const event of parseSSE(streamRes.body!)) {
-              if (event.type === "delta") {
-                const raw = (event.data as { text: string }).text;
-                const text = envelopeParser ? envelopeParser.push(raw) : raw;
-                if (text !== "") {
-                  if (!textStarted) {
-                    controller.enqueue({ type: "text-start", id: textId });
-                    textStarted = true;
-                  }
-                  controller.enqueue({
-                    type: "text-delta",
-                    id: textId,
-                    delta: text,
-                  });
-                  deltaTextEmitted = true;
-                }
-              } else if (event.type === "done") {
-                if (textStarted) {
-                  controller.enqueue({ type: "text-end", id: textId });
-                  textStarted = false;
-                }
-                const done = event.data as QueryOutput;
-
-                // client run state 업데이트
-                if (matchedClientRun) clientRuns.delete(matchedClientRun.key);
-                if (done.finishReason === "tool-calls") {
-                  rememberClientRun(
-                    done.runContext,
-                    (done.content ?? [])
-                      .filter(
-                        (
-                          c,
-                        ): c is Extract<
-                          NonNullable<QueryOutput["content"]>[number],
-                          { type: "tool-call" }
-                        > => c.type === "tool-call",
-                      )
-                      .map((c) => c.toolCallId),
-                  );
-                }
-
-                // sessionKey 가 있으면 발급된 좌표를 저장 → 다음 호출에 자동 회송 (thread 재사용).
-                if (cacheAffinityKey && done.runContext?.threadCoord) {
-                  setThreadCoord(cacheAffinityKey, done.runContext.threadCoord);
-                }
-
-                // AI SDK stream parts
-                if (done.content) {
-                  for (const item of done.content) {
-                    if (item.type === "text" && !deltaTextEmitted) {
-                      const tid = `${TEXT_STREAM_ID_PREFIX}_${Math.random()
-                        .toString(36)
-                        .slice(2, 10)}`;
-                      controller.enqueue({ type: "text-start", id: tid });
-                      controller.enqueue({ type: "text-delta", id: tid, delta: item.text });
-                      controller.enqueue({ type: "text-end", id: tid });
-                    } else if (item.type === "tool-call") {
-                      controller.enqueue({
-                        type: "tool-input-start",
-                        id: item.toolCallId,
-                        toolName: item.toolName,
-                      });
-                      controller.enqueue({
-                        type: "tool-input-delta",
-                        id: item.toolCallId,
-                        delta: item.input,
-                      });
-                      controller.enqueue({ type: "tool-input-end", id: item.toolCallId });
-                      controller.enqueue({
-                        type: "tool-call",
-                        toolCallId: item.toolCallId,
-                        toolName: item.toolName,
-                        input: item.input,
-                      });
-                    }
-                  }
-                }
-
-                controller.enqueue({
-                  type: "response-metadata",
-                  modelId: done.model,
-                });
-                controller.enqueue({
-                  type: "finish",
-                  finishReason:
-                    done.finishReason === "tool-calls"
-                      ? { unified: "tool-calls", raw: "tool_call" }
-                      : { unified: "stop", raw: "stop" },
-                  usage: toAiSdkUsage(done.usage),
-                  providerMetadata: qgridProviderMetadata(done),
-                });
-                streamCompleted = true;
-                controller.close();
-                return;
-              } else if (event.type === "error") {
-                streamCompleted = true;
-                controller.error(new Error((event.data as { message: string }).message));
-                return;
-              }
-            }
-            if (!streamCompleted) {
-              controller.error(new Error("qgrid stream ended unexpectedly"));
-            }
-          } catch (e) {
-            controller.error(e);
-          }
+        start(controller) {
+          processing = processEvents(controller);
+        },
+        async cancel(reason) {
+          cancelled = true;
+          abortController.abort(reason);
+          await processing;
         },
       });
+
+      async function processEvents(
+        controller: ReadableStreamDefaultController<LanguageModelV3StreamPart>,
+      ) {
+        try {
+          controller.enqueue({ type: "stream-start", warnings: providerWarnings(qgridOptions) });
+          let streamCompleted = false;
+          for await (const event of parseSSE(streamRes.body!, signal)) {
+            if (cancelled) return;
+            signal.throwIfAborted();
+            if (event.type === "delta") {
+              const raw = (event.data as { text: string }).text;
+              const text = envelopeParser ? envelopeParser.push(raw) : raw;
+              if (text !== "") {
+                if (!textStarted) {
+                  controller.enqueue({ type: "text-start", id: textId });
+                  textStarted = true;
+                }
+                controller.enqueue({
+                  type: "text-delta",
+                  id: textId,
+                  delta: text,
+                });
+                deltaTextEmitted = true;
+              }
+            } else if (event.type === "done") {
+              if (textStarted) {
+                controller.enqueue({ type: "text-end", id: textId });
+                textStarted = false;
+              }
+              const done = event.data as QueryOutput;
+
+              // client run state 업데이트
+              if (matchedClientRun) clientRuns.delete(matchedClientRun.key);
+              if (done.finishReason === "tool-calls") {
+                rememberClientRun(
+                  done.runContext,
+                  (done.content ?? [])
+                    .filter(
+                      (
+                        c,
+                      ): c is Extract<
+                        NonNullable<QueryOutput["content"]>[number],
+                        { type: "tool-call" }
+                      > => c.type === "tool-call",
+                    )
+                    .map((c) => c.toolCallId),
+                );
+              }
+
+              // sessionKey 가 있으면 발급된 좌표를 저장 → 다음 호출에 자동 회송 (thread 재사용).
+              if (cacheAffinityKey && done.runContext?.threadCoord) {
+                setThreadCoord(cacheAffinityKey, done.runContext.threadCoord);
+              }
+
+              // AI SDK stream parts
+              if (done.content) {
+                for (const item of done.content) {
+                  if (item.type === "text" && !deltaTextEmitted) {
+                    const tid = `${TEXT_STREAM_ID_PREFIX}_${Math.random()
+                      .toString(36)
+                      .slice(2, 10)}`;
+                    controller.enqueue({ type: "text-start", id: tid });
+                    controller.enqueue({ type: "text-delta", id: tid, delta: item.text });
+                    controller.enqueue({ type: "text-end", id: tid });
+                  } else if (item.type === "tool-call") {
+                    controller.enqueue({
+                      type: "tool-input-start",
+                      id: item.toolCallId,
+                      toolName: item.toolName,
+                    });
+                    controller.enqueue({
+                      type: "tool-input-delta",
+                      id: item.toolCallId,
+                      delta: item.input,
+                    });
+                    controller.enqueue({ type: "tool-input-end", id: item.toolCallId });
+                    controller.enqueue({
+                      type: "tool-call",
+                      toolCallId: item.toolCallId,
+                      toolName: item.toolName,
+                      input: item.input,
+                    });
+                  }
+                }
+              }
+
+              controller.enqueue({
+                type: "response-metadata",
+                modelId: done.model,
+              });
+              controller.enqueue({
+                type: "finish",
+                finishReason:
+                  done.finishReason === "tool-calls"
+                    ? { unified: "tool-calls", raw: "tool_call" }
+                    : { unified: "stop", raw: "stop" },
+                usage: toAiSdkUsage(done.usage),
+                providerMetadata: qgridProviderMetadata(done),
+              });
+              streamCompleted = true;
+              controller.close();
+              return;
+            } else if (event.type === "error") {
+              streamCompleted = true;
+              controller.error(new Error((event.data as { message: string }).message));
+              return;
+            }
+          }
+          if (!streamCompleted && !cancelled) {
+            signal.throwIfAborted();
+            controller.error(new Error("qgrid stream ended unexpectedly"));
+          }
+        } catch (e) {
+          if (!cancelled) controller.error(e);
+        }
+      }
 
       return { stream };
     },

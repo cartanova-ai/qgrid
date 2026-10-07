@@ -1,12 +1,9 @@
 /**
  * conv-routing — 대화 연속성(cache affinity) 좌표 검증/구성.
  *
- * 목표: thread(=conversation_id=prompt_cache_key)를 재사용해 OpenAI prompt caching 적중.
- * - 후속 turn: 기존 thread 에 delta(마지막 user / tool 결과)만 보냄 (history inject 없음).
- * - 첫 turn / 검증 실패: 새 thread + history inject (폴백, 정확성 보존).
- *
- * 식별: 서버 발급 불투명 thread 좌표(QgridThreadCoord)를 클라가 그대로 회송.
- * 검증: systemHash(다른 대화 오접속 차단) + (dispatcher의) epoch/worker 생존.
+ * 모든 turn은 현재 input과 전체 history를 전달한다.
+ * OpenAI의 epoch=-1 좌표는 system/model hash와 opaque affinity를 검증한 뒤
+ * token 선택과 prompt-cache 힌트로만 사용한다.
  */
 import { createHash } from "node:crypto";
 
@@ -32,13 +29,9 @@ function toolResultsToText(toolResults: QgridToolResultInput[]): string {
 }
 
 export interface ConvDecision {
-  // dispatcher 로 넘길 reuse 좌표 (검증 통과 시에만). dispatcher 가 epoch/worker 생존 재검증 후 폴백 가능.
-  reuse?: ReuseThreadCoord;
-  // 재사용 성공 시 turn/start 에 보낼 input — delta(마지막 user/tool 결과)만. reuse 가 있을 때만 설정.
-  reuseInput?: Array<UserInput>;
-  // 첫 turn / 재사용 폴백 시 보낼 input — 전체 prompt. 항상 설정(폴백 안전망).
+  // 매 turn의 현재 user/tool input.
   coldInput: Array<UserInput>;
-  // 새 thread 일 때 inject 할 전체 history. 재사용 성공 시엔 dispatcher 가 안 쓴다(thread 가 이미 누적).
+  // 매 turn에 다시 전달할 전체 history.
   coldHistory?: Array<JsonValue>;
   // 이 요청 시점의 system 해시 (응답에서 thread 좌표 발급 시 사용).
   systemHash: string;
@@ -52,10 +45,7 @@ export interface ConvRoutingOptions {
   modelNamespace?: string;
 }
 
-// thread 좌표 + 들어온 요청으로 "재사용 가능한가"를 판정하고, reuse/cold 양쪽 payload 를 구성한다.
-// dispatcher 단의 epoch/worker 생존 검증은 여기서 못 하므로(상태 없음) reuse 좌표 + 두 payload 를
-// 모두 넘기고, dispatcher 의 acquireReuseWorker 결과에 따라 reuse(delta) 또는 cold(전체) 를 고른다.
-// 양쪽을 다 들고 가야 reuse 가 실패로 폴백돼도 전체 history 로 문맥을 복구할 수 있다.
+// 입력과 전체 history를 구성하고, 검증된 OpenAI cache affinity만 부가한다.
 export function decideConvRouting(
   input: QueryInput,
   options: ConvRoutingOptions = {},
@@ -78,21 +68,12 @@ export function decideConvRouting(
     coord.systemHash === sysHash &&
     input.cacheAffinityKey !== undefined &&
     coord.threadId === input.cacheAffinityKey;
-  const legacyReuseEligible =
-    options.directOpenAI !== true && coord !== undefined && coord.systemHash === sysHash;
   // affinity 를 요청하지 않은 one-shot 요청에 임의 키를 붙이면 transport 가 그 소켓을
   // affinity 소켓으로 오인해 재사용되지 않을 연결을 계속 붙들어 둔다 → 키를 비워 둔다.
   const cacheKey = options.directOpenAI ? input.cacheAffinityKey : undefined;
 
   return {
-    reuse:
-      legacyReuseEligible && coord
-        ? { workerId: coord.workerId, threadId: coord.threadId, epoch: coord.epoch }
-        : undefined,
-    // 재사용 turn 은 delta(마지막 user/tool 결과)만 — thread 가 이미 이전 turn 들을 누적.
-    reuseInput: legacyReuseEligible ? buildDeltaInput(input) : undefined,
-    // 첫 turn / 폴백: 전체 prompt + history inject. tool 결과 follow-up 이 cold 로 떨어져도
-    // 실행 user 줄에는 "이 결과로 계속 답하라"는 continuation 이 들어가야 한다.
+    // tool follow-up도 실행 user 줄에 결과를 사용해 계속 답하라는 안내를 담는다.
     coldInput: buildDeltaInput(input),
     coldHistory: history,
     systemHash: sysHash,

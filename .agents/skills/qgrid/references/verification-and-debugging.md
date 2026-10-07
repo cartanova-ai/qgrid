@@ -10,6 +10,12 @@ Use this reference to choose tests, smoke scripts, and first debugging targets f
 - Common error triage
 - Debugging rules
 
+## Keep Tests Lightweight
+
+Cover user-visible flows with a small real-provider E2E suite. Keep focused tests for costs, validation, cancellation, transactions, and actual regressions that a successful live request cannot prove. Remove obsolete behavior and duplicate assertions; do not delete distinct contracts just because their tests use mocks or are long. Call counts matter when they detect duplicate generation or logging, not merely an internal implementation choice.
+
+Prefer existing checks and fixtures. Do not add a generic harness, blanket coverage target, snapshot suite, or configuration-only test layer. After the relevant checks pass, repeat only for a new edit, failure, or concrete unresolved risk. Keep production fixes separate from test cleanup and never weaken a test to hide a discovered defect.
+
 ## Package Scripts
 
 The commands in this section apply only inside the qgrid source repository. In a downstream
@@ -18,13 +24,17 @@ project, use that project's configured task and tool runner.
 Root:
 
 - `mise run check`: qgrid docs consistency, oxlint, and oxfmt check for the repo.
+- `mise run test`: DB-free API tests, SDK tests, and CLI packaging tests. No provider credentials are needed; the OAuth relay test opens a local loopback listener.
 - `mise run build`: recursive package build.
 - `mise run dev`: parallel package dev servers.
 
 API package `qgrid-api`:
 
-- `mise exec -- pnpm --filter qgrid-api test`: Vitest run.
-- `mise exec -- pnpm --filter qgrid-api test:watch`: standalone watch mode.
+- `mise exec -- pnpm --filter qgrid-api test:unit`: DB-free tests with per-file isolation. Add a test path to select a file.
+- `mise exec -- pnpm --filter qgrid-api test:db`: model/transaction suites requiring a prepared local PostgreSQL test template. Missing DB is a failure, not a skip.
+- `mise exec -- pnpm --filter qgrid-api test`: both suites, unit first.
+- `mise exec -- pnpm --filter qgrid-api test:watch`: DB-free watch mode; use `test:db --watch` for DB tests.
+- `mise exec -- pnpm --filter qgrid-api test:coverage`: both suites, with separate `coverage/unit` and `coverage/db` reports.
 - `mise exec -- pnpm --filter qgrid-api build`: Sonamu build.
 - `mise exec -- pnpm --filter qgrid-api sonamu`: run Sonamu CLI.
 
@@ -83,7 +93,11 @@ Run focused Vitest files from the owning package when possible, then broaden if 
 
 ## Smoke Scripts
 
-Smoke scripts assume a running qgrid server and real registered tokens. They can consume subscription quota; do not run them casually.
+Real-provider E2E requires a prepared isolated qgrid server, a registered token, and explicit opt-in. It consumes subscription quota; do not run it against production as part of routine checks. Never report mocked tests as live-provider verification.
+
+The default entry point is `packages/ai-sdk/e2e/e2e.ts` (`mise exec -- pnpm --dir packages/ai-sdk e2e`). It checks text, streaming, and tool-plus-structured output, and follows each returned `requestLogId` to the persisted parent and steps. Set `QGRID_REAL_PROVIDER_ACCEPTANCE=1`, `QGRID_URL`, and `QGRID_MODEL` explicitly. A comma-separated model list explicitly selects multiple provider runs. Each run uses a unique project label; no production logs are deleted. Exact prose, token counts, costs, and timing are not acceptance criteria.
+
+CI runs the DB-free tests plus existing package and empty-DB boot checks. Live E2E remains an explicit command; unavailable credentials or infrastructure mean unverified, not passed.
 
 OpenAI direct qgrid API:
 
@@ -109,16 +123,8 @@ AI SDK structured output:
 AI SDK tools plus structured output:
 
 - `packages/ai-sdk/e2e/tools-structured-output.ts`
-- This is the public-path release acceptance matrix: `qgrid()` HTTP/SSE,
-  `generateText`/`streamText`, OpenAI/Anthropic, direct final answers, and one
-  client-tool result followed by `Output.object`.
-- It consumes real provider quota and requires the explicit
-  `QGRID_REAL_PROVIDER_ACCEPTANCE=1` opt-in.
-- Uses `QGRID_URL`, `QGRID_ACCEPTANCE_OPENAI_MODEL`, and
-  `QGRID_ACCEPTANCE_ANTHROPIC_MODEL`. OpenAI direct-final coverage defaults to
-  10 generate plus 10 stream attempts and can be changed with
-  `QGRID_ACCEPTANCE_OPENAI_DIRECT_REPEATS_PER_MODE`. Request logs use the stable
-  project name `qgrid-ai-sdk-tools-output-acceptance`.
+- Focused regression probe for direct structured answers while tools are available, including OpenAI tuple output, streamed JSON, and streaming tool follow-up. The non-streaming tool execution happy path lives in the default E2E suite.
+- Uses the same explicit opt-in, server, and model selection as default E2E. Runs once per mode by default; set `QGRID_ACCEPTANCE_REPEATS` only for an intentional repeated probe.
 
 Image generation:
 
@@ -134,6 +140,11 @@ Image generation:
 Other scripts under `scripts/smoke-test-*` and `scripts/debug-*` are ad hoc probes. Read the script header and env vars before running.
 
 ## Common Error Triage
+
+Generated SSE handlers missing a newly added event field:
+
+- Sonamu's service generator reads runtime stream-decorator schemas. A stale API `dist` can keep the old event shape even with `sonamu sync --force`.
+- Run `mise exec -- pnpm --dir packages/api sonamu build api`, then `mise exec -- pnpm --dir packages/api sonamu sync --force`. Check the generated handler type and web typecheck; do not hand-edit generated services.
 
 `NO_OPENAI_WORKERS`:
 

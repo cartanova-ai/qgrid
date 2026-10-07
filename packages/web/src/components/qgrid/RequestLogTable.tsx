@@ -6,7 +6,7 @@ import { cacheHitRate, formatMicroUsd, formatUsd } from "@/lib/cost";
 import { requestModelDisplay } from "@/lib/request-model";
 import { type LogsSearch } from "@/routes/logs";
 import { QgridService, RequestLogService, TokenService } from "@/services/services.generated";
-import { type RequestLogOrderBy } from "@/services/sonamu.generated";
+import { RequestLogOrderBy } from "@/services/sonamu.generated";
 
 const PAGE_SIZE = 50;
 const UNASSIGNED = "__unassigned__";
@@ -145,13 +145,17 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
   const sortColumn = sort.slice(0, separator);
   const sortDirection = sort.slice(separator + 1) === "asc" ? "asc" : "desc";
 
-  const { data, isLoading } = RequestLogService.useRequestLogs("P", {
+  const { data, isLoading, isError } = RequestLogService.useRequestLogs("P", {
     num: PAGE_SIZE,
     page,
-    orderBy: sort as RequestLogOrderBy,
+    orderBy: sort,
     ...listFilters,
   });
-  const { data: costData } = QgridService.useTotalCost({ num: 0, page: 1, ...listFilters });
+  const { data: costData, isError: isCostError } = QgridService.useTotalCost({
+    num: 0,
+    page: 1,
+    ...listFilters,
+  });
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.ceil(total / PAGE_SIZE);
@@ -205,13 +209,23 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
           ))}
         </select>
         <div className="flex-1" />
-        <span className="text-[11px] text-sand-400">{total} results</span>
-        <span className="text-[11px] tabular-nums font-medium text-sienna-600">
-          {formatUsd(costData?.usd ?? 0)}
-        </span>
+        <span className="text-[11px] text-sand-400">{isError || !data ? "—" : total} results</span>
+        {isCostError ? (
+          <span role="alert" className="text-[11px] text-danger-500">
+            Failed to load total cost.
+          </span>
+        ) : (
+          <span className="text-[11px] tabular-nums font-medium text-sienna-600">
+            {costData ? formatUsd(costData.usd) : "—"}
+          </span>
+        )}
       </div>
 
-      {isLoading ? (
+      {isError ? (
+        <div role="alert" className="text-danger-500 text-center py-12 text-sm">
+          Failed to load request logs.
+        </div>
+      ) : isLoading ? (
         <div className="space-y-2">
           {Array.from({ length: 5 }).map((_, i) => (
             <div key={`skel-${i}`} className="h-8 bg-sand-100 rounded animate-pulse" />
@@ -245,7 +259,9 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                             // — 지표는 큰 값부터 보는 쪽이 대개 궁금한 것이다.
                             onClick={() =>
                               updateFilter({
-                                sort: `${col.sortKey}-${active && sortDirection === "desc" ? "asc" : "desc"}`,
+                                sort: RequestLogOrderBy.parse(
+                                  `${col.sortKey}-${active && sortDirection === "desc" ? "asc" : "desc"}`,
+                                ),
                               })
                             }
                             // button 은 폰트를 상속하지 않는다 — th 의 text-[10px] 을
