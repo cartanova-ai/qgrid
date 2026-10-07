@@ -300,6 +300,8 @@ const result = await generateText({
 
 ## Telemetry Logger
 
+서버와 AI SDK 2.10.0부터 qgrid provider의 `generateText` 결과에서는 `result.providerMetadata?.qgrid?.requestLogId`로 요청 로그 ID를 확인할 수 있습니다. `streamText`는 스트림 소비 후 `(await result.providerMetadata)?.qgrid?.requestLogId`로 확인합니다. 직접 API를 호출하면 `query` 응답과 스트림 `done` 이벤트의 최상위 `requestLogId`에 같은 값이 담깁니다. `logger: false` 또는 구버전 서버에서는 이 필드가 없으며, 툴 호출 후속 단계는 같은 요청 로그 ID를 공유합니다. 이 ID는 후속 요청 연결 상태가 아니며, 아래 telemetry logger를 쓰는 외부 provider에는 이 metadata가 추가되지 않습니다.
+
 qgrid provider가 아닌 모델(google, openai 직접 호출)에서도 같은 request log 대시보드를 사용하려면 `createQgridLogger`를 `experimental_telemetry`에 넣으면 됩니다.
 
 ```typescript

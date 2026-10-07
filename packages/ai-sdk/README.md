@@ -335,6 +335,8 @@ Remove green-screen or other background instructions when requesting transparenc
 
 ## Telemetry Logger
 
+With qgrid server and SDK 2.10.0+, read the parent request-log ID from `result.providerMetadata?.qgrid?.requestLogId` after `generateText`. For `streamText`, consume the stream first, then read `(await result.providerMetadata)?.qgrid?.requestLogId`. Raw API query responses and stream `done` events expose the same ID as top-level `requestLogId`. The field is omitted with `logger: false` or an older server. Tool-run steps share the parent ID; it is not continuation state. This metadata applies to the qgrid provider, not external providers using the telemetry logger below.
+
 To use the same request log dashboard with models that don't go through the qgrid provider (direct google/openai calls), pass `createQgridLogger` to `experimental_telemetry`.
 
 ```typescript

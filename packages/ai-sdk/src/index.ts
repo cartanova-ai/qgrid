@@ -122,6 +122,7 @@ function qgridProviderMetadata(data: QueryOutput) {
   );
   return {
     qgrid: {
+      ...(data.requestLogId !== undefined ? { requestLogId: data.requestLogId } : {}),
       model: data.model,
       requestedModel: data.requestedModel ?? data.model,
       modelFallbacks: data.modelFallbacks ?? [],

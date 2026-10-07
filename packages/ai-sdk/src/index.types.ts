@@ -170,6 +170,7 @@ export type QgridImageGenerationMetadata = {
 
 // 아래 타입들은 Qgrid에서 생성된 type을 그대로 가져와서 사용합니다.
 export type QueryOutput = {
+  requestLogId?: number;
   text: string;
   content?: Array<
     | { type: "text"; text: string }

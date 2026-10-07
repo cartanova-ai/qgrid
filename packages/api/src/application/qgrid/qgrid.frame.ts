@@ -281,7 +281,7 @@ class QgridFrameClass extends BaseFrameClass {
           lifecycle.runContext || threadCoord
             ? { ...lifecycle.runContext, ...(threadCoord ? { threadCoord } : {}) }
             : undefined;
-        return { ...result, runContext };
+        return { ...result, requestLogId, runContext };
       } catch (e) {
         logger.error(`query afterQuery failed: ${(e as Error).message}`);
         if (disconnect.signal.aborted) {
@@ -290,7 +290,7 @@ class QgridFrameClass extends BaseFrameClass {
           await finishRunWithError(requestLogId, (e as Error).message, resolvedArgs);
         }
         // provider 응답은 성공했으므로 로깅 장애가 생성 결과를 덮어쓰지 않는다.
-        return result;
+        return { ...result, requestLogId };
       }
     } finally {
       disconnect.dispose();
@@ -407,7 +407,13 @@ class QgridFrameClass extends BaseFrameClass {
           }
         }
       }
-      if (!clientClosed && !sse.closed) sse.publish("done", { ...streamResult, runContext });
+      if (!clientClosed && !sse.closed) {
+        sse.publish("done", {
+          ...streamResult,
+          ...(runInfo ? { requestLogId: runInfo.requestLogId } : {}),
+          runContext,
+        });
+      }
     } else if (streamError) {
       if (runInfo) await finishRunWithError(runInfo.requestLogId, streamError.message, args);
       if (!clientClosed && !sse.closed) sse.publish("error", { message: streamError.message });

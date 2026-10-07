@@ -271,6 +271,7 @@ describe("QgridFrame.query request logging", () => {
     expect(beforeQueryMock).toHaveBeenCalledWith(args);
     expect(afterQueryMock).toHaveBeenCalledWith(41, 0, args, expect.objectContaining({ text: "hello" }));
     expect(result.runContext).toEqual(queryOutput().runContext);
+    expect(result.requestLogId).toBe(41);
   });
 
   it("tokenName 을 활성 토큰 id 로 해석해 지정 요청으로 전달한다", async () => {
@@ -459,7 +460,7 @@ describe("QgridFrame.query request logging", () => {
     afterQueryMock.mockRejectedValueOnce(new Error("request log unavailable"));
     const args = { prompt: "hi", model: "openai/gpt-5-codex" };
 
-    await expect(QgridFrame.query(args)).resolves.toBe(output);
+    await expect(QgridFrame.query(args)).resolves.toEqual({ ...output, requestLogId: 41 });
 
     expect(finishRunWithErrorMock).toHaveBeenCalledWith(41, "request log unavailable", args);
   });
@@ -1065,7 +1066,7 @@ describe("QgridFrame.queryStream request logging", () => {
     expect(order).toEqual(["before", "dispatch", "after"]);
     expect(sse.publish).toHaveBeenCalledWith(
       "done",
-      expect.objectContaining({ runContext: streamOutput().runContext }),
+      expect.objectContaining({ requestLogId: 52, runContext: streamOutput().runContext }),
     );
   });
 

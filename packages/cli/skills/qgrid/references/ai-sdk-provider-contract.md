@@ -199,6 +199,10 @@ Reference images for image generation use normal AI SDK multimodal message parts
 
 ## Response mapping
 
+Since 2.10.0, `generateText` exposes the parent request-log ID at `result.providerMetadata?.qgrid?.requestLogId`. For `streamText`, consume the stream first, then read `(await result.providerMetadata)?.qgrid?.requestLogId`. The raw query response and stream `done` event carry optional top-level `requestLogId`.
+
+Update both server and SDK to use this metadata. The field is omitted when logging is disabled or an older server does not return it. Tool-run steps share the parent ID; `runContext.requestLogId` remains separate continuation state. This does not expose external-provider telemetry logger IDs or add IDs to stream delta/error events.
+
 qgrid response content maps to AI SDK content:
 
 - qgrid `text` -> AI SDK text content.

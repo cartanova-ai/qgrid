@@ -271,6 +271,8 @@ QGRID_PROJECT_NAME=my-service   # labels request logs per project
 
 In the dashboard you can filter the whole team's request logs by project — set `QGRID_PROJECT_NAME` in each project so workloads stay distinguishable as traffic grows.
 
+With server and AI SDK 2.10.0+, `generateText` returns the request-log ID at `result.providerMetadata?.qgrid?.requestLogId`. For `streamText`, consume the stream and read `(await result.providerMetadata)?.qgrid?.requestLogId`. Raw query responses and stream `done` events expose top-level `requestLogId`. Logging-disabled requests omit the field.
+
 ---
 
 ## Supported models

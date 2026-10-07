@@ -84,6 +84,7 @@ describe("qgrid AI SDK provider", () => {
     async (mode) => {
       let requestArgs: unknown;
       const response = {
+        requestLogId: 41,
         text: "astra reply",
         content: [{ type: "text", text: "astra reply" }],
         finishReason: "stop",
@@ -114,7 +115,7 @@ describe("qgrid AI SDK provider", () => {
       if (mode === "generate") {
         const result = await model.doGenerate(options);
         expect(result.response?.modelId).toBe("gpt-6-astra");
-        expect(result.providerMetadata?.qgrid).toMatchObject({ model: "gpt-6-astra" });
+        expect(result.providerMetadata?.qgrid).toMatchObject({ model: "gpt-6-astra", requestLogId: 41 });
       } else {
         const result = await model.doStream(options);
         const parts = [];
@@ -127,7 +128,7 @@ describe("qgrid AI SDK provider", () => {
             expect.objectContaining({
               type: "finish",
               providerMetadata: expect.objectContaining({
-                qgrid: expect.objectContaining({ model: "gpt-6-astra" }),
+                qgrid: expect.objectContaining({ model: "gpt-6-astra", requestLogId: 41 }),
               }),
             }),
           ]),

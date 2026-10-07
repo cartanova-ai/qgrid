@@ -38,6 +38,8 @@ Candidate discovery is only a hint; each candidate is rechecked and finalized in
 
 ## Tool-call loop
 
+Since 2.10.0, the frame returns the parent `requestLogId` at the top level of successful query responses and stream `done` events, including terminal text responses. It retains the allocated ID if logging postprocessing fails after provider success. The field is absent with `logger: false`. Tool-run steps share the ID, while `runContext.requestLogId` remains reserved for continuing pending tool calls. SDK callers read `providerMetadata.qgrid.requestLogId`; streaming metadata becomes available at completion. Delta and error events are unchanged.
+
 The AI SDK provider tracks pending tool-call IDs. When the next AI SDK call contains all required tool results, it sends the existing logging `runContext` when one was returned and sends the tool results. With `logger: false`, it still correlates the pending calls locally and continues the generation without a request-log id.
 
 qgrid converts tool results into continuation input for providers. Cold fallback still includes a "continue using these results" text input.

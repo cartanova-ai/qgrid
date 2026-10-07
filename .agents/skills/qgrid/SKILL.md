@@ -55,6 +55,12 @@ Request logging is enabled by default. Use `providerOptions.qgrid.logger: false`
 - Keep OpenAI Codex built-in tools, apps, plugins, skills, web search, shell, and environment instruction blocks disabled unless the user explicitly asks for agentic Codex behavior.
 - Treat OpenAI image generation as opt-in outside dashboard chat. In 2.9.8, OpenAI `qgrid_chat` opts into raw API `imageGeneration: "auto"` on every turn; the public AI SDK option remains boolean. Ordinary images use the hosted Responses image tool; a server-executed transparent-image function calls Codex standalone Images directly with subscription credentials. Do not reintroduce a client decision tool followed by another GPT generation request. Image costs remain API-price estimates.
 
+## Request log IDs (2.10.0+)
+
+- Successful raw query responses and stream `done` events expose optional top-level `requestLogId`. The AI SDK exposes it as `providerMetadata.qgrid.requestLogId`; await stream metadata after consuming the stream.
+- The ID identifies the parent request log and stays the same across tool-run steps. It is omitted with `logger: false`. Keep `runContext.requestLogId` for tool continuation only; do not replay the top-level ID as continuation state.
+- Update both server and AI SDK to 2.10.0 or later to consume the metadata. Older servers may omit the ID. This contract does not add IDs to delta or error events or change `createQgridLogger` for external providers.
+
 ## Automatic chat images (2.9.8+)
 
 - Raw `imageGeneration: "auto"` permits text-only replies; explicit `true` still requires an image. Both use non-stream requests. Auto mode rejects caller tools and output schemas.

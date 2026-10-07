@@ -187,6 +187,7 @@ export const CostSource = z.enum(["provider", "pricing_table", "mixed"]);
 export type CostSource = z.infer<typeof CostSource>;
 
 export const QueryOutput = z.object({
+  requestLogId: z.number().optional(),
   text: z.string(),
   content: z.array(QgridContent),
   finishReason: FinishReason,
@@ -221,6 +222,7 @@ export const StreamEvents = z.object({
     input: z.string(),
   }),
   done: z.object({
+    requestLogId: z.number().optional(),
     text: z.string(),
     model: z.string().optional(),
     requestedModel: z.string().optional(),

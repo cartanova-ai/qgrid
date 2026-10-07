@@ -270,6 +270,8 @@ QGRID_PROJECT_NAME=my-service   # request log 프로젝트 라벨
 
 대시보드에서 전체 팀의 request log를 프로젝트별로 필터링하여 확인할 수 있습니다. 트래픽이 늘어도 워크로드를 구분할 수 있도록 각 프로젝트에 `QGRID_PROJECT_NAME`을 설정하세요.
 
+서버와 AI SDK 2.10.0부터 `generateText` 결과의 `result.providerMetadata?.qgrid?.requestLogId`로 요청 로그 ID를 확인할 수 있습니다. `streamText`는 스트림 소비 후 `(await result.providerMetadata)?.qgrid?.requestLogId`로 읽습니다. 직접 API 호출에서는 query 응답과 스트림 `done` 이벤트의 최상위 `requestLogId`를 사용합니다. 로깅을 끈 요청은 이 필드를 생략합니다.
+
 ---
 
 ## 지원 모델
