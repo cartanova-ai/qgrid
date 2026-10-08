@@ -12,8 +12,8 @@ AI SDK v6 custom `LanguageModelV3` provider for [qgrid](https://github.com/carta
 +import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
  const { text } = await generateText({
--  model: openai("gpt-5.6-luna"),
-+  model: qgrid("openai/gpt-5.6-luna"),
+-  model: openai("gpt-6-luna"),
++  model: qgrid("openai/gpt-6-luna"),
    prompt: "What's the weather in Seoul?",
  });
 ```
@@ -43,7 +43,7 @@ import { generateText } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: "What's the weather in Seoul?",
 });
 ```
@@ -62,7 +62,7 @@ import { generateText } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   system: "You are an academic paper summarizer.",
   prompt: paperText,
 });
@@ -112,7 +112,7 @@ import { streamText } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
 const { textStream } = streamText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: "Explain the benefits of TypeScript",
 });
 
@@ -129,7 +129,7 @@ import { qgrid } from "@cartanova/qgrid-ai-sdk";
 import { z } from "zod";
 
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: "What's the weather in Seoul?",
   tools: {
     getWeather: tool({
@@ -250,7 +250,7 @@ For multi-turn conversations, pass a caller-side domain ID (game session ID, cha
 
 ```typescript
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: nextTurnPrompt,
   providerOptions: { qgrid: { sessionKey: "game-session-123" } },
 });

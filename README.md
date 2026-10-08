@@ -33,7 +33,7 @@ As a result:
 - **Tool Calling + Agent Loop** — Run tool calls and multi-step agent loops on a subscription token. Not just a plain text proxy.
 - **AI SDK compatible** — Swap a single `model` line in your existing code. `generateText`, `streamText`, structured output, and tool calls all work.
   ```ts
-  model: qgrid("openai/gpt-5.6-luna")  // just change this
+  model: qgrid("openai/gpt-6-luna")  // just change this
   ```
 - **Pool N subscriptions** — Combine teammates' subscription accounts for parallel processing. Smooth weighted routing distributes requests across tokens, while per-token quota thresholds exclude overloaded tokens.
 - **Request Log dashboard** — Inspect token usage, cost, cache hits, TTFT, tool-call traces, and reasoning for every request in real time through a web UI.
@@ -82,8 +82,8 @@ pnpm add @cartanova/qgrid-ai-sdk
 +import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
  const { text } = await generateText({
--  model: openai("gpt-5.6-luna"),
-+  model: qgrid("openai/gpt-5.6-luna"),
+-  model: openai("gpt-6-luna"),
++  model: qgrid("openai/gpt-6-luna"),
    prompt: "What's the weather in Seoul?",
  });
 ```
@@ -127,7 +127,7 @@ For detailed usage, see the [`@cartanova/qgrid-ai-sdk` README](./packages/ai-sdk
 
 ```typescript
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   system: "You are an academic paper summarizer.",
   prompt: paperText,
 });
@@ -153,7 +153,7 @@ const { output } = await generateText({
 
 ```typescript
 const { textStream } = streamText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: "Explain the benefits of TypeScript",
 });
 
@@ -166,7 +166,7 @@ for await (const chunk of textStream) {
 
 ```typescript
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: "What's the weather in Seoul?",
   tools: {
     getWeather: tool({
@@ -184,7 +184,7 @@ const { text } = await generateText({
 ```typescript
 // Replay full history with stable opaque prompt-cache affinity (OpenAI)
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: nextTurn,
   providerOptions: { qgrid: { sessionKey: "chat-room-42" } },
 });

@@ -33,7 +33,7 @@ Qgrid는 두 구독 기반 런타임 위에 AI SDK `LanguageModelV3` custom prov
 - **Tool Calling + Agent Loop** — 구독 토큰으로 tool-call, multi-step agent loop 가능. 단순 텍스트 프록시가 아님.
 - **AI SDK 호환** — 기존 코드에서 `model` 한 줄만 교체. `generateText`, `streamText`, structured output, tool-call 전부 동작.
   ```ts
-  model: qgrid("openai/gpt-5.6-luna")  // 이것만 바꾸면 됨
+  model: qgrid("openai/gpt-6-luna")  // 이것만 바꾸면 됨
   ```
 - **N개 구독 풀링** — 팀원 구독 계정을 모아서 병렬 처리. smooth weighted routing으로 요청을 토큰에 분산. 토큰별 quota threshold로 사용률 초과 토큰은 라우팅에서 자동 제외.
 - **Request Log 대시보드** — 매 요청의 토큰 사용량, 비용, 캐시 적중, TTFT, tool-call 내역, reasoning을 웹 UI에서 실시간 확인.
@@ -82,8 +82,8 @@ pnpm add @cartanova/qgrid-ai-sdk
 +import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
  const { text } = await generateText({
--  model: openai("gpt-5.6-luna"),
-+  model: qgrid("openai/gpt-5.6-luna"),
+-  model: openai("gpt-6-luna"),
++  model: qgrid("openai/gpt-6-luna"),
    prompt: "서울 날씨 알려줘",
  });
 ```
@@ -127,7 +127,7 @@ pnpm add @cartanova/qgrid-ai-sdk
 
 ```typescript
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   system: "당신은 학술 논문 요약가입니다.",
   prompt: paperText,
 });
@@ -153,7 +153,7 @@ const { output } = await generateText({
 
 ```typescript
 const { textStream } = streamText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: "TypeScript의 장점을 설명해줘",
 });
 
@@ -166,7 +166,7 @@ for await (const chunk of textStream) {
 
 ```typescript
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: "서울 날씨 알려줘",
   tools: {
     getWeather: tool({
@@ -184,7 +184,7 @@ const { text } = await generateText({
 ```typescript
 // 전체 history를 재전송하고 불투명 prompt-cache affinity 유지 (OpenAI)
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: nextTurn,
   providerOptions: { qgrid: { sessionKey: "chat-room-42" } },
 });

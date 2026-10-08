@@ -12,8 +12,8 @@ AI SDK v6 custom `LanguageModelV3` provider for [qgrid](https://github.com/carta
 +import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
  const { text } = await generateText({
--  model: openai("gpt-5.6-luna"),
-+  model: qgrid("openai/gpt-5.6-luna"),
+-  model: openai("gpt-6-luna"),
++  model: qgrid("openai/gpt-6-luna"),
    prompt: "서울 날씨 알려줘",
  });
 ```
@@ -43,7 +43,7 @@ import { generateText } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: "서울 날씨 알려줘",
 });
 ```
@@ -62,7 +62,7 @@ import { generateText } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   system: "당신은 학술 논문 요약가입니다.",
   prompt: paperText,
 });
@@ -104,7 +104,7 @@ import { streamText } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
 const { textStream } = streamText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: "TypeScript의 장점을 설명해줘",
 });
 
@@ -121,7 +121,7 @@ import { qgrid } from "@cartanova/qgrid-ai-sdk";
 import { z } from "zod";
 
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: "서울 날씨 알려줘",
   tools: {
     getWeather: tool({
@@ -241,7 +241,7 @@ Anthropic `generateText` 요청에는 전역 설정을 바꾸지 않는 요청�
 
 ```typescript
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: nextTurnPrompt,
   providerOptions: { qgrid: { sessionKey: "game-session-123" } },
 });

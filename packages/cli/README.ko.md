@@ -132,7 +132,7 @@ import { generateText } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
 const { text } = await generateText({
-  model: qgrid("openai/gpt-5.6-luna"),
+  model: qgrid("openai/gpt-6-luna"),
   prompt: "서울 날씨 알려줘",
 });
 ```
