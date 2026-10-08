@@ -45,6 +45,7 @@ const DEFAULT_MODEL = "anthropic/claude-fable-5-1";
 //  - `gpt-5.5`: Codex/ChatGPT 경로에서 2026-10-14 은퇴 예정(대체 gpt-6.1-sol / gpt-6-luna).
 //  - `claude-opus-4`, `claude-sonnet-4`: 2026-06-15 retired, Claude Code 에서 모델 오류.
 //  - `claude-opus-4-1`: 2026-08-05 retired, Claude Code 가 claude-opus-5-5 로 대체 서빙.
+//  - `claude-sonnet-4-5`: 2026-09-30 deprecated, 2026-11-30 retirement 예정(대체 claude-sonnet-5-5).
 //  - `claude-sonnet-4-7`: 공식 카탈로그에 없는 유령 항목.
 const MODEL_PRESET_GROUPS: { label: string; models: string[] }[] = [
   {
@@ -74,7 +75,6 @@ const MODEL_PRESET_GROUPS: { label: string; models: string[] }[] = [
       "anthropic/claude-opus-4-6",
       "anthropic/claude-opus-4-5",
       "anthropic/claude-sonnet-4-6",
-      "anthropic/claude-sonnet-4-5",
       "anthropic/claude-haiku-4-5",
     ],
   },
