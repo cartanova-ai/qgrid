@@ -1,6 +1,7 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import ChevronLeftIcon from "~icons/lucide/chevron-left";
 import ChevronRightIcon from "~icons/lucide/chevron-right";
+import RefreshIcon from "~icons/lucide/refresh-cw";
 
 import { cacheHitRate, formatMicroUsd, formatUsd } from "@/lib/cost";
 import { requestModelDisplay } from "@/lib/request-model";
@@ -145,13 +146,20 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
   const sortColumn = sort.slice(0, separator);
   const sortDirection = sort.slice(separator + 1) === "asc" ? "asc" : "desc";
 
-  const { data, isLoading, isError } = RequestLogService.useRequestLogs("P", {
-    num: PAGE_SIZE,
-    page,
-    orderBy: sort,
-    ...listFilters,
-  });
-  const { data: costData, isError: isCostError } = QgridService.useTotalCost({
+  const { data, isLoading, isError, refresh, isRefreshing } = RequestLogService.useRequestLogs(
+    "P",
+    {
+      num: PAGE_SIZE,
+      page,
+      orderBy: sort,
+      ...listFilters,
+    },
+  );
+  const {
+    data: costData,
+    isError: isCostError,
+    refresh: refreshCost,
+  } = QgridService.useTotalCost({
     num: 0,
     page: 1,
     ...listFilters,
@@ -208,6 +216,17 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
             </option>
           ))}
         </select>
+        {/* 목록과 합계 비용을 같은 필터로 다시 읽는다. 필터 셀렉트의 선택지는 갱신하지 않는다. */}
+        <button
+          type="button"
+          onClick={() => void Promise.all([refresh(), refreshCost()])}
+          disabled={isRefreshing}
+          aria-label="Reload"
+          title="Reload"
+          className="p-1 rounded text-sand-400 hover:text-sand-600 disabled:opacity-30 transition-colors"
+        >
+          <RefreshIcon className={isRefreshing ? "size-3.5 animate-spin" : "size-3.5"} />
+        </button>
         <div className="flex-1" />
         <span className="text-[11px] text-sand-400">{isError || !data ? "—" : total} results</span>
         {isCostError ? (
