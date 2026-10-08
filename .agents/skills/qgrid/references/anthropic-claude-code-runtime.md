@@ -77,7 +77,7 @@ claude -p
   --model <canonical-model-or-1m-suffix>
   --system-prompt <text>                  # small system prompt
   --system-prompt-file <path>             # large system prompt
-  --thinking disabled                       # omitted for Fable 5/5.1, Opus 5, Opus 5.5 and Sonnet 5.5
+  --thinking disabled                       # omitted for Fable 5/5.1, Opus 5, Opus 5.5, Sonnet 5.5 and Haiku 5.5
   --effort <effort-or-low>
   --disable-slash-commands
   --session-id <uuid>
@@ -97,7 +97,7 @@ Important details:
 - Large system prompts over 64 KiB are written to a temporary file to avoid argv `E2BIG` — this
   same branch absorbs large injected schema contracts, so the old 64 KiB schema argv limit no
   longer applies (only the global 512 KiB caller-schema complexity limit remains).
-- `--thinking disabled`, `MAX_THINKING_TOKENS=0`, and adaptive thinking env suppression keep thinking off for existing models. Fable 5, Fable 5.1, Opus 5.5 and Sonnet 5.5 require always-on adaptive thinking (Fable: CLI catalog `rejects_disabled_thinking`; Opus 5.5: official spec, thinking cannot be turned off; Sonnet 5.5: API `{type: "disabled"}` returns 400 and the CLI catalog marks `rejects_disabled_thinking`). Opus 5 defaults to adaptive thinking and rejects disabled thinking at `xhigh`/`max` effort. qgrid omits all three suppressors for these models (`usesAdaptiveThinking`) and uses `effort` to control depth.
+- `--thinking disabled`, `MAX_THINKING_TOKENS=0`, and adaptive thinking env suppression keep thinking off for existing models. Fable 5, Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5 require always-on adaptive thinking (Fable: CLI catalog `rejects_disabled_thinking`; Opus 5.5: official spec, thinking cannot be turned off; Sonnet 5.5: API `{type: "disabled"}` returns 400 and the CLI catalog marks `rejects_disabled_thinking`; Haiku 5.5 (released 2026-10-07): the API accepts disabled thinking only at `high` effort or below and returns 400 at `xhigh`/`max`, and the Claude Code 2.1.293 catalog marks `rejects_disabled_thinking`). Opus 5 defaults to adaptive thinking and rejects disabled thinking at `xhigh`/`max` effort. qgrid omits all three suppressors for these models (`usesAdaptiveThinking`) and uses `effort` to control depth.
 
 ## Spawn env
 
@@ -260,6 +260,7 @@ qgrid's exact 1M support set currently includes:
 - `claude-opus-5-5`
 - `claude-sonnet-5-5`
 - `claude-sonnet-5`
+- `claude-haiku-5-5`
 - `claude-sonnet-4-6`
 - `claude-opus-4-6`
 - `claude-opus-4-8`

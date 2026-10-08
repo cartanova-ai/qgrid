@@ -150,7 +150,8 @@ export type QgridSupportedModel =
   | "anthropic/claude-opus-4-8"
   | "anthropic/claude-opus-5"
   | "anthropic/claude-opus-5-5"
-  | "anthropic/claude-sonnet-5-5";
+  | "anthropic/claude-sonnet-5-5"
+  | "anthropic/claude-haiku-5-5";
 
 /** Observed image response values. Usage is response-level and appears on the first image only. */
 export type QgridImageGenerationMetadata = {

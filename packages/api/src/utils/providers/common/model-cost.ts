@@ -157,7 +157,7 @@ const OPENAI_COSTS: Record<string, OpenAIModelSpec> = {
 function anthropicCosts(
   inputTokens: number,
   outputTokens: number,
-  overrides: Pick<Partial<ModelCosts>, "cachedInputTokens"> = {},
+  overrides: Pick<Partial<ModelCosts>, "cachedInputTokens" | "longContext"> = {},
 ): ModelCosts {
   return {
     inputTokens,
@@ -169,10 +169,13 @@ function anthropicCosts(
     cacheCreationInputTokens: inputTokens * 2,
     cacheCreationInputTokens5m: inputTokens * 1.25,
     cacheCreationInputTokens1h: inputTokens * 2,
+    // Haiku 5.5 처럼 프롬프트 길이 티어가 있는 모델만 long-context 배율을 가진다.
+    ...(overrides.longContext ? { longContext: overrides.longContext } : {}),
   };
 }
 
-// 가격 출처: https://platform.claude.com/docs/en/about-claude/pricing (2026-09-23 확인, 기존 모델 단가 변동 없음)
+// 가격 출처: https://platform.claude.com/docs/en/about-claude/pricing (2026-10-08 확인. 2026-10-07 에 Sonnet 5.5
+// cache read 가 $0.20→$0.10(0.05x)으로 인하됐고, 그 외 기존 모델 단가는 변동 없음)
 const ANTHROPIC_COSTS: Record<string, ModelCosts> = {
   // Fable 5.1 (2026-09-01 출시): input/output 은 Fable 5 와 같고 cache read 만 0.025x($0.25) 특례.
   // @see https://platform.claude.com/docs/en/models/fable-5-1/overview
@@ -200,9 +203,23 @@ const ANTHROPIC_COSTS: Record<string, ModelCosts> = {
   // Sonnet 5 의 introductory $2/$10 이 정식 단가로 확정됐다. 2026-09-01 에 예정됐던 $3/$15 인상은
   // 취소됐으므로 날짜 분기 없이 고정 단가로 계산한다.
   "claude-sonnet-5": anthropicCosts(2, 10),
-  // Sonnet 5.5 (2026-09-29 출시): Sonnet 5 와 같은 $2/$10, cache read 는 표준 0.1x($0.20).
-  // @see https://platform.claude.com/docs/en/about-claude/pricing
-  "claude-sonnet-5-5": anthropicCosts(2, 10),
+  // Sonnet 5.5 (2026-09-28 출시): Sonnet 5 와 같은 $2/$10. cache read 는 출시 시 표준 0.1x($0.20)였다가
+  // 2026-10-07 Haiku 5.5 출시와 함께 Opus 5.5 와 같은 0.05x($0.10)로 인하됐다(API 릴리스 노트). 비용은 요청 시점
+  // 단가로 기록되므로 날짜 분기 없이 현행 단가만 둔다. cache write 는 표준 배율($2.50/$4).
+  // @see https://platform.claude.com/docs/en/release-notes/overview (2026-10-07)
+  "claude-sonnet-5-5": anthropicCosts(2, 10, { cachedInputTokens: 0.1 }),
+  // Haiku 5.5 (2026-10-07 출시): 프롬프트 길이 티어 단가. 100K 이하 $0.10/$0.50, cache read 0.1x($0.01),
+  // cache write 5m $0.125 / 1h $0.20. 입력이 100K 를 넘으면 input/cache read/cache write/output 모두 5x
+  // ($0.50/$0.05/$0.625·$1/$2.50)가 요청 전체에 적용된다. 1M 컨텍스트 모델 중 유일하게 길이별 단가를 쓴다.
+  // @see https://platform.claude.com/docs/en/models/haiku-5-5/overview
+  "claude-haiku-5-5": anthropicCosts(0.1, 0.5, {
+    longContext: {
+      threshold: 100_000,
+      inputMultiplier: 5,
+      cachedInputMultiplier: 5,
+      outputMultiplier: 5,
+    },
+  }),
 };
 
 // gpt-5.3-codex-spark 는 research preview 로 공식 token 단가가 아직 final 이 아니다.

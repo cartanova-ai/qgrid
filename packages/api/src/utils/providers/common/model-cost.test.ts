@@ -12,6 +12,25 @@ describe("calculateCostUsd", () => {
     ).toBeCloseTo(expected, 10);
   });
   it.each([
+    [100_000, 0.0105],
+    [100_001, 0.0525005],
+  ])("Haiku 5.5 applies the over-100K prompt tier to the whole request (%i input)", (inputTokens, expected) => {
+    expect(
+      calculateCostUsd("anthropic/claude-haiku-5-5", { inputTokens, outputTokens: 1_000 }),
+    ).toBeCloseTo(expected, 10);
+  });
+  it("Haiku 5.5 over-100K tier multiplies cache read and cache write rates by 5x", () => {
+    // 50K uncached × $0.50 + 1K output × $2.50 + 200K cache read × $0.05 + 50K 1h cache write × $1.
+    expect(
+      calculateCostUsd("anthropic/claude-haiku-5-5", {
+        inputTokens: 300_000,
+        outputTokens: 1_000,
+        cachedInputTokens: 200_000,
+        cacheCreationInputTokens: 50_000,
+      }),
+    ).toBeCloseTo(0.0875, 10);
+  });
+  it.each([
     ["gpt-6-astra", 10, 50, 1, 12.5],
     ["gpt-6.1-sol", 2, 10, 0.1, 2.5],
     ["gpt-6-sol", 2, 10, 0.2, 2.5],
@@ -60,7 +79,9 @@ describe("calculateCostUsd", () => {
     // Opus 5.5 는 cache read 만 0.05x 특례($0.20), cache write 배율은 표준(5m $5 / 1h $8).
     ["claude-opus-5-5", 4, 20, 0.2, 8],
     ["claude-sonnet-5", 2, 10, 0.2, 4],
-    ["claude-sonnet-5-5", 2, 10, 0.2, 4],
+    // Sonnet 5.5 는 2026-10-07 부터 cache read 0.05x($0.10), cache write 배율은 표준(5m $2.50 / 1h $4).
+    ["claude-sonnet-5-5", 2, 10, 0.1, 4],
+    ["claude-haiku-5-5", 0.1, 0.5, 0.01, 0.2],
   ])(
     "%s official Anthropic rates for 5m/1h cache writes",
     (model, inputTokens, outputTokens, cachedInputTokens, cacheCreationInputTokens) => {
