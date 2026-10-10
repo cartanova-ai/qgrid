@@ -1,7 +1,7 @@
 version: "3.8"
 services:
   api:
-    image: qgrid-dev0:2.10.2-claude-2.1.296
+    image: ${QGRID_IMAGE:?Set QGRID_IMAGE to a published qgrid image digest}
     networks:
       - host
     secrets:

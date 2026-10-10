@@ -7,6 +7,7 @@ on:
 permissions:
   id-token: write # Required for npm trusted publisher (OIDC)
   contents: read
+  packages: write # Publish the release container to GHCR.
 
 jobs:
   build-and-publish:
@@ -108,3 +109,75 @@ jobs:
         run: mise run publish:packages
         env:
           NPM_CONFIG_PROVENANCE: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve release image
+        id: image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          VERSION="$(jq -r .version packages/cli/package.json)"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:$VERSION"
+          echo "name=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          PACKAGE="${GITHUB_REPOSITORY#*/}"
+          if gh api --paginate --slurp "/orgs/$GITHUB_REPOSITORY_OWNER/packages/container/$PACKAGE/versions?per_page=100" \
+            > "$RUNNER_TEMP/image-versions.json" 2> "$RUNNER_TEMP/image-inspect.log"; then
+            EXISTS="$(jq --arg version "$VERSION" 'any(.[][]; .metadata.container.tags | index($version) != null)' "$RUNNER_TEMP/image-versions.json")"
+            echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
+          elif grep -q 'HTTP 404' "$RUNNER_TEMP/image-inspect.log"; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            cat "$RUNNER_TEMP/image-inspect.log"
+            exit 1
+          fi
+
+      - name: Build release image
+        if: steps.image.outputs.exists == 'false'
+        uses: docker/build-push-action@v7
+        with:
+          context: deploy/docker
+          load: true
+          tags: ${{ steps.image.outputs.name }}
+          build-args: QGRID_VERSION=${{ steps.image.outputs.version }}
+
+      - name: Smoke test release image
+        if: steps.image.outputs.exists == 'false'
+        env:
+          QGRID_RELEASE_IMAGE: ${{ steps.image.outputs.name }}
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        shell: bash
+        run: |
+          docker run --rm --entrypoint claude "$QGRID_RELEASE_IMAGE" --version
+          docker exec "$POSTGRES_CONTAINER" createdb -U postgres qgrid_docker_smoke
+          docker run -d --name qgrid-image-smoke --network host \
+            -e QGRID_DB_HOST=127.0.0.1 -e QGRID_DB_PORT=5432 \
+            -e QGRID_DB_USER=postgres -e QGRID_DB_PASSWORD=postgres \
+            -e QGRID_DB_NAME=qgrid_docker_smoke -e PORT=44991 \
+            "$QGRID_RELEASE_IMAGE"
+          trap 'docker logs qgrid-image-smoke; docker rm -f qgrid-image-smoke' EXIT
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:44991/api/qgrid/health; then break; fi
+            test "$(docker inspect -f '{{.State.Running}}' qgrid-image-smoke)" = true || exit 1
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:44991/api/qgrid/health
+          APPLIED="$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -d qgrid_docker_smoke -Atc 'select count(*) from knex_migrations')"
+          EXPECTED="$(docker exec qgrid-image-smoke sh -c 'ls src/migrations/*.ts | wc -l')"
+          test "$APPLIED" = "$EXPECTED"
+
+      - name: Publish release image
+        if: steps.image.outputs.exists == 'false'
+        env:
+          QGRID_RELEASE_IMAGE: ${{ steps.image.outputs.name }}
+        run: docker push "$QGRID_RELEASE_IMAGE"

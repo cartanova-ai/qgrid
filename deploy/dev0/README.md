@@ -1,47 +1,53 @@
 # dev0 Swarm deployment
 
-This deployment keeps qgrid 2.10.2 and Claude Code 2.1.296, the versions installed
-on dev0 before the PM2 migration. It runs one replica, constrained to dev0.
-The packaged server starts directly so neither qgrid nor Claude Code updates at
-startup. Node runs as UID 1000 under tini.
+Release images are published as `ghcr.io/cartanova-ai/qgrid:VERSION` by
+`.github/workflows/build-and-publish.yml`, after npm publication and container
+smoke checks. The image installs that exact published CLI version. Existing
+image tags are not rebuilt; changes to the image require a new CLI release.
 
-The external host network preserves the existing `172.19.0.1:44900` Caddy
-upstream and loopback OAuth callback listeners. No new port is published. Keep
-the existing Caddy authentication rules. The existing PostgreSQL database is
-used without moving its data or changing its credentials.
+After the first publication, set the `qgrid` container package to **Public** in
+the GitHub organization's package settings. GitHub initially creates private
+packages even for public repositories. Confirm an unauthenticated pull before
+using dev0's deployment command. No registry credentials belong on dev0.
 
-Runtime environment values are stored in the external Docker secret
-`qgrid-dev0-env-20261010`, sourced from the live PM2 process. Never commit the
-secret or the old ecosystem configuration. The entrypoint maps `QGRID_DB_*` to
-the internal `SONAMU_DB_*` variables, as the packaged CLI does.
+Copy `stack.yml`, `deploy.sh`, and this README to `/home/cartanova/qgrid-swarm`.
+Deploy a published version from that directory:
 
-Persistent data on dev0:
+```sh
+bash deploy.sh 2.10.3
+```
+
+The script pulls the image before changing the service, resolves its immutable
+digest, deploys the stack, and checks the requested container's health. On
+success, `deployed-image.env` records the deployed digest. Releases do not
+automatically upgrade dev0; deployment is an explicit operation.
+
+The stack runs one replica constrained to dev0. Host networking preserves the
+existing `172.19.0.1:44900` Caddy upstream and loopback OAuth callbacks. No new
+port is published. Keep the existing Caddy authentication rules.
+
+Runtime values remain in the external Docker secret `qgrid-dev0-env-20261010`.
+The image's optional `/run/secrets/qgrid-env` JSON file overrides environment
+values. Public `QGRID_DB_*` values are mapped to `SONAMU_DB_*` just as in the CLI.
+The existing PostgreSQL database is retained in place. Persistent session data:
 
 - `/mnt/data-ssd/qgrid/anthropic-config` mounts at `/tmp/qgrid-anthropic-config`.
 - `/mnt/data-ssd/qgrid/anthropic-cwd` mounts at `/tmp/qgrid-anthropic`.
-- `/home/cartanova/qgrid-swarm` holds the deployment files and build log.
 
-Build and deploy on dev0 from `/home/cartanova/qgrid-swarm`:
+Swarm owns restart and recovery. Updates use `stop-first`; active responses can
+be interrupted because qgrid has no SIGTERM drain handler. Use a quiet traffic
+window. The health check allows three minutes for startup.
+
+Operational commands:
 
 ```sh
-docker build -t qgrid-dev0:2.10.2-claude-2.1.296 .
-docker stack deploy --resolve-image never -c stack.yml qgrid
 docker service ps qgrid_api
-curl -fsS http://172.19.0.1:44900/api/qgrid/health
+curl -fsS https://qgrid.cartanova.ai/api/qgrid/health
+docker service update --force qgrid_api
+docker service rollback qgrid_api
 ```
 
-The image is local to dev0, matching its placement constraint. Change both the
-Dockerfile versions and the stack image tag for an upgrade. Swarm image rollback
-does not undo database migrations; assess migrations separately before upgrades.
-
-Restart using `docker service update --force qgrid_api`. The dashboard restart
-button remains disabled because this release recognizes only PM2. Updates use
-`stop-first`; active responses can be interrupted because this qgrid release has
-no SIGTERM drain handler. Use a quiet traffic window. The health check allows
-three minutes for startup.
-
-PM2, its logrotate module, reboot cron entry, logs, and old deployment settings
-were removed after the Swarm migration at the user's request. Swarm now owns
-the process lifecycle; there is no retained PM2 rollback configuration.
-The full database backup was canceled at the user's request; this migration
-preserves the existing database in place and does not change qgrid's version.
+Image rollback does not reverse database migrations. Check release migrations
+before upgrading or rolling back. Re-run the deploy script with the intended
+version to reconcile a manual rollback. PM2 and its old settings were removed;
+there is no retained PM2 rollback path. No database backup is created by deploy.
