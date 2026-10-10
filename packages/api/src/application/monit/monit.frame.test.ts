@@ -36,12 +36,12 @@ describe("MonitFrame.monitLogs", () => {
     const chunk = await MonitFrame.monitLogs();
     expect(chunk.processStartedAt).toBe(monitLogBuffer.processStartedAt);
     expect(chunk.dropped).toBe(0);
-    expect(chunk.nextCursor).toBe(monitLogBuffer.latestSeq);
+    expect(chunk.nextCursor).toBe(monitLogBuffer.after(undefined, 1).nextCursor);
     expect(chunk.entries.at(-1)?.text).toBe("second line");
   });
 
   it("returns only entries newer than the cursor with no boundary duplicates", async () => {
-    const baseline = monitLogBuffer.latestSeq;
+    const baseline = monitLogBuffer.after(undefined, 1).nextCursor;
     push("after baseline 1");
     push("after baseline 2");
 
@@ -50,7 +50,7 @@ describe("MonitFrame.monitLogs", () => {
       "after baseline 1",
       "after baseline 2",
     ]);
-    expect(chunk.nextCursor).toBe(monitLogBuffer.latestSeq);
+    expect(chunk.nextCursor).toBe(monitLogBuffer.after(undefined, 1).nextCursor);
 
     const followUp = await MonitFrame.monitLogs(chunk.nextCursor);
     expect(followUp.entries).toEqual([]);
@@ -90,7 +90,7 @@ describe("MonitFrame.monitLogs", () => {
       properties: { accessToken: "forbidden-property-secret", refreshToken: "also-forbidden" },
     });
 
-    const chunk = await MonitFrame.monitLogs(monitLogBuffer.latestSeq - 1);
+    const chunk = await MonitFrame.monitLogs(monitLogBuffer.after(undefined, 1).nextCursor - 1);
     const serialized = JSON.stringify(chunk);
     expect(serialized).not.toContain("forbidden-property-secret");
     expect(serialized).not.toContain("also-forbidden");
@@ -115,14 +115,13 @@ describe("MonitFrame.monitLogs", () => {
   it("piggybacks live vitals on every chunk, zeroed before dispatchers boot", async () => {
     QgridDispatcher.openaiDispatcher = {
       inFlight: 3,
-      quotaByToken: [
+      getQuotaSnapshot: () => [
         { name: "openai/haze", usedPercent: 41, threshold: 80, blocked: false, resetsAt: null },
         { name: "openai/nk", usedPercent: null, threshold: null, blocked: false, resetsAt: null },
       ],
     } as never;
     QgridDispatcher.anthropicDispatcher = {
-      tokenCount: 8,
-      tokenNames: ["anthropic/haze", "anthropic/noa"],
+      tokenPool: new Map([[1, {name: "anthropic/noa"}], [2, {name: "anthropic/haze"}]]),
       inFlight: 2,
     } as never;
     try {
@@ -133,7 +132,7 @@ describe("MonitFrame.monitLogs", () => {
           { name: "openai/haze", usedPercent: 41, threshold: 80, blocked: false, resetsAt: null },
           { name: "openai/nk", usedPercent: null, threshold: null, blocked: false, resetsAt: null },
         ],
-        anthropicTokenCount: 8,
+        anthropicTokenCount: 2,
         anthropicTokenNames: ["anthropic/haze", "anthropic/noa"],
         anthropicInFlight: 2,
       });

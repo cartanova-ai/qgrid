@@ -123,6 +123,20 @@ describe("AnthropicDispatcher", () => {
   it("토큰 없으면 에러", async () => {
     const d = new AnthropicDispatcher();
     await expect(d.generate(baseReq())).rejects.toThrow(/No anthropic tokens/);
+    expect(d.inFlight).toBe(0);
+  });
+
+  it.each([false, true])("releases the in-flight count after a session (fails=%s)", async (fails) => {
+    const d = new AnthropicDispatcher();
+    d.onTokenAdded(1, "tok-A", creds(), null, 1);
+    runClaudeSessionMock.mockImplementationOnce(async () => {
+      expect(d.inFlight).toBe(1);
+      if (fails) throw new Error("session failed");
+      return sessionResult();
+    });
+    if (fails) await expect(d.generate(baseReq())).rejects.toThrow("session failed");
+    else await expect(d.generate(baseReq())).resolves.toMatchObject({text: "hello"});
+    expect(d.inFlight).toBe(0);
   });
 
   it("rejects unsupported thinking:false before selecting a token or spawning", async () => {

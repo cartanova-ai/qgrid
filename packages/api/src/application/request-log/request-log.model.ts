@@ -257,7 +257,7 @@ class RequestLogModelClass extends BaseModelClass<
    * 화면에서 필터를 걸면 행 수와 비용이 함께 좁혀져야 하는데, 두 쿼리가 각자 필터를
    * 구현하면 한쪽에 축을 추가할 때 조용히 어긋난다.
    */
-  private applyListFilters(
+  applyListFilters(
     qb: ReturnType<RequestLogModelClass["getSubsetQueries"]>["qb"],
     params: RequestLogListParams,
   ): void {
@@ -378,7 +378,7 @@ class RequestLogModelClass extends BaseModelClass<
       string,
       { requests: number; errors: number; inputTokens: number; cacheReadTokens: number }
     >();
-    for (const row of rows) {
+    rows.forEach((row) => {
       const model = row.requested_model_name ?? "";
       const provider = model.startsWith("openai/")
         ? "openai"
@@ -396,7 +396,7 @@ class RequestLogModelClass extends BaseModelClass<
       agg.inputTokens += row.input_tokens;
       agg.cacheReadTokens += row.cache_read_tokens;
       byProvider.set(provider, agg);
-    }
+    });
     return [...byProvider.entries()]
       .map(([provider, agg]) => ({ provider, ...agg }))
       .toSorted((a, b) => a.provider.localeCompare(b.provider));
@@ -584,9 +584,9 @@ class RequestLogModelClass extends BaseModelClass<
       "is_image_generation",
       "response_json_ok",
     ] as const;
-    for (const key of fields) {
+    fields.forEach((key) => {
       if (params[key] !== undefined) update[key] = params[key];
-    }
+    });
     if (params.history !== undefined) update.history = params.history;
     update.ttft_ms = (await this.firstGenerateStepTtft(requestLogId)) ?? 0;
 

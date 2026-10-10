@@ -1,9 +1,4 @@
-/**
- * Monit — 대시보드 Monit 탭용 프로세스 로그 관측 API.
- *
- * 읽기 전용. ring buffer 를 얇게 직접 읽으며(범용 쿼리 기계 없이),
- * request log 를 남기지 않는다. 접근 경계는 다른 대시보드 API 와 동일하다.
- */
+// 읽기 전용 모니터링 API. 조회 자체는 request log에 남기지 않는다.
 import { api, BaseFrameClass, DB } from "sonamu";
 
 import { resolveOpenAITransportKind } from "../../utils/providers/openai/openai-transport-config";
@@ -49,9 +44,7 @@ class MonitFrameClass extends BaseFrameClass {
     };
   }
 
-  // 최근 1시간 provider 별 요청/오류/캐시 통계. vitals 와 달리 request_logs 를 타므로
-  // 분리된 endpoint 로 두고 웹에서 더 느슨한 주기로 폴링한다. 읽기 전용이며 request log 를
-  // 남기지 않는 monit 경계는 동일하다.
+  // DB를 조회하므로 메모리 기반 vitals보다 느린 주기로 폴링한다.
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
   async monitStats(): Promise<MonitStats> {
     const windowMinutes = 60;
@@ -60,14 +53,16 @@ class MonitFrameClass extends BaseFrameClass {
   }
 }
 
-// dispatcher 미초기화(부팅 직후) 시 0 으로 응답한다 — 가벼운 스냅샷이라 오류로 만들지 않는다.
 function currentVitals(): MonitVitals {
+  const anthropic = QgridDispatcher.anthropicDispatcher;
   return {
     openaiInFlight: QgridDispatcher.openaiDispatcher?.inFlight ?? 0,
-    openaiQuotaByToken: QgridDispatcher.openaiDispatcher?.quotaByToken ?? [],
-    anthropicTokenCount: QgridDispatcher.anthropicDispatcher?.tokenCount ?? 0,
-    anthropicTokenNames: QgridDispatcher.anthropicDispatcher?.tokenNames ?? [],
-    anthropicInFlight: QgridDispatcher.anthropicDispatcher?.inFlight ?? 0,
+    openaiQuotaByToken: QgridDispatcher.openaiDispatcher?.getQuotaSnapshot() ?? [],
+    anthropicTokenCount: anthropic?.tokenPool.size ?? 0,
+    anthropicTokenNames: anthropic
+      ? [...anthropic.tokenPool.values()].map((token) => token.name).toSorted()
+      : [],
+    anthropicInFlight: anthropic?.inFlight ?? 0,
   };
 }
 

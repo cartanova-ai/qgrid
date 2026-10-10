@@ -1,12 +1,6 @@
 /**
- * Monit 로그 ring buffer — 프로세스 생존 기간 동안 최근 로그를 구조화 레코드로 보관한다.
- *
- * 콘솔 sink 와 병렬로 등록되는 두 번째 logtape sink 가 이 버퍼를 채우고,
- * monit.frame 이 커서 기반으로 읽어 대시보드 Monit 탭에 제공한다.
- * 재시작하면 리셋된다 — 영속 기록은 request_log 의 몫.
- *
- * timestamp/processStartedAt 은 epoch ms 숫자로 유지한다. web 의 전역 dateReviver 가
- * ISO 문자열을 Date 로 바꿔버리므로, 숫자만이 재시작 감지의 동등성 비교를 보존한다.
+ * 재시작하면 초기화되는 Monit 로그 버퍼.
+ * timestamp/processStartedAt은 web의 dateReviver 변환을 피하고 동등성 비교를 유지하도록 epoch ms를 쓴다.
  */
 import { type LogRecord, type Sink } from "@logtape/logtape";
 
@@ -48,16 +42,14 @@ function renderValue(value: unknown): string {
 
 export class MonitLogBuffer {
   readonly processStartedAt = Date.now();
-  private entries: MonitLogEntry[] = [];
-  private nextSeq = 1;
+  entries: MonitLogEntry[] = [];
+  nextSeq = 1;
 
   constructor(
-    private readonly capacity = DEFAULT_CAPACITY,
-    private readonly maxTextLength = DEFAULT_MAX_TEXT_LENGTH,
+    readonly capacity = DEFAULT_CAPACITY,
+    readonly maxTextLength = DEFAULT_MAX_TEXT_LENGTH,
   ) {}
 
-  // logtape sink 본체. logtape 가 sink 오류를 격리하지만, 버퍼 버그가
-  // meta logger 소음을 만들지 않도록 방어적으로 한 번 더 감싼다.
   push(record: LogRecord): void {
     try {
       let text = flattenMessage(record.message);
@@ -79,31 +71,25 @@ export class MonitLogBuffer {
     }
   }
 
-  get oldestSeq(): number {
-    return this.entries[0]?.seq ?? this.nextSeq;
-  }
-
-  get latestSeq(): number {
-    return this.nextSeq - 1;
-  }
-
-  // cursor 이후의 엔트리를 최대 limit 개 반환한다. cursor 미지정이면 tail.
+  // cursor 미지정이면 최근 엔트리부터 반환한다.
   after(cursor: number | undefined, limit: number): MonitLogChunk {
+    const latestSeq = this.nextSeq - 1;
+    const oldestSeq = this.entries[0]?.seq ?? this.nextSeq;
     if (cursor === undefined) {
       const entries = this.entries.slice(-limit);
       return {
         entries,
-        nextCursor: entries.at(-1)?.seq ?? this.latestSeq,
+        nextCursor: entries.at(-1)?.seq ?? latestSeq,
         dropped: 0,
       };
     }
 
     // 이전 프로세스의 커서 등 미래 커서는 방어적으로 현재 tail 로 재동기화한다.
-    if (cursor > this.latestSeq) {
-      return { entries: [], nextCursor: this.latestSeq, dropped: 0 };
+    if (cursor > latestSeq) {
+      return { entries: [], nextCursor: latestSeq, dropped: 0 };
     }
 
-    const dropped = Math.max(this.oldestSeq - cursor - 1, 0);
+    const dropped = Math.max(oldestSeq - cursor - 1, 0);
     const startIndex = this.entries.findIndex((entry) => entry.seq > cursor);
     const entries = startIndex === -1 ? [] : this.entries.slice(startIndex, startIndex + limit);
     return {

@@ -195,14 +195,14 @@ export default defineConfig({
           log.warn(`anthropic dispatcher failed: ${(e as Error).message}`);
         }
 
-        subscriber.setTokenChangeHandler(() => {
+        subscriber.tokenChangeHandler = () => {
           void rescheduleTokenWindowKeepalive();
-        });
+        };
         startExpiredTokenReminder();
         void startTokenWindowKeepalive();
 
-        const anthropicCount = QgridDispatcher.anthropicDispatcher?.tokenCount ?? 0;
-        const openaiCount = QgridDispatcher.openaiDispatcher?.tokenCount ?? 0;
+        const anthropicCount = QgridDispatcher.anthropicDispatcher?.tokenPool.size ?? 0;
+        const openaiCount = QgridDispatcher.openaiDispatcher?.countActiveTokens() ?? 0;
 
         log.info(`listening on http://${host}:${port}`);
         log.info(`anthropic: ${anthropicCount} tokens ready`);
@@ -217,7 +217,7 @@ export default defineConfig({
         stopTokenWindowKeepalive();
         stopOpenAICallbackRelay();
         setSettingChangeHandler(null);
-        QgridDispatcher.subscriber?.setTokenChangeHandler(null);
+        if (QgridDispatcher.subscriber) QgridDispatcher.subscriber.tokenChangeHandler = null;
         if (QgridDispatcher.openaiDispatcher) {
           await QgridDispatcher.openaiDispatcher.stop();
         }

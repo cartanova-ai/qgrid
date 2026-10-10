@@ -31,7 +31,6 @@ export interface OpenAITransportRequest {
   clientRequestId: string;
 }
 
-/** Transport-independent streaming interface; HTTPS is the first implementation. */
 export interface OpenAIResponsesTransport {
   stream(request: OpenAITransportRequest): OpenAIEventStream;
   close?(): void;
@@ -150,7 +149,7 @@ function socketEvents(socket: OpenAIWebSocketLike, signal?: AbortSignal) {
         kind: "error" as const,
         error: new OpenAIProtocolError("OpenAI WebSocket event stream was closed"),
       };
-      for (const waiter of waiters.splice(0)) waiter(closed);
+      waiters.splice(0).forEach((waiter) => waiter(closed));
     },
     detachAbort: () => signal?.removeEventListener("abort", onAbort),
   };
@@ -198,12 +197,12 @@ type AffinityConnection = {
 };
 
 export class OpenAIWebSocketTransport implements OpenAIResponsesTransport {
-  private static readonly MAX_AFFINITY_CONNECTIONS = 16;
-  private credentials: OpenAIDirectCredentials;
-  private readonly refreshCredentials?: () => Promise<OpenAIDirectCredentials>;
-  private readonly webSocketFactory: OpenAIWebSocketFactory;
-  private readonly affinityConnections = new Map<string, AffinityConnection>();
-  private readonly busyAffinities = new Set<string>();
+  static readonly MAX_AFFINITY_CONNECTIONS = 16;
+  credentials: OpenAIDirectCredentials;
+  readonly refreshCredentials?: () => Promise<OpenAIDirectCredentials>;
+  readonly webSocketFactory: OpenAIWebSocketFactory;
+  readonly affinityConnections = new Map<string, AffinityConnection>();
+  readonly busyAffinities = new Set<string>();
 
   constructor(options: OpenAIWebSocketTransportOptions) {
     this.credentials = options.credentials;
@@ -212,24 +211,17 @@ export class OpenAIWebSocketTransport implements OpenAIResponsesTransport {
       options.webSocketFactory ?? ((url, wsOptions) => new WsClient(url, wsOptions));
   }
 
-  stream(request: OpenAITransportRequest): OpenAIEventStream {
-    return this.run(request);
-  }
-
   close(): void {
-    for (const { socket, events } of this.affinityConnections.values()) {
+    this.affinityConnections.forEach(({ socket, events }) => {
       events.cleanup();
       socket.close(1000, "transport closed");
-    }
+    });
     this.affinityConnections.clear();
     this.busyAffinities.clear();
   }
 
-  /**
-   * 캐시에 연결을 등록한다. 자리가 없으면 유휴 연결만 축출하고, 전부 사용 중이면
-   * 진행 중인 응답을 끊는 대신 등록을 포기한다(false → 이 요청은 일회성 소켓으로 처리).
-   */
-  private rememberAffinityConnection(threadId: string, connection: AffinityConnection): boolean {
+  // 유휴 연결만 축출한다. 전부 사용 중이면 false를 반환해 일회성 소켓으로 처리한다.
+  rememberAffinityConnection(threadId: string, connection: AffinityConnection): boolean {
     if (
       !this.affinityConnections.has(threadId) &&
       this.affinityConnections.size >= OpenAIWebSocketTransport.MAX_AFFINITY_CONNECTIONS
@@ -257,7 +249,7 @@ export class OpenAIWebSocketTransport implements OpenAIResponsesTransport {
     return true;
   }
 
-  private async *run(request: OpenAITransportRequest): AsyncGenerator<OpenAINormalizedEvent> {
+  async *stream(request: OpenAITransportRequest): AsyncGenerator<OpenAINormalizedEvent> {
     let refreshed = false;
     while (true) {
       if (request.signal?.aborted) throw abortError(request.signal);
@@ -270,7 +262,6 @@ export class OpenAIWebSocketTransport implements OpenAIResponsesTransport {
         entry.events.cleanup();
       }
       const cached = entry?.closed ? undefined : entry;
-      // 캐시 등록에 실패하면 이 요청은 재사용 대상이 아니다.
       let retained = retainConnection;
       const socket =
         cached?.socket ??
@@ -392,9 +383,9 @@ async function responseError(response: Response): Promise<OpenAIProtocolError> {
 }
 
 export class OpenAIHttpsTransport implements OpenAIResponsesTransport {
-  private credentials: OpenAIDirectCredentials;
-  private readonly fetchImpl: typeof fetch;
-  private readonly refreshCredentials?: () => Promise<OpenAIDirectCredentials>;
+  credentials: OpenAIDirectCredentials;
+  readonly fetchImpl: typeof fetch;
+  readonly refreshCredentials?: () => Promise<OpenAIDirectCredentials>;
 
   constructor(options: OpenAIHttpsTransportOptions) {
     this.credentials = options.credentials;
@@ -402,11 +393,7 @@ export class OpenAIHttpsTransport implements OpenAIResponsesTransport {
     this.refreshCredentials = options.refreshCredentials;
   }
 
-  stream(request: OpenAITransportRequest): OpenAIEventStream {
-    return this.run(request);
-  }
-
-  private async *run(request: OpenAITransportRequest): AsyncGenerator<OpenAINormalizedEvent> {
+  async *stream(request: OpenAITransportRequest): AsyncGenerator<OpenAINormalizedEvent> {
     let refreshed = false;
 
     while (true) {
@@ -449,10 +436,10 @@ export interface OpenAIDirectClientOptions extends OpenAIHttpsTransportOptions {
 }
 
 export class OpenAIDirectClient {
-  private readonly transport: OpenAIResponsesTransport;
-  private imageCredentials: OpenAIDirectCredentials;
+  readonly transport: OpenAIResponsesTransport;
+  imageCredentials: OpenAIDirectCredentials;
 
-  constructor(private readonly options: OpenAIDirectClientOptions) {
+  constructor(readonly options: OpenAIDirectClientOptions) {
     this.imageCredentials = options.credentials;
     this.transport =
       options.transport ??
@@ -484,7 +471,7 @@ export class OpenAIDirectClient {
     });
   }
 
-  private async *standaloneImages(
+  async *standaloneImages(
     options: OpenAIResponsesOptions,
     signal?: AbortSignal,
   ): OpenAIEventStream {

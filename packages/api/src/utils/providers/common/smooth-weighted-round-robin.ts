@@ -1,6 +1,6 @@
 export class SmoothWeightedRoundRobin {
-  private readonly weights = new Map<number, number>();
-  private readonly currentScores = new Map<number, number>();
+  readonly weights = new Map<number, number>();
+  readonly currentScores = new Map<number, number>();
 
   setToken(tokenId: number, weight: number): void {
     if (!Number.isInteger(weight) || weight < 1 || weight > 100) {
@@ -31,7 +31,7 @@ export class SmoothWeightedRoundRobin {
     let selectedScore = Number.NEGATIVE_INFINITY;
     let totalWeight = 0;
 
-    for (const tokenId of candidates) {
+    candidates.forEach((tokenId) => {
       const weight = this.weights.get(tokenId)!;
       totalWeight += weight;
       const score = (this.currentScores.get(tokenId) ?? 0) + weight;
@@ -40,7 +40,7 @@ export class SmoothWeightedRoundRobin {
         selected = tokenId;
         selectedScore = score;
       }
-    }
+    });
 
     this.currentScores.set(selected, selectedScore - totalWeight);
     return selected;

@@ -630,11 +630,7 @@ class QgridFrameClass extends BaseFrameClass {
   }
 
   // 교환 + 계정 중복 제거 + 저장 — redirect 콜백과 코드 붙여넣기 플로우가 공유한다.
-  private async completeAnthropicLogin(
-    code: string,
-    state: string,
-    pending: PendingOAuth,
-  ): Promise<void> {
+  async completeAnthropicLogin(code: string, state: string, pending: PendingOAuth): Promise<void> {
     const tokens = await exchangeCodeForTokens(
       code,
       pending.codeVerifier,
@@ -656,7 +652,7 @@ class QgridFrameClass extends BaseFrameClass {
     notifyTokenAdded(pending.name, "anthropic");
   }
 
-  private async completeOpenAILogin(code: string, pending: PendingOAuth): Promise<void> {
+  async completeOpenAILogin(code: string, pending: PendingOAuth): Promise<void> {
     const creds = await exchangeOpenAICode(code, pending.codeVerifier, pending.redirectUri);
     await TokenModel.replaceByAccount("openai", creds.accountId, {
       provider: "openai",
@@ -801,7 +797,7 @@ class QgridFrameClass extends BaseFrameClass {
     }
   }
 
-  private async doRefreshToken(token: TokenSubsetA): Promise<string> {
+  async doRefreshToken(token: TokenSubsetA): Promise<string> {
     const creds = token.credentials;
     const rt = getRefreshToken(creds);
     if (!rt) throw new Error("No refresh token");
@@ -810,7 +806,7 @@ class QgridFrameClass extends BaseFrameClass {
     try {
       refreshed = await refreshAccessToken(rt);
     } catch (e) {
-      if (e instanceof RefreshFailedError && e.isAuthDead) {
+      if (e instanceof RefreshFailedError && e.isAuthDead()) {
         await deactivateAuthDeadToken(token, `anthropic:${e.status}`);
       }
       throw e;

@@ -251,7 +251,7 @@ class SettingModelClass extends BaseModelClass<
     };
   }
 
-  private runtimeInfo(): RuntimeInfoItem[] {
+  runtimeInfo(): RuntimeInfoItem[] {
     const env = process.env;
     const password = env.QGRID_DB_PASSWORD ?? env.SONAMU_DB_PASSWORD ?? "";
     return [

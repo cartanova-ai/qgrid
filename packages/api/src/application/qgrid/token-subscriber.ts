@@ -25,19 +25,15 @@ export class TokenSubscriber {
   attempt = 0;
   connectedAt: Date | null = null;
   lastReconcileAt: Date | null = null;
-  private operationChain: Promise<void> = Promise.resolve();
-  private tokenChangeHandler: (() => void) | null = null;
+  operationChain: Promise<void> = Promise.resolve();
+  tokenChangeHandler: (() => void) | null = null;
 
   constructor(
     public connConfig: ClientConfig,
     public dispatcher: QgridDispatcherClass,
   ) {}
 
-  setTokenChangeHandler(handler: (() => void) | null): void {
-    this.tokenChangeHandler = handler;
-  }
-
-  private notifyTokensChanged(): void {
+  notifyTokensChanged(): void {
     try {
       this.tokenChangeHandler?.();
     } catch (error) {
@@ -168,18 +164,18 @@ export class TokenSubscriber {
     return this.enqueueOperation(() => this.handleNotificationNow(payloadJson));
   }
 
-  private async handleNotificationNow(payloadJson: string): Promise<void> {
+  async handleNotificationNow(payloadJson: string): Promise<void> {
     const payload = JSON.parse(payloadJson) as Payload;
     const previousRow = this.tokenChangeHandler
       ? this.dispatcher.tokens.get(payload.id)
       : undefined;
     const wasKeepaliveTarget = previousRow?.active === true && previousRow.provider === "anthropic";
     if (payload.op === "DELETE") {
-      this.dispatcher.removeCache(payload.id);
+      this.dispatcher.tokens.delete(payload.id);
       await this.dispatcher.openaiDispatcher
         ?.onTokenRemoved(payload.id)
         .catch((e) => logger.warn(`openai token remove failed: ${(e as Error).message}`));
-      // anthropic 토큰 이벤트는 동기(void) — provider 를 모르므로 무해하게 항상 제거 시도.
+      // 삭제된 토큰의 provider를 모를 수 있으므로 양쪽 풀에서 제거한다.
       this.dispatcher.anthropicDispatcher?.onTokenRemoved(payload.id);
       logger.info(`NOTIFY ${payload.op} id=${payload.id} → removed from cache`);
       if (previousRow === undefined || wasKeepaliveTarget) this.notifyTokensChanged();
@@ -187,7 +183,7 @@ export class TokenSubscriber {
     }
     const row = await TokenModel.findOne("A", { id: payload.id });
     if (!row) {
-      this.dispatcher.removeCache(payload.id);
+      this.dispatcher.tokens.delete(payload.id);
       await this.dispatcher.openaiDispatcher
         ?.onTokenRemoved(payload.id)
         .catch((e) => logger.warn(`openai token remove failed: ${(e as Error).message}`));
@@ -197,7 +193,7 @@ export class TokenSubscriber {
       return;
     }
 
-    this.dispatcher.upsertCache(payload.id, row);
+    this.dispatcher.tokens.set(payload.id, row);
 
     if (row.provider === "openai") {
       const creds = row.credentials as Record<string, unknown>;
@@ -229,9 +225,6 @@ export class TokenSubscriber {
         openaiDispatcher?.onTokenDeactivated(payload.id);
       }
     } else if (row.provider === "anthropic") {
-      // anthropic 토큰 이벤트는 동기(void). worker 가 없고 풀(Map)만 관리하므로 단순:
-      //  INSERT → 추가, active 면 갱신(onTokenUpdated 가 identity 변경도 처리), inactive 면 풀에서 제거.
-      //  (별도 activate/deactivate 콜백이 없어 active 토글을 add/remove 로 매핑.)
       const creds = row.credentials as AnthropicCredentials;
       if (payload.op === "INSERT" && row.active) {
         this.dispatcher.anthropicDispatcher?.onTokenAdded(
@@ -250,7 +243,6 @@ export class TokenSubscriber {
           row.weight,
         );
       } else {
-        // inactive 면 INSERT 든 UPDATE 든 풀에 넣지 않는다.
         this.dispatcher.anthropicDispatcher?.onTokenRemoved(payload.id);
       }
     }
@@ -263,7 +255,7 @@ export class TokenSubscriber {
     return this.enqueueOperation(() => this.reconcileNow());
   }
 
-  private async reconcileNow(): Promise<void> {
+  async reconcileNow(): Promise<void> {
     const previousAnthropicIds = this.tokenChangeHandler
       ? new Set(
           [...this.dispatcher.tokens.values()]
@@ -274,8 +266,6 @@ export class TokenSubscriber {
     await TokenModel.deactivateExpiredTokens();
     const rows = await TokenModel.findActive("A");
     this.dispatcher.replaceCache(rows);
-    // NOTIFY 유실 대비: AnthropicDispatcher 풀도 DB active anthropic 토큰 기준으로 재동기화.
-    // (rows 는 active 만 — inactive/삭제된 토큰은 여기 없으므로 replaceTokens 가 풀에서 제거한다.)
     const anthropicRows = rows
       .filter((r) => r.provider === "anthropic")
       .map((r) => ({
@@ -308,7 +298,7 @@ export class TokenSubscriber {
     }
   }
 
-  private enqueueOperation(operation: () => Promise<void>): Promise<void> {
+  enqueueOperation(operation: () => Promise<void>): Promise<void> {
     const next = this.operationChain.then(operation, operation);
     this.operationChain = next.catch(() => {});
     return next;

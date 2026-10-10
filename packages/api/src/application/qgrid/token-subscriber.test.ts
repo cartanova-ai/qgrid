@@ -32,8 +32,7 @@ function subscriberWith(openaiDispatcher: Record<string, unknown>) {
   return new TokenSubscriber(
     {} as never,
     {
-      removeCache: vi.fn(),
-      upsertCache: vi.fn(),
+      tokens: new Map(),
       replaceCache: vi.fn(),
       openaiDispatcher,
       anthropicDispatcher: null,
@@ -82,8 +81,7 @@ describe("TokenSubscriber OpenAI notifications", () => {
     const subscriber = new TokenSubscriber(
       {} as never,
       {
-        removeCache: vi.fn(),
-        upsertCache: vi.fn(),
+        tokens: new Map(),
         replaceCache: vi.fn(),
         openaiDispatcher: null,
         anthropicDispatcher,
@@ -112,15 +110,13 @@ describe("TokenSubscriber OpenAI notifications", () => {
       {} as never,
       {
         tokens: new Map(),
-        removeCache: vi.fn(),
-        upsertCache: vi.fn(),
         replaceCache: vi.fn(),
         openaiDispatcher: null,
         anthropicDispatcher,
       } as never,
     );
     const onTokensChanged = vi.fn();
-    subscriber.setTokenChangeHandler(onTokensChanged);
+    subscriber.tokenChangeHandler = onTokensChanged;
     findOneMock.mockResolvedValueOnce({
       ...openaiToken(true),
       provider: "anthropic",
@@ -143,15 +139,13 @@ describe("TokenSubscriber OpenAI notifications", () => {
       {} as never,
       {
         tokens: new Map([[previous.id, previous]]),
-        removeCache: vi.fn(),
-        upsertCache: vi.fn(),
         replaceCache: vi.fn(),
         openaiDispatcher: null,
         anthropicDispatcher,
       } as never,
     );
     const onTokensChanged = vi.fn();
-    subscriber.setTokenChangeHandler(onTokensChanged);
+    subscriber.tokenChangeHandler = onTokensChanged;
     findOneMock.mockResolvedValueOnce({
       ...previous,
       credentials: { accessToken: "new", refreshToken: "refresh" },
@@ -173,15 +167,13 @@ describe("TokenSubscriber OpenAI notifications", () => {
       {} as never,
       {
         tokens: new Map([[previous.id, previous]]),
-        removeCache: vi.fn(),
-        upsertCache: vi.fn(),
         replaceCache: vi.fn(),
         openaiDispatcher: null,
         anthropicDispatcher: { onTokenRemoved: vi.fn() },
       } as never,
     );
     const onTokensChanged = vi.fn();
-    subscriber.setTokenChangeHandler(onTokensChanged);
+    subscriber.tokenChangeHandler = onTokensChanged;
     findOneMock.mockResolvedValueOnce({ ...previous, active: false });
 
     await subscriber.handleNotification(JSON.stringify({ op: "UPDATE", id: previous.id }));
@@ -198,8 +190,7 @@ describe("TokenSubscriber OpenAI notifications", () => {
     const subscriber = new TokenSubscriber(
       {} as never,
       {
-        removeCache: vi.fn(),
-        upsertCache: vi.fn(),
+        tokens: new Map(),
         replaceCache: vi.fn(),
         openaiDispatcher: null,
         anthropicDispatcher,
@@ -243,8 +234,7 @@ describe("TokenSubscriber OpenAI notifications", () => {
     const subscriber = new TokenSubscriber(
       {} as never,
       {
-        removeCache: vi.fn(),
-        upsertCache: vi.fn(),
+        tokens: new Map(),
         replaceCache: vi.fn(),
         openaiDispatcher,
         anthropicDispatcher,
@@ -290,7 +280,7 @@ describe("TokenSubscriber OpenAI notifications", () => {
     };
     const subscriber = new TokenSubscriber({} as never, dispatcher as never);
     const onTokensChanged = vi.fn();
-    subscriber.setTokenChangeHandler(onTokensChanged);
+    subscriber.tokenChangeHandler = onTokensChanged;
     findActiveMock
       .mockResolvedValueOnce([currentAnthropic])
       .mockResolvedValueOnce([

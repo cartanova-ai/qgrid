@@ -149,7 +149,7 @@ Generated SSE handlers missing a newly added event field:
 `NO_OPENAI_WORKERS`:
 
 - The request path returns this only when there is no active OpenAI token candidate; there is no queue and no busy state.
-- Check active OpenAI tokens and credential state (`OpenAIDispatcher.tokenCount`).
+- Check active OpenAI tokens and credential state (`OpenAIDispatcher.countActiveTokens()`).
 - If tokens were recently changed, inspect `TokenSubscriber` status and reconcile behavior.
 
 `NO_ACTIVE_WORKERS`:

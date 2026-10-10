@@ -132,7 +132,7 @@ export class RefreshFailedError extends Error {
   }
 
   /** 재로그인 외 복구 불가한 인증 실패인지. 일시 오류(5xx·네트워크)는 제외된다. */
-  get isAuthDead(): boolean {
+  isAuthDead(): boolean {
     return this.status === 400 || this.status === 401;
   }
 }

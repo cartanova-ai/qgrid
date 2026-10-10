@@ -186,7 +186,7 @@ describe("OpenAIDispatcher direct runtime", () => {
     await d.onTokenAdded(1, "one", credentials);
     await expect(d.getRateLimitsByTokenId(1)).rejects.toThrow(`HTTP ${status}`);
     expect(refreshMock).not.toHaveBeenCalled();
-    expect(d.tokenCount).toBe(1);
+    expect(d.countActiveTokens()).toBe(1);
   });
 
   it("propagates refresh failure instead of retrying rejected credentials", async () => {
@@ -583,7 +583,7 @@ describe("OpenAIDispatcher direct runtime", () => {
     await vi.waitFor(() => expect(releases).toHaveLength(3));
     expect(d.inFlight).toBe(3);
 
-    for (const release of releases.splice(0)) release();
+    releases.splice(0).forEach((release) => release());
     await Promise.all([first, second, third]);
     expect(d.inFlight).toBe(0);
   });

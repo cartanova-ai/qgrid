@@ -177,7 +177,7 @@ class MockSocket implements OpenAIWebSocketLike {
   }
 
   emit(event: string, ...args: unknown[]): void {
-    for (const listener of this.listeners.get(event) ?? []) listener(...(args as never[]));
+    (this.listeners.get(event) ?? []).forEach((listener) => listener(...(args as never[])));
   }
 
   send(data: string, callback?: (error?: Error) => void): void {
@@ -534,10 +534,10 @@ describe("OpenAI direct Responses WebSocket client", () => {
     mock.sockets[2]!.emit("open");
     await expect(sendFailure).rejects.toThrow("send failed");
 
-    for (const socket of mock.sockets) {
+    mock.sockets.forEach((socket) => {
       expect(socket.terminated).toBe(true);
       expect([...socket.listeners.values()].flat()).toHaveLength(0);
-    }
+    });
   });
 
   it("terminates on iterator cancellation and when the receive buffer exceeds 1600 records", async () => {

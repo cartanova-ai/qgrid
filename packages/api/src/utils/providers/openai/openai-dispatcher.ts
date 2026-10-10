@@ -33,8 +33,6 @@ const THINKING_OFF_MODELS = new Set([
   "gpt-5.6-luna",
   "gpt-5.5",
 ]);
-// 교체된 codex worker 가 강제하던 watchdog. 호출자가 timeoutMs 를 생략해도 요청이
-// 영원히 매달리지 않도록 direct transport 도 유한한 기본 상한을 유지한다.
 const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
 const TRANSPARENT_IMAGE_TOOL = "generate_transparent_image";
 
@@ -110,7 +108,6 @@ function asReasoning(req: GenerateRequest): OpenAIResponsesOptions["reasoning"] 
   if (req.thinking === false) return { effort: "none" };
   const summary =
     req.reasoningSummary && req.reasoningSummary !== "none" ? req.reasoningSummary : undefined;
-  // Codex 어휘·모델 상한 밖의 effort 는 여기서 조용히 버린다(백엔드 기본값 적용).
   const effort =
     resolveOpenAIEffort(req.model ?? "", req.effort) ?? (req.thinking === true ? "low" : undefined);
   if (!effort && !summary) return undefined;
@@ -190,31 +187,24 @@ function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
   };
 }
 
-/**
- * Direct OpenAI dispatcher — Anthropic 과 동일한 stateless 실행 모델.
- *
- * 요청 = 토큰 선택(quota gate + weighted round-robin + cache affinity 선호) → HTTPS/WS
- * 전송. permit/큐 같은 동시성 상한은 두지 않는다: 전송은 fetch 한 번이라 로컬 자원이
- * 희소하지 않고, 상류 제한은 백엔드의 응답(429 등)이 진실이다. worker pool 시절의
- * 큐 의미론(SERVER_BUSY, 큐 타임아웃)은 이 전환으로 제거됐다.
- */
+// quota와 cache affinity로 토큰을 선택해 HTTPS/WS로 전송한다. 로컬 동시성 제한은 없다.
 export class OpenAIDispatcher implements ProviderDispatcher {
   readonly tokenMetadata = new Map<number, TokenMetadata>();
   readonly transportKind: OpenAITransportKind;
   readonly rateLimitsCache = new Map<number, OpenAIRateLimitsWithMeta & { generation: number }>();
-  private readonly pendingRateLimits = new Map<
+  readonly pendingRateLimits = new Map<
     number,
     { token: TokenMetadata; generation: number; promise: Promise<OpenAIRateLimitsWithMeta> }
   >();
-  private readonly clients = new Map<number, ClientEntry>();
-  private readonly retiredClients = new Set<ClientEntry>();
+  readonly clients = new Map<number, ClientEntry>();
+  readonly retiredClients = new Set<ClientEntry>();
   static readonly RATE_LIMITS_CACHE_TTL = 60_000;
 
-  private readonly selector = new SmoothWeightedRoundRobin();
-  private readonly clientFactory: OpenAIDirectClientFactory;
-  private readonly fetchImpl: typeof fetch;
-  private readonly quotaBlocked = new Set<number>();
-  private inFlightCount = 0;
+  readonly selector = new SmoothWeightedRoundRobin();
+  readonly clientFactory: OpenAIDirectClientFactory;
+  readonly fetchImpl: typeof fetch;
+  readonly quotaBlocked = new Set<number>();
+  inFlight = 0;
 
   constructor(
     transportKind: OpenAITransportKind = resolveOpenAITransportKind(),
@@ -228,24 +218,25 @@ export class OpenAIDispatcher implements ProviderDispatcher {
 
   async start(): Promise<void> {
     const { rows } = await TokenModel.findMany("A");
-    for (const row of rows) {
-      if (row.provider !== "openai") continue;
-      this.setToken(
-        row.id,
-        row.name,
-        row.credentials as OpenAICredentials,
-        row.quota_threshold,
-        row.weight,
-        row.active,
-      );
-    }
+    rows
+      .filter((row) => row.provider === "openai")
+      .forEach((row) => {
+        this.setToken(
+          row.id,
+          row.name,
+          row.credentials as OpenAICredentials,
+          row.quota_threshold,
+          row.weight,
+          row.active,
+        );
+      });
     logger.info(`started direct OpenAI runtime with ${this.tokenMetadata.size} tokens`);
   }
 
   async stop(): Promise<void> {
-    for (const { client } of this.clients.values()) client.close?.();
+    this.clients.forEach(({ client }) => client.close?.());
     this.clients.clear();
-    for (const entry of this.retiredClients) entry.client.close?.();
+    this.retiredClients.forEach((entry) => entry.client.close?.());
     this.retiredClients.clear();
     this.tokenMetadata.clear();
     this.rateLimitsCache.clear();
@@ -327,11 +318,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     }
   }
 
-  // generate/generateStream 공통 실행 — 토큰 선택과 in-flight 집계를 한 곳에 둔다.
-  private async run(
-    req: GenerateRequest,
-    onDelta?: (text: string) => void,
-  ): Promise<GenerateResult> {
+  async run(req: GenerateRequest, onDelta?: (text: string) => void): Promise<GenerateResult> {
     if (req.thinking === false) {
       const model = req.model ?? "";
       if (!THINKING_OFF_MODELS.has(model)) {
@@ -351,16 +338,16 @@ export class OpenAIDispatcher implements ProviderDispatcher {
       req.requirePreferredToken ?? false,
       signal,
     );
-    this.inFlightCount++;
+    this.inFlight++;
     try {
       if (signal.aborted) throw abortError(signal);
       return await this.runDirect(selection, { ...req, abortSignal: signal }, onDelta);
     } finally {
-      this.inFlightCount--;
+      this.inFlight--;
     }
   }
 
-  private async runDirect(
+  async runDirect(
     selection: TokenSelection,
     req: GenerateRequest,
     onDelta?: (text: string) => void,
@@ -581,7 +568,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
   }
 
   /** 세대가 바뀐 client 는 사용 중인 요청이 끝난 뒤에 닫는다. */
-  private acquireClient(selection: TokenSelection): ClientEntry {
+  acquireClient(selection: TokenSelection): ClientEntry {
     const metadata = selection.metadata;
     let entry = this.clients.get(selection.tokenId);
     if (entry && entry.generation !== metadata.generation) {
@@ -608,7 +595,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     return entry;
   }
 
-  private releaseClient(entry: ClientEntry): void {
+  releaseClient(entry: ClientEntry): void {
     entry.inFlight = Math.max(0, entry.inFlight - 1);
     if (entry.retired && entry.inFlight === 0) {
       this.retiredClients.delete(entry);
@@ -616,8 +603,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     }
   }
 
-  /** map 에서 떼어내고, 진행 중인 요청이 없을 때만 즉시 닫는다. */
-  private retireClient(tokenId: number): void {
+  retireClient(tokenId: number): void {
     const entry = this.clients.get(tokenId);
     if (!entry) return;
     this.clients.delete(tokenId);
@@ -626,13 +612,8 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     else this.retiredClients.add(entry);
   }
 
-  /**
-   * 토큰 선택 — quota gate 를 통과한 active 토큰 중에서 고른다. cache affinity 선호
-   * 토큰이 eligible 하면 그 판정만으로 즉시 결정하고(전체 sweep 생략, weighted 상태
-   * 비변경), 아니면 병렬 quota 판정 후 smooth weighted round-robin. 동시성 상한이
-   * 없으므로 "빈 자리" 개념도 없다 — 선택 즉시 실행이다.
-   */
-  private async selectToken(
+  // 선호 토큰이 quota를 통과하면 다른 토큰 조회와 weighted 상태 변경을 생략한다.
+  async selectToken(
     preferredTokenId: number | undefined,
     requirePreferredToken: boolean,
     signal: AbortSignal,
@@ -655,8 +636,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
       }
     }
 
-    // 토큰별 quota 판정은 서로 독립이라 병렬로 — 직렬 대기는 콜드 캐시에서
-    // 토큰 수 × 조회 지연만큼 요청 시작을 늦춘다.
+    // 콜드 캐시에서 토큰 수만큼 조회 지연이 쌓이지 않도록 병렬 판정한다.
     const checks = await Promise.all(
       [...this.tokenMetadata.entries()]
         .filter(([, token]) => token.active)
@@ -689,7 +669,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     return { tokenId: selected, metadata };
   }
 
-  private setToken(
+  setToken(
     id: number,
     name: string,
     credentials: OpenAICredentials,
@@ -737,9 +717,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     )
       return cached;
 
-    // single-flight: 동시성 상한이 없어진 뒤로 TTL 만료 순간 동시 요청 수만큼 같은
-    // 조회가 몰릴 수 있다 — 진행 중인 fetch 를 공유한다. 최초 호출자의 abort 로
-    // 공유 조회가 실패해도 소비처(isQuotaEligible)가 fail-open 으로 처리한다.
+    // TTL 만료 시 조회를 공유한다. 최초 호출자의 abort로 실패해도 isQuotaEligible은 fail-open한다.
     const pending = this.pendingRateLimits.get(tokenId);
     if (pending?.token === token && pending.generation === generation) return pending.promise;
     const fetchPromise = (async () => {
@@ -765,7 +743,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     return fetchPromise;
   }
 
-  private async refreshCredentials(tokenId: number) {
+  async refreshCredentials(tokenId: number) {
     const previous = this.tokenMetadata.get(tokenId);
     const generation = previous?.generation;
     const refreshed = await handleChatgptAuthTokensRefresh(tokenId);
@@ -788,11 +766,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     };
   }
 
-  private async isQuotaEligible(
-    id: number,
-    token: TokenMetadata,
-    signal?: AbortSignal,
-  ): Promise<boolean> {
+  async isQuotaEligible(id: number, token: TokenMetadata, signal?: AbortSignal): Promise<boolean> {
     if (token.quotaThreshold === null || token.quotaThreshold === undefined) return true;
     const generation = token.generation;
     const result = await readOpenAIQuotaUsage(async () => this.getRateLimitsByTokenId(id, signal));
@@ -821,23 +795,16 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     return true;
   }
 
-  private invalidateRateLimitsCache(id: number): void {
+  invalidateRateLimitsCache(id: number): void {
     this.rateLimitsCache.delete(id);
   }
 
-  get tokenCount(): number {
+  countActiveTokens(): number {
     return [...this.tokenMetadata.values()].filter((t) => t.active).length;
   }
-  get inFlight(): number {
-    return this.inFlightCount;
-  }
 
-  /**
-   * 토큰별 쿼터 스냅샷 — 신선한(rate limits TTL 내) 캐시만 읽고 절대 fetch 하지 않는다.
-   * monit vitals 는 로그 폴링에 편승하는 값이라 여기서 네트워크를 타면 안 된다.
-   * threshold 미설정 토큰은 쿼터 판정을 돌지 않아 usedPercent 가 null 로 남을 수 있다.
-   */
-  get quotaByToken(): Array<{
+  // 모니터링 폴링은 TTL 내 캐시만 읽고 fetch하지 않는다. 미조회 토큰은 usedPercent가 null이다.
+  getQuotaSnapshot(): Array<{
     name: string;
     usedPercent: number | null;
     threshold: number | null;
@@ -858,8 +825,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           usedPercent: primary?.usedPercent ?? null,
           threshold: t.quotaThreshold ?? null,
           blocked: this.quotaBlocked.has(id),
-          // wham 의 resetsAt 은 unix 초 단위다(qgrid.frame unixSecondsToIso 와 동일 규약).
-          // 소비처가 단위를 추측하지 않도록 여기서 ms epoch 으로 정규화한다.
+          // wham의 Unix 초를 epoch ms로 변환한다.
           resetsAt:
             primary?.resetsAt !== null && primary?.resetsAt !== undefined
               ? primary.resetsAt * 1000

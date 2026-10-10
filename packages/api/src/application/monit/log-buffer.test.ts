@@ -46,9 +46,8 @@ describe("MonitLogBuffer", () => {
     const buffer = new MonitLogBuffer(3);
     for (let i = 1; i <= 5; i++) buffer.push(record({ message: [`line ${i}`] }));
 
-    expect(buffer.oldestSeq).toBe(3);
-    expect(buffer.latestSeq).toBe(5);
-    const { entries } = buffer.after(undefined, 10);
+    const { entries, nextCursor } = buffer.after(undefined, 10);
+    expect(nextCursor).toBe(5);
     expect(entries.map((entry) => entry.seq)).toEqual([3, 4, 5]);
     expect(entries.map((entry) => entry.text)).toEqual(["line 3", "line 4", "line 5"]);
   });
@@ -90,7 +89,7 @@ describe("MonitLogBuffer", () => {
 
     const chunk = buffer.after(999, 10);
     expect(chunk.entries).toEqual([]);
-    expect(chunk.nextCursor).toBe(buffer.latestSeq);
+    expect(chunk.nextCursor).toBe(1);
     expect(chunk.dropped).toBe(0);
   });
 
