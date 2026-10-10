@@ -1,0 +1,52 @@
+version: "3.8"
+services:
+  api:
+    image: qgrid-dev0:2.10.2-claude-2.1.296
+    networks:
+      - host
+    secrets:
+      - source: qgrid-env
+        target: qgrid-env
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+    volumes:
+      - /mnt/data-ssd/qgrid/anthropic-config:/tmp/qgrid-anthropic-config
+      - /mnt/data-ssd/qgrid/anthropic-cwd:/tmp/qgrid-anthropic
+    stop_grace_period: 60s
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://172.19.0.1:44900/api/qgrid/health').then(r=>r.json()).then(h=>process.exit(h.ready?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 180s
+      retries: 3
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == dev0
+      restart_policy:
+        condition: any
+        delay: 5s
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
+        monitor: 240s
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+networks:
+  host:
+    external: true
+    name: host
+secrets:
+  qgrid-env:
+    external: true
+    name: qgrid-dev0-env-20261010
