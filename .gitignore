@@ -84,3 +84,6 @@ data/
 # 로컬 프로브·스모크 산출물(이미지, 응답 JSON, 스크래치 스크립트)
 output/
 .playwright-cli/
+
+# Downloaded release package used only as Docker build input.
+deploy/docker/qgrid-cli.tgz

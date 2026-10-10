@@ -69,6 +69,7 @@ jobs:
           INSTALL_DIR="$(mktemp -d)"
           NODE_BIN="$(mise exec -- node -e 'process.stdout.write(process.execPath)')"
           mise exec -- pnpm --dir packages/cli pack --pack-destination "$PACK_DIR"
+          cp "$PACK_DIR"/cartanova-qgrid-cli-*.tgz "$GITHUB_WORKSPACE/deploy/docker/qgrid-cli.tgz"
           mise exec -- npm install --prefix "$INSTALL_DIR" --ignore-scripts "$PACK_DIR"/cartanova-qgrid-cli-*.tgz
           cd "$INSTALL_DIR/node_modules/@cartanova/qgrid-cli"
           "$NODE_BIN" --input-type=module -e "await import('sonamu')"
