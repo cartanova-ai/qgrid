@@ -11,8 +11,8 @@
 #   - REQUEST_ID는 request_logs의 기존 Anthropic 요청
 #   - SCHEMA_JSON은 해당 요청에 사용한 JSON Schema
 #
-# 이 스크립트는 request_logs나 deti 데이터를 변경하지 않는다. PM2 설정에서 DB 접속 정보를
-# 메모리로만 읽고, 해당 요청의 prompt/model/effort/token을 조회한 뒤 qgrid와 같은 Claude CLI
+# 이 스크립트는 request_logs나 deti 데이터를 변경하지 않는다. 호출자가 제공한 QGRID_DB_*
+# 환경변수로 해당 요청의 prompt/model/effort/token을 조회한 뒤 qgrid와 같은 Claude CLI
 # 인자·환경으로 새 세션을 한 번 실행한다. OAuth token은 출력하거나 파일로 남기지 않는다.
 #
 # 진단 기본 제한은 360초다(QGRID_REPRO_TIMEOUT_SECONDS로 변경 가능). 실제 qgrid 제한 240초보다
@@ -24,6 +24,7 @@ REQUEST_ID="${1:-}"
 SCHEMA_PATH="${2:-}"
 OUTPUT_PATH="${3:-}"
 CAPTURE_TIMEOUT_SECONDS="${QGRID_REPRO_TIMEOUT_SECONDS:-360}"
+TMPDIR="${TMPDIR:-/tmp}"
 
 if [[ ! "$REQUEST_ID" =~ ^[0-9]+$ ]]; then
   echo "usage: $0 REQUEST_ID SCHEMA_JSON [OUTPUT_JSONL]" >&2
@@ -38,7 +39,6 @@ if [[ ! "$CAPTURE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
-PM2_CONFIG="/home/cartanova/qgrid-pm2/ecosystem.config.cjs"
 CLAUDE_BIN="/home/cartanova/.local/lib/node_modules/@anthropic-ai/claude-code/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
 CLAUDE_CWD="/tmp/qgrid-anthropic"
 CONFIG_BASE="/tmp/qgrid-anthropic-config"
@@ -52,27 +52,13 @@ if [[ ! -x "$CLAUDE_BIN" ]]; then
   exit 2
 fi
 
-# PM2와 같은 DB/TMPDIR 환경을 사용한다. 값은 eval로만 소비하고 stdout에 노출하지 않는다.
-eval "$(
-  node - "$PM2_CONFIG" <<'NODE'
-const configPath = process.argv[2];
-const config = require(configPath);
-const app = config.apps.find((entry) => entry.name === "qgrid");
-if (!app?.env) throw new Error("qgrid PM2 env not found");
-for (const key of [
-  "QGRID_DB_HOST",
-  "QGRID_DB_PORT",
-  "QGRID_DB_USER",
-  "QGRID_DB_PASSWORD",
-  "QGRID_DB_NAME",
-  "TMPDIR",
-]) {
-  const value = app.env[key];
-  if (value === undefined) throw new Error(`missing PM2 env: ${key}`);
-  process.stdout.write(`export ${key}=${JSON.stringify(String(value))}\n`);
-}
-NODE
-)"
+# DB credentials come from the caller, independently of the process supervisor.
+for key in QGRID_DB_HOST QGRID_DB_PORT QGRID_DB_USER QGRID_DB_PASSWORD QGRID_DB_NAME; do
+  if [[ -z "${!key:-}" ]]; then
+    echo "required environment variable is missing: $key" >&2
+    exit 2
+  fi
+done
 
 ROW="$(
   PGPASSWORD="$QGRID_DB_PASSWORD" psql -X -A -t -F $'\t' \

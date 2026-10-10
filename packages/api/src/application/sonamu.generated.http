@@ -98,13 +98,6 @@ Content-Type: application/json
 
 ###
 
-POST {{baseUrl}}/api/setting/restartServer
-Content-Type: application/json
-
-{}
-
-###
-
 GET {{baseUrl}}/api/requestLogStep/findById
 	?subset=A
 	&id=0
@@ -297,6 +290,7 @@ Content-Type: application/json
         "inputSchema": "unknown"
       }
     ],
+    "thinking": true,
     "effort": "EFFORT",
     "verbosity": "low",
     "reasoningSummary": "auto",
@@ -361,6 +355,7 @@ Content-Type: application/json
         "inputSchema": "unknown"
       }
     ],
+    "thinking": true,
     "effort": "EFFORT",
     "verbosity": "low",
     "reasoningSummary": "auto",

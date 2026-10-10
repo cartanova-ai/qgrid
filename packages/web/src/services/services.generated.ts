@@ -38,12 +38,7 @@ import {
   RequestLogSaveParams,
   ToolView,
 } from "./request-log/request-log.types";
-import {
-  SettingListParams,
-  SettingsResponse,
-  SettingApplies,
-  SupervisorKind,
-} from "./setting/setting.types";
+import { SettingListParams, SettingsResponse, SettingApplies } from "./setting/setting.types";
 import {
   TokenSubsetKey,
   TokenSubsetMapping,
@@ -345,18 +340,6 @@ export namespace SettingService {
   export const useTriggerExpiryReminderMutation = () =>
     useMutation({
       mutationFn: (params: void) => triggerExpiryReminder(),
-    });
-
-  export async function restartServer(): Promise<{ supervisor: SupervisorKind }> {
-    return fetch({
-      method: "POST",
-      url: `/api/setting/restartServer`,
-    });
-  }
-
-  export const useRestartServerMutation = () =>
-    useMutation({
-      mutationFn: (params: void) => restartServer(),
     });
 }
 

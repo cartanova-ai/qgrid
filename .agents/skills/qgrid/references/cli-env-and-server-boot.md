@@ -92,17 +92,20 @@ Some env values are editable at runtime through the dashboard's Settings page, b
 - Editable: Slack delivery control (master switch, reminder on/off, reminder interval, quiet-hours window, weekend behaviour), and the Slack channel/user-map/bot-token. `SETTING_DEFS` in `setting.constant.ts` is the single definition — key, env name, type, bounds, and whether the change applies immediately or needs a restart. The `settings` table itself (`setting.entity.json`) only stores `(key, value)` strings; everything the UI needs to render and validate a key lives in that constant, not in the schema.
 - Not editable: anything needed before the server can read its own database (`QGRID_DB_*`, `HOST`, `PORT`, `NODE_ENV`). These are exposed read-only on the same page so an operator can confirm which environment they are looking at; the DB password is masked.
 
-### Restart from the dashboard
+### Process lifecycle
 
-The Settings page can restart the server. There is no `pm2 restart` call — the process exits and the supervisor respawns it, which is what "restart" means here.
+qgrid does not detect a process supervisor or expose a restart API or dashboard
+control. Restarting, replacing, and recovering the process belong to the
+operator's deployment tooling. Settings marked `restart` still take effect on
+the next process start; the label does not imply an in-app restart action.
 
-- `detectSupervisor` (`utils/process-supervisor.ts`) accepts only `pm_id` (pm2). `INVOCATION_ID` proves systemd launched a process but does not prove the unit has a restart policy, so it is not sufficient. Without pm2, `restartServer` returns 400 and the button is disabled: exiting with nothing to relaunch the process is a shutdown, not a restart. Presence is the signal, not the value — pm2 sets `pm_id=0` for the first process.
-- Browser requests must be same-host: when `Origin` is present and its host differs from `X-Forwarded-Host`/`Host`, `restartServer` returns 403. Origin-less operational clients such as `curl` remain supported. This is CSRF protection, not a substitute for authenticating the management API at Caddy.
-- The first restart request latches `restartPending`, blocks new native query/stream dispatch with 503, and marks only process-local active native request-log IDs as `error: server restarted`. Tool-result-waiting runs and externally owned logger runs are untouched. This is state reconciliation, not request draining.
-- Exit is process-wide and one-shot. It runs after the restart response emits `finish`; a response `close` or a five-second fallback covers disconnects. Concurrent restart calls do not schedule multiple exits.
-- The supervisor relaunches from `ecosystem.config.cjs`, not from the dying process's argv. That file carries no `--skip-update`, so each restart also runs the CLI self-update — a restart is a deploy. The confirmation dialog says so; dropping the update means adding `--skip-update` there.
-- The relaunch reuses the environment pm2 captured when the app was first started. Neither the dashboard restart nor `pm2 restart qgrid` re-reads `ecosystem.config.cjs`, so an env edit in that file (for example `QGRID_TOKEN_WINDOW_KEEPALIVE_ENABLED`) stays invisible until `pm2 restart ecosystem.config.cjs --update-env` (or `pm2 delete` + `pm2 start`) followed by `pm2 save`. Verify with `GET /api/setting/listSettings`, which reports the env the process actually sees. dev0 ran for a week with the keepalive env in the file but not in the process because of this (2026-09-02).
-- In-flight provider responses are not drained. There is no SIGTERM handler, so a restart during traffic cuts active responses, and the OpenAI pool needs 1–2 minutes before requests succeed again (`QgridDispatcher.startupState` answers 503 in that window). The dashboard stays locked after confirmation, observes an unavailable/not-ready health state, then waits for a later `ready: true` before refreshing settings.
+There is no SIGTERM drain handler. Replacing the process during traffic can
+interrupt active responses, so deployment tooling must account for startup
+readiness and interruption. Ordinary request success/error/abort accounting and
+stale tool-wait cleanup remain independent of the deployment mechanism.
+
+### Live notification settings
+
 - Slack channel, bot-token, and user-map changes are read on the next notification. Changing the expiry-reminder interval or toggling the reminder replaces the current timer immediately without sending a notification merely because the setting changed; process boot still performs the intended immediate reminder run.
 - `slack.enabled` is the holiday switch: an operator turns it off for periods no rule can express. It suppresses ordinary notifications but not `urgent` ones, so a provider losing its last token still reports during a long break. `slack.remindersEnabled` is narrower — it stops only the repeat timer and preserves the chosen interval so re-enabling restores it.
 - Quiet hours are `slack.quietFromHour`/`slack.quietUntilHour` (0–23, Asia/Seoul) plus `slack.notifyOnWeekends`. From > until reads as an overnight window (20→8); from < until reads as a same-day window, which night-shift teams may want. Equal values mean no quiet window at all. Out-of-range values fall back to 20/8 at runtime, since env can bypass the stored-value validation.
