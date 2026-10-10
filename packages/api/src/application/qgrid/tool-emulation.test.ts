@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { CALLER_SCHEMA_LIMITS } from "../../utils/providers/common/schema-validation";
 import { type QgridTool } from "./qgrid.types";
-import { applyToolCallEmulation, ToolCallEmulationError } from "./tool-emulation";
+import { applyToolCallEmulation, isToolCallEnvelope, ToolCallEmulationError } from "./tool-emulation";
 
 const baseResult = {
   text: "",
@@ -84,6 +84,13 @@ describe("applyToolCallEmulation image parts", () => {
 });
 
 describe("applyToolCallEmulation envelope validation", () => {
+  it("ignores intermediate prose but never repairs malformed final JSON or accepts an unknown control tool", () => {
+    const tool = JSON.stringify({result: {action: "tool_call", answer: null, toolCalls: [{toolName: "notAllowed", args: "{}"}]}});
+    const allowed = [{name: "lookup", inputSchema: {type: "object"}}];
+    expect(isToolCallEnvelope("Checking the source.", allowed, "json", "commentary")).toBe(false);
+    expect(() => isToolCallEnvelope(tool, allowed, "json", "commentary")).toThrow("unknown emulated tool");
+    expect(() => isToolCallEnvelope(tool + tool, allowed, "json", "final_answer")).toThrow("response is not JSON");
+  });
   const tools: QgridTool[] = [
     {
       name: "lookup",

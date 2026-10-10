@@ -54,7 +54,7 @@ export function buildToolCallSchema(tools: QgridTool[], answerSchema?: JsonValue
   return {
     type: "object",
     description:
-      "Use this schema only through StructuredOutput. Do not invoke listed client tools as native Claude Code tools. To request client-side tool execution, set result.action to tool_call and include result.toolCalls. Use action answer only when no further client tool result is needed.",
+      "Return exactly one JSON object matching this schema as your final response, including when requesting a tool. This object is the response body, not a call to a built-in tool. To request client-side tools, set result.action to tool_call and include result.toolCalls, then end your turn. The client executes those tools and supplies their results in a later request. Do not invent tool results or emit an answer before receiving the required results.",
     properties: {
       result: {
         anyOf: [
@@ -75,7 +75,7 @@ export function buildToolCallSchema(tools: QgridTool[], answerSchema?: JsonValue
           {
             type: "object",
             description:
-              "Request client-side tool execution through this structured output. Do not call these tools as native Claude Code tools.",
+              "Request client-side tool execution. Return this object as the complete response, then wait for the next request containing tool results.",
             properties: {
               action: { type: "string", enum: ["tool_call"] },
               answer: { type: "null" },
@@ -88,7 +88,7 @@ export function buildToolCallSchema(tools: QgridTool[], answerSchema?: JsonValue
                     toolName: {
                       type: "string",
                       enum: tools.map((tool) => tool.name),
-                      description: `Client-side tool name to request through structured output. Do not call this as a native Claude Code tool.\n${toolDescriptions}`,
+                      description: `Client-side tool name. The caller executes these tools after receiving your JSON response.\n${toolDescriptions}`,
                     },
                     args: {
                       type: "string",

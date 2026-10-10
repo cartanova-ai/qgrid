@@ -150,6 +150,8 @@ export const QueryInput = z.looseObject({
   timeout: QueryTimeoutMs.optional(),
   jsonSchema: z.string().optional(),
   tools: z.array(QgridTool).optional(),
+  // Boolean literals keep Sonamu's HTTP caster from accepting "true"/"false" strings.
+  thinking: z.union([z.literal(true), z.literal(false)]).optional(),
   effort: z.string().optional(),
   verbosity: Verbosity.optional(),
   reasoningSummary: ReasoningSummary.optional(),

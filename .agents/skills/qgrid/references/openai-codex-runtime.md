@@ -12,6 +12,12 @@ Use this reference before changing OpenAI transport, concurrency, routing, promp
 - Direct quota lookup: `openai-quota.ts`.
 - Provider integration and history: `packages/api/src/application/qgrid/qgrid.dispatcher.ts`, `conv-routing.ts`.
 
+## Thinking control
+
+`providerOptions.qgrid.thinking` reaches the Responses builder as a boolean. False overrides request/default effort and sends `reasoning: { effort: "none" }` without a reasoning summary. True and omission keep the existing effort and summary policy. `none` belongs only to the internal wire type, not the public effort enum.
+
+The 2026-10-10 subscription probe accepted off for `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `gpt-5.5`. `gpt-6-astra` and `gpt-6.1-sol` explicitly rejected it. Other model IDs are unverified for off and are rejected locally only when false is requested. Model-access failures are not evidence of mandatory thinking. Validate terminal success and response settings, not HTTP 200 alone: errors can arrive within SSE. The same policy applies to text-model requests driving image generation, not to the image model itself.
+
 ## Adding an OpenAI model
 
 Use this checklist whenever a model is added. A public API release does not by itself prove

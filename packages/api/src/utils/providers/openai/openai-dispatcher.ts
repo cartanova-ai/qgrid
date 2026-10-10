@@ -12,6 +12,7 @@ import {
   type ProviderDispatcher,
 } from "../common/provider-dispatcher";
 import { SmoothWeightedRoundRobin } from "../common/smooth-weighted-round-robin";
+import { ThinkingValidationError } from "../common/thinking";
 import {
   type JsonValue,
   type OpenAIResponseItem,
@@ -23,6 +24,15 @@ import { handleChatgptAuthTokensRefresh } from "./openai-refresh";
 import { type OpenAITransportKind, resolveOpenAITransportKind } from "./openai-transport-config";
 
 const logger = getLogger(["qgrid", "openai-dispatcher"]);
+// Verified with the subscription Responses backend; public API support is not sufficient.
+const THINKING_OFF_MODELS = new Set([
+  "gpt-6-sol",
+  "gpt-6-luna",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.5",
+]);
 // 교체된 codex worker 가 강제하던 watchdog. 호출자가 timeoutMs 를 생략해도 요청이
 // 영원히 매달리지 않도록 direct transport 도 유한한 기본 상한을 유지한다.
 const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
@@ -97,10 +107,12 @@ function inputItems(req: GenerateRequest): OpenAIResponseItem[] {
 }
 
 function asReasoning(req: GenerateRequest): OpenAIResponsesOptions["reasoning"] | undefined {
+  if (req.thinking === false) return { effort: "none" };
   const summary =
     req.reasoningSummary && req.reasoningSummary !== "none" ? req.reasoningSummary : undefined;
   // Codex 어휘·모델 상한 밖의 effort 는 여기서 조용히 버린다(백엔드 기본값 적용).
-  const effort = resolveOpenAIEffort(req.model ?? "", req.effort);
+  const effort =
+    resolveOpenAIEffort(req.model ?? "", req.effort) ?? (req.thinking === true ? "low" : undefined);
   if (!effort && !summary) return undefined;
   return {
     ...(effort ? { effort } : {}),
@@ -320,6 +332,18 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     req: GenerateRequest,
     onDelta?: (text: string) => void,
   ): Promise<GenerateResult> {
+    if (req.thinking === false) {
+      const model = req.model ?? "";
+      if (!THINKING_OFF_MODELS.has(model)) {
+        const reason =
+          model === "gpt-6-astra" || model === "gpt-6.1-sol"
+            ? "the subscription backend requires thinking"
+            : "thinking-off support has not been verified on the subscription backend";
+        throw new ThinkingValidationError(
+          `thinking:false is unavailable for OpenAI model ${model || "<default>"}: ${reason}`,
+        );
+      }
+    }
     const signal = activeSignal(req.abortSignal, req.timeoutMs);
     if (signal.aborted) throw abortError(signal);
     const selection = await this.selectToken(
@@ -344,6 +368,9 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     const startedAt = Date.now();
     let firstDeltaAt: number | undefined;
     let text = "";
+    let outputMessageAccepted = false;
+    const messagePhases = new Map<string, string>();
+    const streamedMessageIds = new Set<string>();
     let usage = {
       totalTokens: 0,
       inputTokens: 0,
@@ -366,10 +393,53 @@ export class OpenAIDispatcher implements ProviderDispatcher {
         requestOptions(req),
         req.abortSignal,
       )) {
+        if (
+          req.stopAfterOutputMessage &&
+          event.type === "output-item" &&
+          event.item.type === "message" &&
+          typeof event.item.id === "string" &&
+          typeof event.item.phase === "string"
+        ) {
+          messagePhases.set(event.item.id, event.item.phase);
+        }
         if (event.type === "text-delta") {
+          if (outputMessageAccepted) continue;
+          if (req.stopAfterOutputMessage && event.itemId) {
+            // Buffer commentary/unclassified messages until their completed item.
+            // Known final answers retain incremental streaming.
+            if (messagePhases.get(event.itemId) !== "final_answer") continue;
+            streamedMessageIds.add(event.itemId);
+          }
           firstDeltaAt ??= Date.now();
           text += event.text;
           onDelta?.(event.text);
+        } else if (
+          event.type === "output-item" &&
+          event.completed &&
+          event.item.type === "message" &&
+          !outputMessageAccepted &&
+          req.stopAfterOutputMessage &&
+          Array.isArray(event.item.content)
+        ) {
+          const messageText = event.item.content
+            .filter((part) => part?.type === "output_text" && typeof part.text === "string")
+            .map((part) => part.text)
+            .join("");
+          // A valid client tool request ends this application turn. Later answers cannot
+          // know its result yet. Never split/repair malformed JSON within a message.
+          const phase = typeof event.item.phase === "string" ? event.item.phase : undefined;
+          if (messageText) outputMessageAccepted = req.stopAfterOutputMessage(messageText, phase);
+          if (
+            typeof event.item.id === "string" &&
+            !streamedMessageIds.has(event.item.id) &&
+            (phase !== "commentary" || outputMessageAccepted) &&
+            messageText
+          ) {
+            firstDeltaAt ??= Date.now();
+            text += messageText;
+            onDelta?.(messageText);
+            streamedMessageIds.add(event.item.id);
+          }
         } else if (event.type === "image") {
           imageAttempted = true;
           images.push({

@@ -213,7 +213,8 @@ const { text } = await generateText({
 | `tokenName` | provider-prefixed token name | both providers | Strictly targets one active token, such as `anthropic/yds`. The prefix must match the model provider; empty, missing, inactive, or over-threshold targets fail without fallback |
 | `logger` | `boolean` | both providers | qgrid request logging. Defaults to `true`; `false` disables request-log persistence for this generation without disabling client tools or multi-step continuation |
 | `sessionKey` | `string` | OpenAI only | Multi-turn conversation identifier used to derive opaque prompt-cache affinity while replaying full history (see [below](#multi-turn-prompt-cache-sessionkey)) |
-| `effort` | OpenAI: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` \| `"ultra"` | OpenAI only (`QgridOpenAIProviderOptions`) | Reasoning depth on the ChatGPT-subscription Codex route. GPT-6 Astra, GPT-6 Sol, and GPT-5.6 Sol/Terra support effort through `"ultra"`; GPT-6 Luna and GPT-5.6 Luna support it through `"max"`; a value the model does not support is silently ignored by the server and the backend default applies. The public OpenAI API's `"none"`/`"minimal"` do not exist on this route |
+| `thinking` | `boolean` | Both providers | Omit to preserve existing model behavior. `true` enables thinking with effort; `false` ignores request effort and config `defaultEffort`. Unsupported models or runtimes return an error |
+| `effort` | OpenAI: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` \| `"ultra"` | OpenAI only (`QgridOpenAIProviderOptions`) | Reasoning depth on the ChatGPT-subscription Codex route. GPT-6 Astra, GPT-6 Sol, and GPT-5.6 Sol/Terra support effort through `"ultra"`; GPT-6 Luna and GPT-5.6 Luna support it through `"max"`; a value the model does not support is silently ignored by the server and the backend default applies. `"none"`/`"minimal"` are not public effort values; use `thinking: false` to disable thinking |
 | `effort` | Anthropic: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` | Anthropic only (`QgridAnthropicProviderOptions`) | Claude Code `--effort` levels. Values outside this set are silently ignored and qgrid's default (`"low"`) applies; per-model limits (for example no `"xhigh"` on Sonnet 4.6) are handled by Claude Code |
 | `verbosity` | `"low"` \| `"medium"` \| `"high"` | OpenAI only | Response text verbosity |
 | `reasoningSummary` | `"auto"` \| `"concise"` \| `"detailed"` \| `"none"` | OpenAI only | Reasoning summary output mode |
@@ -234,6 +235,23 @@ await generateText({
 ```
 
 `tokenName` works the same way with `streamText`.
+
+```typescript
+providerOptions: {
+  qgrid: { thinking: false, effort: "high" } satisfies QgridProviderOptions,
+}
+```
+
+`thinking: false` ignores `high` in this example and applies to generate, stream, and tool follow-up requests. `true` does not guarantee thinking tokens on every response. **Update the server and SDK together:** older servers may ignore the new field. Disabling support depends on the model and Claude Code runtime. Sonnet 5.5's `between_tools` mode disables pre-answer thinking but can retain thinking blocks between tools; off requests for Haiku 5.5 and Sonnet 5.5 require Claude Code 2.1.295 or newer.
+
+Thinking-off policy snapshot (2026-10-10; Claude Code investigation baseline 2.1.295):
+
+| Provider | Off-capable model IDs in the current policy |
+|---|---|
+| OpenAI | `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` |
+| Anthropic | `claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-haiku-4-5`, `claude-sonnet-4-5`, `claude-sonnet-4-6`, `claude-sonnet-5`, `claude-opus-4-5`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` |
+
+Use the usual `openai/` or `anthropic/` prefix with these IDs. Explicitly rejected by the backend: `gpt-6-astra`, `gpt-6.1-sol`, `claude-fable-5`, `claude-fable-5-1`, and `claude-opus-5-5`. Native delivery for Haiku 5.5 and Sonnet 5.5 was verified with Claude Code 2.1.295. For their off requests, the server checks the CLI version and returns an input error if it is older than 2.1.295 or cannot be determined. Other model IDs are unverified for off; model-access failures do not prove mandatory thinking. These restrictions apply only to explicit false.
 
 AI SDK's top-level `timeout` remains the overall client-side budget and is converted to an
 `AbortSignal` before the custom provider runs. It does not expose the numeric timeout to qgrid.
@@ -468,13 +486,13 @@ Qgrid uses [Standard API pricing](https://developers.openai.com/api/docs/pricing
 
 `anthropic/claude-fable-5-1` (released 2026-09-01) shares Fable 5's 1M context window, 128K max output, always-on adaptive thinking, and $10 input / $50 output pricing. Its cache reads cost $0.25 per 1M tokens (0.025x the input price) instead of Fable 5's $1; cache writes stay at $12.50 (5m) and $20 (1h). Fable 5.1's API-level breaking changes (forced `tool_choice` rejection, model-bound thinking blocks) do not affect qgrid, which runs Claude Code with tools disabled and replays history as flattened text in a fresh process.
 
-`anthropic/claude-opus-5` has a default 1M context window and 128K max output. Its prices per 1M tokens are $5 input, $0.50 cache read, $6.25 five-minute cache write, $10 one-hour cache write, and $25 output. qgrid keeps Opus 5's default adaptive thinking behavior and uses `effort` to control reasoning depth. This also avoids the invalid `thinking: disabled` combination at `xhigh` or `max` effort.
+`anthropic/claude-opus-5` has a default 1M context window and 128K max output. Its prices per 1M tokens are $5 input, $0.50 cache read, $6.25 five-minute cache write, $10 one-hour cache write, and $25 output. Omitting thinking preserves Opus 5's default adaptive behavior. `thinking: false` ignores effort and internally uses low with disabled thinking.
 
 `anthropic/claude-opus-5-5` (released 2026-09-22) has a 1M context window and 128K max output. Its prices per 1M tokens are $4 input, $0.20 cache read (0.05x the input price), $5 five-minute cache write, $8 one-hour cache write, and $20 output. Adaptive thinking is always on and cannot be disabled, so qgrid preserves it and uses `effort` to control depth, as it does for Fable. Opus 5.5's API-level breaking changes (forced `tool_choice` rejection, model-bound thinking blocks) do not affect qgrid for the same reason as Fable 5.1. Opus 5 pricing did not change.
 
-`anthropic/claude-sonnet-5-5` (released 2026-09-28) has a 1M context window and 128K max output at Sonnet 5's base prices: $2 input, $2.50 five-minute cache write, $4 one-hour cache write, and $10 output per 1M tokens. Its cache reads cost $0.10 (0.05x the input price, the same multiplier as Opus 5.5) since Anthropic halved them from $0.20 on 2026-10-07; qgrid prices each request at the rate current when it runs, so logs from before that date keep the $0.20 estimate. It rejects disabled thinking, so qgrid keeps adaptive thinking on and uses `effort` to control depth, as it does for Opus 5.5.
+`anthropic/claude-sonnet-5-5` (released 2026-09-28) has a 1M context window and 128K max output at Sonnet 5's base prices: $2 input, $2.50 five-minute cache write, $4 one-hour cache write, and $10 output per 1M tokens. Its cache reads cost $0.10 (0.05x the input price, the same multiplier as Opus 5.5) since Anthropic halved them from $0.20 on 2026-10-07; qgrid prices each request at the rate current when it runs, so logs from before that date keep the $0.20 estimate. Omission preserves adaptive defaults. With Claude Code 2.1.295 or newer, `thinking: false` delivers `between_tools`, disabling pre-answer thinking while allowing thinking blocks between tools.
 
-`anthropic/claude-haiku-5-5` (released 2026-10-07) has a 1M context window and 128K max output, and is the only current Claude model priced by prompt length. For prompts up to 100K tokens it costs $0.10 input, $0.01 cache read, $0.125 five-minute cache write, $0.20 one-hour cache write, and $0.50 output per 1M tokens; once the prompt exceeds 100K tokens, every rate is 5x ($0.50 / $0.05 / $0.625 / $1 / $2.50) and applies to the whole request, which qgrid models with the same whole-request long-context rule it uses for GPT-6. Adaptive thinking is on by default with a `medium` API default effort; the API rejects disabled thinking at `xhigh` and `max`, and Claude Code 2.1.293 marks the model `rejects_disabled_thinking`, so qgrid keeps adaptive thinking on and uses `effort` (SDK default `low`) to control depth. Haiku 5.5 uses the Claude 4.7+ tokenizer, so the same text counts roughly 30% more tokens than on Haiku 4.5.
+`anthropic/claude-haiku-5-5` (released 2026-10-07) has a 1M context window and 128K max output, and is the only current Claude model priced by prompt length. For prompts up to 100K tokens it costs $0.10 input, $0.01 cache read, $0.125 five-minute cache write, $0.20 one-hour cache write, and $0.50 output per 1M tokens; once the prompt exceeds 100K tokens, every rate is 5x ($0.50 / $0.05 / $0.625 / $1 / $2.50) and applies to the whole request, which qgrid models with the same whole-request long-context rule it uses for GPT-6. Adaptive thinking is on by default with a `medium` API default effort. Omission preserves adaptive defaults with effort (SDK default `low`). With Claude Code 2.1.295 or newer, `thinking: false` uses native request settings to deliver disabled thinking and low effort. Haiku 5.5 uses the Claude 4.7+ tokenizer, so the same text counts roughly 30% more tokens than on Haiku 4.5.
 
 Claude Code may automatically retry a Fable safety refusal on another Opus model; the current CLI picks Opus 5 or Opus 4.8 by refusal category. In that case, the AI SDK response's `response.modelId` and `providerMetadata.qgrid.model` identify Opus as the actual serving model. `providerMetadata.qgrid.requestedModel` remains Fable, and `providerMetadata.qgrid.modelFallbacks` contains the refusal fallback history. The metadata also exposes `costSource` and the 5m/1h cache-write token split.
 

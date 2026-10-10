@@ -122,6 +122,13 @@ describe("qgrid run lifecycle start", () => {
     });
   });
 
+  it.each([false, true, undefined])("does not log ignored effort when thinking is %s", async (thinking) => {
+    await beforeQuery({ prompt: "hi", model: "openai/gpt-6-sol", thinking, effort: "high" });
+    expect(createRunMock).toHaveBeenCalledWith(expect.objectContaining({
+      effort: thinking === false ? undefined : "high",
+    }));
+  });
+
   it.each([false, true])("classifies automatic image output only when produced (%s)", async (hasImage) => {
     const args = { prompt: "chat", model: "openai/gpt-6-astra", imageGeneration: "auto" as const };
     const run = await beforeQuery(args);

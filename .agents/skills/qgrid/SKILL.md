@@ -45,6 +45,7 @@ Request logging is enabled by default. Use `providerOptions.qgrid.logger: false`
 ## Non-Negotiable Boundaries
 
 - Use `packages/ai-sdk` as the active public SDK surface.
+- Expose thinking only as `providerOptions.qgrid.thinking?: boolean`: omission preserves the model policy, false overrides effort, and unsupported/unverified off requests fail explicitly. See the SDK and provider runtime references for the dated support snapshot. Keep Anthropic thinking controls separate from mandatory configuration and memory isolation. Haiku/Sonnet 5.5 off uses a computed thinking-only native body override with Claude Code >=2.1.295; never inherit or expose arbitrary extra body.
 - The old v1 SDK package (`packages/sdk`, `@cartanova/qgrid-sdk`) has been removed from the repository. It survives only as a deprecated npm artifact (1.9.0); do not resurrect it or write new code against it.
 - Let the server infer single-turn versus tool-run request-log lifecycle. Do not recreate caller-selected logging modes in the SDK or API examples.
 - Route provider models by prefix: `openai/*` goes to the OpenAI Codex runtime, `anthropic/*` goes to the Anthropic Claude Code runtime. Prefix-less model fallback is not implemented.

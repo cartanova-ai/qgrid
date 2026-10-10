@@ -279,7 +279,8 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
       const { prompt, system, history, input, imageUrls, droppedImageCount } =
         extractPromptAndHistory(options.prompt, { includeImages: imageGeneration === true });
       if (!imageGeneration) warnDroppedImages(droppedImageCount);
-      const effectiveEffort = qgridOptions.effort ?? effort;
+      const effectiveEffort =
+        qgridOptions.thinking === false ? undefined : (qgridOptions.effort ?? effort);
       const verbosity = qgridOptions.verbosity;
       const reasoningSummary = qgridOptions.reasoningSummary;
       const serviceTier = qgridOptions.serviceTier;
@@ -333,6 +334,7 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
               model: modelId,
               system,
               effort: effectiveEffort,
+              thinking: qgridOptions.thinking,
               ...(verbosity ? { verbosity } : {}),
               ...(reasoningSummary ? { reasoningSummary } : {}),
               ...(serviceTier ? { serviceTier } : {}),
@@ -448,7 +450,8 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
       );
       const hasTools = tools && tools.length > 0;
       const qgridOptions = getQgridProviderOptions(options);
-      const effectiveEffort = qgridOptions.effort ?? effort;
+      const effectiveEffort =
+        qgridOptions.thinking === false ? undefined : (qgridOptions.effort ?? effort);
       const verbosity = qgridOptions.verbosity;
       const reasoningSummary = qgridOptions.reasoningSummary;
       const serviceTier = qgridOptions.serviceTier;
@@ -503,6 +506,7 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
             model: modelId,
             system,
             effort: effectiveEffort,
+            thinking: qgridOptions.thinking,
             ...(verbosity ? { verbosity } : {}),
             ...(reasoningSummary ? { reasoningSummary } : {}),
             ...(serviceTier ? { serviceTier } : {}),

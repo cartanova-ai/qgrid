@@ -51,6 +51,80 @@ async function tickTimer(): Promise<void> {
 }
 
 describe("OpenAIDispatcher direct runtime", () => {
+  it.each(["gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"])(
+    "disables thinking and omits summaries through generate/stream for %s",
+    async (model) => {
+      const run = vi.fn((options: OpenAIResponsesOptions) => {
+        expect(buildOpenAIResponsesRequest(options).reasoning).toEqual({ effort: "none" });
+        expect(options.outputSchema).toEqual({ schema: { type: "object" } });
+        return events({ type: "completed", responseId: "r" });
+      });
+      const d = dispatcher(run);
+      await d.onTokenAdded(1, "one", credentials);
+      const req = request({ model, thinking: false, effort: "high", reasoningSummary: "detailed", outputSchema: { type: "object" } });
+      await d.generate(req);
+      const complete = vi.fn();
+      await d.generateStream(req, { onDelta: vi.fn(), onComplete: complete, onError: vi.fn() });
+      expect(complete).toHaveBeenCalledOnce();
+      expect(run).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    ["gpt-6-astra", "requires thinking"],
+    ["gpt-6.1-sol", "requires thinking"],
+    ["gpt-5.4", "has not been verified"],
+  ])("rejects thinking:false for %s before token selection", async (model, reason) => {
+    const run = vi.fn(() => events());
+    // No tokens: validation must win over NO_OPENAI_WORKERS and never contact transport.
+    const d = dispatcher(run);
+    const req = request({ model, thinking: false });
+    await expect(d.generate(req)).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining(reason) });
+    const onError = vi.fn();
+    const onComplete = vi.fn();
+    await expect(d.generateStream(req, { onDelta: vi.fn(), onError, onComplete })).rejects.toThrow(model);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it.each([true, undefined])("preserves effort and summary with thinking=%s on an off-unsupported model", async (thinking) => {
+    const run = vi.fn((options: OpenAIResponsesOptions) => {
+      expect(options.reasoning).toEqual({ effort: "high", summary: "detailed" });
+      return events({ type: "completed", responseId: "r" });
+    });
+    const d = dispatcher(run);
+    await d.onTokenAdded(1, "one", credentials);
+    await d.generate(request({ model: "gpt-6-astra", thinking, effort: "high", reasoningSummary: "detailed" }));
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("explicit true enables reasoning with absent or invalid effort without changing omission", async () => {
+    const observed: Array<OpenAIResponsesOptions["reasoning"]> = [];
+    const d = dispatcher((options) => {
+      observed.push(options.reasoning);
+      return events({ type: "completed", responseId: "r" });
+    });
+    await d.onTokenAdded(1, "one", credentials);
+    for (const effort of [undefined, "invalid"]) {
+      await d.generate(request({ model: "gpt-6-sol", thinking: true, effort }));
+      await d.generate(request({ model: "gpt-6-sol", effort }));
+    }
+    expect(observed).toEqual([{ effort: "low" }, undefined, { effort: "low" }, undefined]);
+  });
+
+  it("applies thinking:false to the automatic image text driver", async () => {
+    const run = vi.fn((options: OpenAIResponsesOptions) => {
+      expect(options.reasoning).toEqual({ effort: "none" });
+      expect(options.imageGeneration).toBe(true);
+      return events({ type: "text-delta", text: "hello" }, { type: "completed", responseId: "r" });
+    });
+    const d = dispatcher(run);
+    await d.onTokenAdded(1, "one", credentials);
+    await d.generate(request({ model: "gpt-6-sol", thinking: false, imageGeneration: "auto" }));
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it.each(["png", "jpeg", "webp"] as const)("forwards %s format and preserves returned MIME", async (outputFormat) => {
     const args = QueryInput.parse({ prompt: "draw", imageGeneration: true, imageGenerationOptions: { outputFormat } });
     let body: ReturnType<typeof buildOpenAIResponsesRequest> | undefined;
@@ -275,24 +349,41 @@ describe("OpenAIDispatcher direct runtime", () => {
     });
   });
 
-  it("streams deltas and reports completion", async () => {
+  it("streams final-answer deltas incrementally while checking message boundaries", async () => {
     const d = dispatcher(() =>
       events(
-        { type: "text-delta", text: "a" },
-        { type: "text-delta", text: "b" },
+        { type: "output-item", item: { id: "m", type: "message", phase: "final_answer", content: [] } },
+        { type: "text-delta", text: "a", itemId: "m" },
+        { type: "text-delta", text: "b", itemId: "m" },
+        { type: "output-item", completed: true, item: { id: "m", type: "message", phase: "final_answer", content: [{type: "output_text", text: "ab"}] } },
         { type: "completed", responseId: "r" },
       ),
     );
     await d.onTokenAdded(1, "one", credentials);
     const deltas: string[] = [];
     const complete = vi.fn();
-    await d.generateStream(request(), {
+    await d.generateStream(request({stopAfterOutputMessage: () => false}), {
       onDelta: (v) => deltas.push(v),
       onComplete: complete,
       onError: vi.fn(),
     });
     expect(deltas).toEqual(["a", "b"]);
     expect(complete).toHaveBeenCalledWith(expect.objectContaining({ text: "ab" }));
+  });
+
+  it("still rejects an upstream failure after accepting a completed output message", async () => {
+    const failure = new Error("upstream failed after tool request");
+    const d = dispatcher(() => events(
+      {type: "text-delta", text: "tool request"},
+      {type: "output-item", completed: true, item: {type: "message", content: [{type: "output_text", text: "tool request"}]}},
+      {type: "error", error: failure},
+    ));
+    await d.onTokenAdded(1, "one", credentials);
+    const complete = vi.fn();
+    const onError = vi.fn();
+    await expect(d.generateStream(request({stopAfterOutputMessage: () => true}), {onDelta: vi.fn(), onComplete: complete, onError})).rejects.toBe(failure);
+    expect(complete).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(failure);
   });
 
   it("returns multiple hosted images with one driver request", async () => {

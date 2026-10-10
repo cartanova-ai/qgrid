@@ -1,6 +1,9 @@
+import * as childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { PassThrough } from "node:stream";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ANTHROPIC_CONFIG_DIR_BASE, anthropicConfigDir } from "./anthropic-constants";
 import {
@@ -13,11 +16,16 @@ import {
   runClaudeSession,
   shouldPinStructuredRetries,
   structuredOutputRetriesEnv,
-  thinkingEnv,
   SYSTEM_PROMPT_ARGV_MAX_BYTES,
   withSessionLock,
 } from "./claude-session";
 import { buildStreamJsonInput } from "./stream-json-adapter";
+
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...await importOriginal<typeof import("node:child_process")>(),
+  spawn: vi.fn(),
+  execFileSync: vi.fn(() => "2.1.295 (Claude Code)"),
+}));
 
 describe("makeAnthropicWorkerId (coord 매핑 P0-2)", () => {
   it("tokenId 기반 안정 합성", () => {
@@ -70,6 +78,54 @@ describe("ensureConfigDir (R10 격리 seed self-healing)", () => {
       expect(readFileSync(`${dir}/settings.json`, "utf8")).toBe("{}");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runClaudeSession thinking and environment boundary", () => {
+  it.each([
+    {model: "claude-opus-4-8", thinking: undefined},
+    {model: "claude-opus-4-8", thinking: true},
+    {model: "claude-opus-4-8", thinking: false},
+    {model: "claude-haiku-5-5", thinking: false},
+    {model: "claude-sonnet-5-5", thinking: false},
+  ])("$model thinking=$thinking preserves isolation without competing env controls", async ({model, thinking}) => {
+    const tokenId = -990002;
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough(), kill: vi.fn(),
+    });
+    const spawn = vi.mocked(childProcess.spawn).mockImplementation(() => {
+      queueMicrotask(() => child.stdout.write(`${JSON.stringify({
+        type: "result", subtype: "success", result: "OK", is_error: false,
+        usage: {input_tokens: 1, output_tokens: 1},
+      })}\n`));
+      return child as unknown as ReturnType<typeof childProcess.spawn>;
+    });
+    vi.stubEnv("ANTHROPIC_API_KEY", "must-not-inherit");
+    vi.stubEnv("MAX_THINKING_TOKENS", "0");
+    vi.stubEnv("CLAUDE_CODE_EXTRA_BODY", '{"model":"must-not-inherit"}');
+    try {
+      const result = await runClaudeSession({
+        tokenId, token: "test-oauth", model, thinking, effort: "high", timeoutMs: 1000,
+        input: [{type: "text", text: "OK", text_elements: []}],
+      }, () => {});
+      expect(result.text).toBe("OK");
+      const [, args, options] = spawn.mock.calls[0]!;
+      expect(args).toContain("--thinking");
+      expect(args).toContain(thinking === true ? "adaptive" : "disabled");
+      expect(options?.env).toMatchObject({
+        CLAUDE_CODE_OAUTH_TOKEN: "test-oauth", CLAUDE_CONFIG_DIR: anthropicConfigDir(tokenId),
+        CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
+        CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "1", CLAUDE_CODE_DISABLE_WORKFLOWS: "1",
+      });
+      for (const key of ["ANTHROPIC_API_KEY", "MAX_THINKING_TOKENS", "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"]) {
+        expect(options?.env).not.toHaveProperty(key);
+      }
+      const extraBody = options?.env?.CLAUDE_CODE_EXTRA_BODY;
+      if (model === "claude-opus-4-8") expect(extraBody).toBeUndefined();
+      else expect(JSON.parse(extraBody!)).toEqual({thinking: {type: model === "claude-sonnet-5-5" ? "between_tools" : "disabled"}});
+    } finally {
+      spawn.mockRestore(); vi.unstubAllEnvs(); rmSync(anthropicConfigDir(tokenId), {recursive: true, force: true});
     }
   });
 });
@@ -134,18 +190,23 @@ describe("buildClaudeArgs (멀티턴/격리/structured)", () => {
     expect(oneMillionEnv(false)).toEqual({ CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" });
   });
 
-  it("thinkingEnv: Fable 5/5.1/Opus 5 는 adaptive thinking 을 보존하고 나머지는 비활성화", () => {
-    expect(thinkingEnv("claude-fable-5-1")).toEqual({});
-    expect(thinkingEnv("anthropic/claude-fable-5-1")).toEqual({});
-    expect(thinkingEnv("claude-fable-5")).toEqual({});
-    expect(thinkingEnv("anthropic/claude-fable-5")).toEqual({});
-    expect(thinkingEnv("claude-opus-5")).toEqual({});
-    expect(thinkingEnv("anthropic/claude-opus-5")).toEqual({});
-    expect(thinkingEnv("claude-opus-4-8")).toEqual({
-      CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1",
-      MAX_THINKING_TOKENS: "0",
-    });
+  it("thinking true enables a legacy default-off model and preserves effort", () => {
+    const args = buildClaudeArgs({model: "claude-opus-4-8", sessionId: "u", thinking: true, effort: "high"});
+    expect(args[args.indexOf("--thinking") + 1]).toBe("adaptive");
+    expect(args[args.indexOf("--effort") + 1]).toBe("high");
   });
+
+  it("thinking false disables a supported default-adaptive model and ignores effort", () => {
+    const args = buildClaudeArgs({model: "anthropic/claude-opus-5", sessionId: "u", thinking: false, effort: "max"});
+    expect(args[args.indexOf("--thinking") + 1]).toBe("disabled");
+    expect(args[args.indexOf("--effort") + 1]).toBe("low");
+  });
+
+  it.each(["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-opus-4-1", "unknown"])(
+    "thinking false rejects %s instead of silently changing its model or thinking mode", (model) => {
+      expect(() => buildClaudeArgs({model, sessionId: "u", thinking: false})).toThrow(`anthropic/${model}`);
+    },
+  );
 
   // SON-495: structured output retry 를 1 로 고정한다.
   it("structuredOutputRetriesEnv: 미설정/비정상 값은 1 로 기본 고정", () => {

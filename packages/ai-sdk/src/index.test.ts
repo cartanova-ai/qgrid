@@ -202,6 +202,37 @@ describe("qgrid AI SDK provider", () => {
     },
   );
 
+  it.each([
+    { mode: "generate", thinking: false, requestedEffort: "high", expectedEffort: undefined },
+    { mode: "stream", thinking: false, requestedEffort: undefined, expectedEffort: undefined },
+    { mode: "generate", thinking: true, requestedEffort: "high", expectedEffort: "high" },
+    { mode: "stream", thinking: true, requestedEffort: undefined, expectedEffort: "medium" },
+    { mode: "generate", thinking: undefined, requestedEffort: undefined, expectedEffort: "medium" },
+    { mode: "stream", thinking: undefined, requestedEffort: "high", expectedEffort: "high" },
+  ] as const)("$mode forwards thinking=$thinking and resolves effort", async ({ mode, thinking, requestedEffort, expectedEffort }) => {
+    let requestArgs: Record<string, unknown> = {};
+    const response = { text: "OK", finishReason: "stop", model: "gpt-6-sol", usage };
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/queryStream")) return new Response(sseDone(response));
+      requestArgs = JSON.parse(String(init?.body)).args;
+      return new Response(JSON.stringify(url.includes("/prepareStream") ? { streamId: "thinking" } : response));
+    }));
+    const model = qgrid("openai/gpt-6-sol", { defaultEffort: "medium" });
+    const options = {
+      prompt: [{ role: "user" as const, content: [{ type: "text" as const, text: "hello" }] }],
+      providerOptions: { qgrid: { thinking, effort: requestedEffort } },
+    };
+    if (mode === "generate") await model.doGenerate(options);
+    else {
+      const result = await model.doStream(options);
+      for await (const _part of result.stream) { /* consume completion */ }
+    }
+    if (thinking === undefined) expect(requestArgs).not.toHaveProperty("thinking");
+    else expect(requestArgs.thinking).toBe(thinking);
+    if (expectedEffort === undefined) expect(requestArgs).not.toHaveProperty("effort");
+    else expect(requestArgs.effort).toBe(expectedEffort);
+  });
+
   it("rejects an explicitly empty tokenName before generate or stream transport", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -602,11 +633,13 @@ describe("qgrid AI SDK provider", () => {
       }),
     );
 
-    const model = qgrid("openai/gpt-5.5");
+    const model = qgrid("openai/gpt-5.5", { defaultEffort: "high" });
+    const providerOptions = { qgrid: { thinking: false, effort: "high" } };
 
     // 턴 1: tool-calls
     await model.doGenerate({
       prompt: [{ role: "user", content: [{ type: "text", text: "weather" }] }],
+      providerOptions,
       tools: [tool()],
       responseFormat: { type: "json", schema: structuredOutputSchema },
     } as never);
@@ -614,6 +647,7 @@ describe("qgrid AI SDK provider", () => {
     // 턴 2: follow-up with tool result
     const result = await model.doGenerate({
       prompt: toolPrompt(["call_1"]),
+      providerOptions,
       tools: [tool()],
       responseFormat: { type: "json", schema: structuredOutputSchema },
     } as never);
@@ -629,6 +663,10 @@ describe("qgrid AI SDK provider", () => {
       .filter((c) => c.url.includes("/query"))
       .map((c) => c.body.args as Record<string, unknown>);
     expect(queryArgs).toHaveLength(2);
+    for (const args of queryArgs) {
+      expect(args.thinking).toBe(false);
+      expect(args).not.toHaveProperty("effort");
+    }
     expect(queryArgs[0]?.jsonSchema).toBe(JSON.stringify(structuredOutputSchema));
     expect(queryArgs[1]?.jsonSchema).toBe(JSON.stringify(structuredOutputSchema));
 
@@ -2186,10 +2224,15 @@ describe("provider 별 effort 타입", () => {
   });
 
   it("provider 별 옵션 타입은 effort 어휘를 나눠 검사한다", () => {
-    const openai = { effort: "ultra", verbosity: "low" } satisfies QgridOpenAIProviderOptions;
-    const anthropic = { effort: "max", timeoutMs: 1_000 } satisfies QgridAnthropicProviderOptions;
+    const openai = { thinking: false, effort: "ultra", verbosity: "low" } satisfies QgridOpenAIProviderOptions;
+    const anthropic = { thinking: true, effort: "max", timeoutMs: 1_000 } satisfies QgridAnthropicProviderOptions;
     // @ts-expect-error Anthropic 옵션에는 ultra 가 없다
     const wrong = { effort: "ultra" } satisfies QgridAnthropicProviderOptions;
     expect([openai, anthropic, wrong]).toHaveLength(3);
+    // @ts-expect-error thinking accepts only booleans
+    const invalidThinking = { thinking: "false" } satisfies QgridOpenAIProviderOptions;
+    // @ts-expect-error thinking accepts only booleans for Anthropic too
+    const invalidAnthropicThinking = { thinking: 0 } satisfies QgridAnthropicProviderOptions;
+    expect([invalidThinking, invalidAnthropicThinking]).toHaveLength(2);
   });
 });

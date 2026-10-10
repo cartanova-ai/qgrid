@@ -131,7 +131,7 @@ export async function beforeQuery(args: QueryInput): Promise<{
       user_prompt: args.prompt,
       system_prompt: args.system,
       requested_model_name: args.model,
-      effort: args.effort,
+      effort: args.thinking === false ? undefined : args.effort,
       project_name: args.projectName,
       history: filterHistoryForStorage(args.history),
       tools: args.tools?.length ? args.tools : undefined,

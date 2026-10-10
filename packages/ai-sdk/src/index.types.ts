@@ -1,6 +1,7 @@
 /**
  * OpenAI 경로(ChatGPT 구독 Codex 백엔드)의 reasoning effort. 백엔드 모델 카탈로그의
- * supported_reasoning_levels 합집합이며, 공개 OpenAI API 의 `none`/`minimal` 은 이 경로에 없다.
+ * supported_reasoning_levels 합집합이다. `none`/`minimal`은 공개 effort 값이 아니며,
+ * 지원 모델의 thinking 비활성화에는 `thinking: false`를 사용한다.
  * GPT-6 Astra와 GPT-5.6 Sol/Terra는 `ultra`, Luna는 `max`까지 지원한다.
  * 모델이 지원하지 않는 값은 서버가 조용히 무시한다.
  */
@@ -29,6 +30,13 @@ export type QgridAnthropicProviderConfig = QgridCommonProviderConfig & {
 export type QgridProviderConfig = QgridOpenAIProviderConfig | QgridAnthropicProviderConfig;
 
 type QgridCommonProviderOptions = {
+  /**
+   * 답변 전 thinking 활성화 여부. 생략하면 기존 모델별 동작을 유지한다.
+   * false는 effort/defaultEffort를 무시하며, 모델·실행 경로가 지원하지 않으면 서버가 거부한다.
+   * true는 effort로 깊이를 조절하지만 매 응답의 thinking 토큰을 보장하지 않는다.
+   * 서버와 SDK를 함께 업데이트해야 한다. 구버전 서버는 이 옵션을 무시할 수 있다.
+   */
+  thinking?: boolean;
   /**
    * 이 요청을 처리할 활성 qgrid 토큰 이름. provider prefix를 포함해야 하며 다른 토큰으로 fallback하지 않는다.
    */

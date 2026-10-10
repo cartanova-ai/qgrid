@@ -53,7 +53,11 @@ export interface GenerateRequest {
   model?: string;
   systemPrompt?: string;
   outputSchema?: JsonValue;
+  // A completed control message can yield to the caller before speculative later text.
+  // The transport must still drain to completion for usage, cancellation and errors.
+  stopAfterOutputMessage?: (text: string, phase?: string) => boolean;
   effort?: string;
+  thinking?: boolean;
   verbosity?: string;
   reasoningSummary?: string;
   serviceTier?: string;

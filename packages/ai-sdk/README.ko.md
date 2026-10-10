@@ -204,7 +204,8 @@ const { text } = await generateText({
 | `tokenName` | provider prefix를 포함한 토큰 이름 | 공통 | `anthropic/yds`처럼 활성 토큰 하나를 엄격히 지정. prefix는 model provider와 같아야 하며 빈 값·누락·inactive·quota 초과 시 다른 토큰으로 fallback하지 않음 |
 | `logger` | `boolean` | 공통 | qgrid request log 저장 여부. 기본값은 `true`. `false`로 설정해도 client tool 실행과 multi-step 연결은 계속 동작 |
 | `sessionKey` | `string` | OpenAI 전용 | 전체 history 재전송 시 불투명 prompt-cache affinity를 파생하는 멀티턴 대화 식별자 ([아래](#멀티턴-prompt-cache-sessionkey) 참조) |
-| `effort` | OpenAI: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` \| `"ultra"` | OpenAI 전용 (`QgridOpenAIProviderOptions`) | ChatGPT 구독 Codex 경로의 reasoning 깊이. GPT-6 Astra/Sol과 GPT-5.6 Sol/Terra는 `"ultra"`까지, GPT-6 Luna와 GPT-5.6 Luna는 `"max"`까지 지원하며, 모델이 지원하지 않는 값은 서버가 조용히 무시하고 백엔드 기본값을 적용. 공개 OpenAI API의 `"none"`/`"minimal"`은 이 경로에 없음 |
+| `thinking` | `boolean` | 공통 | 생략하면 기존 모델별 동작 유지. `true`는 effort로 깊이를 조절하고, `false`는 요청 effort와 config `defaultEffort`를 무시. 모델·실행 경로 미지원 시 오류 |
+| `effort` | OpenAI: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` \| `"ultra"` | OpenAI 전용 (`QgridOpenAIProviderOptions`) | ChatGPT 구독 Codex 경로의 reasoning 깊이. GPT-6 Astra/Sol과 GPT-5.6 Sol/Terra는 `"ultra"`까지, GPT-6 Luna와 GPT-5.6 Luna는 `"max"`까지 지원하며, 모델이 지원하지 않는 값은 서버가 조용히 무시하고 백엔드 기본값을 적용. `"none"`/`"minimal"`은 공개 effort 값이 아니며 thinking 비활성화에는 `thinking: false`를 사용 |
 | `effort` | Anthropic: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` | Anthropic 전용 (`QgridAnthropicProviderOptions`) | Claude Code `--effort` 허용값. 집합 밖의 값은 서버가 조용히 무시하고 qgrid 기본(`"low"`)을 적용. 모델별 상한(예: Sonnet 4.6은 `"xhigh"` 없음)은 Claude Code가 처리 |
 | `verbosity` | `"low"` \| `"medium"` \| `"high"` | OpenAI 전용 | 응답 텍스트의 상세도 |
 | `reasoningSummary` | `"auto"` \| `"concise"` \| `"detailed"` \| `"none"` | OpenAI 전용 | 추론 요약 출력 방식 |
@@ -225,6 +226,23 @@ await generateText({
 ```
 
 `tokenName`은 `streamText`에서도 같은 방식으로 동작합니다.
+
+```typescript
+providerOptions: {
+  qgrid: { thinking: false, effort: "high" } satisfies QgridProviderOptions,
+}
+```
+
+`thinking: false`는 위의 `high`를 무시하며 generate·stream 및 도구 후속 요청에 적용됩니다. `true`도 쉬운 질문에서 thinking 토큰 발생을 보장하지는 않습니다. **서버와 SDK를 함께 업데이트하세요.** 구버전 서버는 새 필드를 무시할 수 있습니다. 비활성화 지원은 실제 모델과 Claude Code 실행 경로에 따라 다릅니다. Sonnet 5.5의 `between_tools` 모드는 답변 전 thinking만 끄며 도구 호출 사이 thinking 블록은 남을 수 있습니다. Haiku 5.5와 Sonnet 5.5의 off 요청은 Claude Code 2.1.295 이상이 필요합니다.
+
+Thinking 비활성화 정책 스냅샷(2026-10-10, Claude Code 조사 기준 2.1.295):
+
+| Provider | 현재 정책에서 off를 허용하는 모델 ID |
+|---|---|
+| OpenAI | `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` |
+| Anthropic | `claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-haiku-4-5`, `claude-sonnet-4-5`, `claude-sonnet-4-6`, `claude-sonnet-5`, `claude-opus-4-5`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` |
+
+위 ID에 평소처럼 `openai/` 또는 `anthropic/` prefix를 붙입니다. 백엔드가 명시적으로 거부한 모델은 `gpt-6-astra`, `gpt-6.1-sol`, `claude-fable-5`, `claude-fable-5-1`, `claude-opus-5-5`입니다. Haiku 5.5와 Sonnet 5.5의 네이티브 전달은 Claude Code 2.1.295에서 검증했습니다. off 요청에서 서버는 CLI 버전을 확인하며 2.1.295 미만이거나 확인할 수 없으면 입력 오류를 반환합니다. 나머지 모델도 off 미확인으로 구분하며 모델 접근 실패를 thinking 강제의 근거로 보지 않습니다. 이 제한은 명시적 false에만 적용됩니다.
 
 AI SDK 최상위 `timeout`은 전체 클라이언트 제한시간이며 custom provider 실행 전에
 `AbortSignal`로 변환됩니다. 따라서 그 숫자 자체는 qgrid에 전달되지 않습니다. qgrid 서버의
@@ -432,13 +450,13 @@ Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/
 
 `anthropic/claude-fable-5-1`(2026-09-01 출시)은 Fable 5와 같은 1M context, 128K 최대 출력, 항상 켜진 adaptive thinking, input $10 / output $50 단가를 공유합니다. cache read만 Fable 5의 $1 대신 1M tokens당 $0.25(input의 0.025x)로 과금되며, cache write는 $12.50(5분)/$20(1시간)으로 같습니다. Fable 5.1의 API 수준 파괴적 변경(forced `tool_choice` 거부, 모델에 귀속된 thinking 블록)은 qgrid에 영향을 주지 않습니다. qgrid는 도구를 끈 Claude Code를 fresh 프로세스로 실행하고 히스토리를 텍스트로 평탄화해 전달하기 때문입니다.
 
-`anthropic/claude-opus-5`는 기본 1M context와 128K 최대 출력을 지원합니다. 1M tokens당 단가는 input $5, cache read $0.50, 5분 cache write $6.25, 1시간 cache write $10, output $25입니다. qgrid는 Opus 5의 기본 adaptive thinking 동작을 유지하고 `effort`로 추론 깊이를 조절합니다. 따라서 `xhigh` 또는 `max` effort에서 허용되지 않는 `thinking: disabled` 조합도 만들지 않습니다.
+`anthropic/claude-opus-5`는 기본 1M context와 128K 최대 출력을 지원합니다. 1M tokens당 단가는 input $5, cache read $0.50, 5분 cache write $6.25, 1시간 cache write $10, output $25입니다. thinking 옵션을 생략하면 qgrid는 Opus 5의 기본 adaptive thinking을 유지합니다. `thinking: false`는 effort를 무시하고 내부적으로 low와 disabled를 사용합니다.
 
 `anthropic/claude-opus-5-5`(2026-09-22 출시)는 1M context와 128K 최대 출력을 지원합니다. 1M tokens당 단가는 input $4, cache read $0.20(input의 0.05x), 5분 cache write $5, 1시간 cache write $8, output $20입니다. adaptive thinking이 항상 켜져 있고 끌 수 없으므로 qgrid는 Fable과 같이 이를 보존하고 `effort`로 추론 깊이를 조절합니다. Opus 5.5의 API 수준 파괴적 변경(forced `tool_choice` 거부, 모델에 귀속된 thinking 블록)은 Fable 5.1과 같은 이유로 qgrid에 영향을 주지 않습니다. Opus 5 단가는 변동이 없습니다.
 
-`anthropic/claude-sonnet-5-5`(2026-09-28 출시)는 1M context와 128K 최대 출력을 지원하며 Sonnet 5와 같은 기본 단가입니다. 1M tokens당 input $2, 5분 cache write $2.50, 1시간 cache write $4, output $10이고, cache read는 2026-10-07에 $0.20에서 절반으로 인하되어 Opus 5.5와 같은 0.05x인 $0.10입니다. qgrid는 요청 시점 단가로 비용을 기록하므로 그 이전 로그는 $0.20 추정치를 유지합니다. thinking 비활성화를 거부하므로 qgrid는 Opus 5.5와 같이 adaptive thinking을 유지하고 `effort`로 추론 깊이를 조절합니다.
+`anthropic/claude-sonnet-5-5`(2026-09-28 출시)는 1M context와 128K 최대 출력을 지원하며 Sonnet 5와 같은 기본 단가입니다. 1M tokens당 input $2, 5분 cache write $2.50, 1시간 cache write $4, output $10이고, cache read는 2026-10-07에 $0.20에서 절반으로 인하되어 Opus 5.5와 같은 0.05x인 $0.10입니다. qgrid는 요청 시점 단가로 비용을 기록하므로 그 이전 로그는 $0.20 추정치를 유지합니다. thinking 생략 시 기본 adaptive 동작을 유지합니다. `thinking: false`는 Claude Code 2.1.295 이상에서 `between_tools`를 전달해 답변 전 thinking을 끄며, 도구 호출 사이 thinking 블록은 남을 수 있습니다.
 
-`anthropic/claude-haiku-5-5`(2026-10-07 출시)는 1M context와 128K 최대 출력을 지원하며, 현행 Claude 모델 중 유일하게 프롬프트 길이별 단가를 씁니다. 100K 토큰 이하 프롬프트는 1M tokens당 input $0.10, cache read $0.01, 5분 cache write $0.125, 1시간 cache write $0.20, output $0.50이고, 프롬프트가 100K 토큰을 넘으면 모든 단가가 5배($0.50 / $0.05 / $0.625 / $1 / $2.50)로 요청 전체에 적용됩니다. qgrid는 GPT-6에 쓰는 요청 전체 long-context 규칙으로 이를 계산합니다. adaptive thinking이 기본으로 켜져 있고 API 기본 effort는 `medium`이며, API는 `xhigh`/`max`에서 thinking 비활성화를 거부하고 Claude Code 2.1.293 카탈로그도 `rejects_disabled_thinking`으로 표시하므로 qgrid는 adaptive thinking을 유지하고 `effort`(SDK 기본 `low`)로 추론 깊이를 조절합니다. Haiku 5.5는 Claude 4.7+ 토크나이저를 쓰므로 같은 텍스트가 Haiku 4.5보다 약 30% 더 많은 토큰으로 계산됩니다.
+`anthropic/claude-haiku-5-5`(2026-10-07 출시)는 1M context와 128K 최대 출력을 지원하며, 현행 Claude 모델 중 유일하게 프롬프트 길이별 단가를 씁니다. 100K 토큰 이하 프롬프트는 1M tokens당 input $0.10, cache read $0.01, 5분 cache write $0.125, 1시간 cache write $0.20, output $0.50이고, 프롬프트가 100K 토큰을 넘으면 모든 단가가 5배($0.50 / $0.05 / $0.625 / $1 / $2.50)로 요청 전체에 적용됩니다. qgrid는 GPT-6에 쓰는 요청 전체 long-context 규칙으로 이를 계산합니다. adaptive thinking이 기본으로 켜져 있고 API 기본 effort는 `medium`입니다. thinking 생략 시 기본 adaptive 동작과 effort(SDK 기본 `low`)를 유지합니다. `thinking: false`는 Claude Code 2.1.295 이상에서 네이티브 요청 설정을 통해 disabled와 low를 전달합니다. Haiku 5.5는 Claude 4.7+ 토크나이저를 쓰므로 같은 텍스트가 Haiku 4.5보다 약 30% 더 많은 토큰으로 계산됩니다.
 
 Claude Code는 Fable의 safety refusal을 다른 Opus 모델로 자동 재시도할 수 있습니다. 현재 CLI는 refusal 카테고리에 따라 Opus 5 또는 Opus 4.8을 고릅니다. 이 경우 AI SDK 응답의 `response.modelId`와 `providerMetadata.qgrid.model`은 실제 serving 모델인 Opus를 가리킵니다. `providerMetadata.qgrid.requestedModel`은 Fable로 유지되고, `providerMetadata.qgrid.modelFallbacks`에 refusal fallback 이력이 담깁니다. 같은 metadata에서 `costSource`와 5분/1시간 cache-write 토큰 분해도 확인할 수 있습니다.
 

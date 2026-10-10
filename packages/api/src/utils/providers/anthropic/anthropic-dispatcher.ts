@@ -31,6 +31,7 @@ import {
   readAnthropicQuotaUsage,
   type AnthropicQuotaUsageResult,
 } from "./anthropic-quota";
+import { assertAnthropicThinkingRuntime, resolveAnthropicThinking } from "./anthropic-thinking";
 import { makeAnthropicWorkerId, runClaudeSession } from "./claude-session";
 
 const logger = getLogger(["qgrid", "anthropic-dispatcher"]);
@@ -319,6 +320,8 @@ export class AnthropicDispatcher implements ProviderDispatcher {
     // 의 "sonnet" 별칭 우회 차단. 정규화 규칙은 fallback 경로와 공유(canonicalAnthropicModel).
     assertSupportedOneMillionSuffix(req.model);
     const model = canonicalAnthropicModel(req.model);
+    const thinking = resolveAnthropicThinking(model, req.thinking, req.effort);
+    assertAnthropicThinkingRuntime(thinking.extraBody);
     const jsonSchema = serializeAndValidateDispatchSchema(req.outputSchema, "anthropic");
 
     const token = await this.selectToken(model, req.preferredTokenId);
@@ -357,6 +360,7 @@ export class AnthropicDispatcher implements ProviderDispatcher {
           system: req.systemPrompt,
           jsonSchema,
           effort: req.effort,
+          thinking: req.thinking,
           timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
           coldHistory: req.coldHistory,
           input: req.coldInput,

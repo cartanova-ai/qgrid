@@ -125,6 +125,18 @@ describe("AnthropicDispatcher", () => {
     await expect(d.generate(baseReq())).rejects.toThrow(/No anthropic tokens/);
   });
 
+  it("rejects unsupported thinking:false before selecting a token or spawning", async () => {
+    const d = new AnthropicDispatcher();
+    const req = baseReq({model: "anthropic/claude-fable-5-1", thinking: false});
+    await expect(d.generate(req)).rejects.toMatchObject({statusCode: 400});
+    const cb = {onDelta: vi.fn(), onComplete: vi.fn(), onError: vi.fn()};
+    await d.generateStream(req, cb);
+    expect(cb.onError).toHaveBeenCalledWith(expect.objectContaining({statusCode: 400}));
+    expect(cb.onComplete).not.toHaveBeenCalled();
+    expect(runClaudeSessionMock).not.toHaveBeenCalled();
+    expect(readAnthropicQuotaUsageMock).not.toHaveBeenCalled();
+  });
+
   it("happy: generate → GenerateResult (threadCoord 조립, systemHash 없음)", async () => {
     const d = new AnthropicDispatcher();
     d.onTokenAdded(1, "tok-A", creds(), null, 1);

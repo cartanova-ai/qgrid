@@ -6,8 +6,10 @@ import {
   type GenerateStreamCallbacks,
 } from "../../utils/providers/common/provider-dispatcher";
 import { systemHash } from "./conv-routing";
+import { OpenAIDispatcher } from "../../utils/providers/openai/openai-dispatcher";
+import { normalizeOpenAIEvent } from "../../utils/providers/openai/openai-backend-protocol";
 import { buildStrictOutputSchema, QgridDispatcherClass } from "./qgrid.dispatcher";
-import { type QueryOutput } from "./qgrid.types";
+import { QueryInput, type QueryOutput } from "./qgrid.types";
 import { type TokenSubsetA } from "../sonamu.generated";
 
 function providerResult(overrides: Partial<GenerateResult> = {}): GenerateResult {
@@ -34,6 +36,65 @@ function deeplyNestedOutputSchema(depth: number): string {
 }
 
 describe("QgridDispatcherClass", () => {
+  it.each(["generate", "stream"])("%s yields a completed tool-call message before a speculative later answer", async (mode) => {
+    const tool = JSON.stringify({result: {action: "tool_call", answer: null, toolCalls: [{toolName: "lookupMarker", args: "{}"}]}});
+    const answer = JSON.stringify({result: {action: "answer", answer: {marker: ""}, toolCalls: null}});
+    const provider = new OpenAIDispatcher("https", {clientFactory: () => ({
+      async *responses() {
+        yield normalizeOpenAIEvent({type: "response.output_item.added", item: {id: "preamble", type: "message", phase: "commentary", content: []}})!;
+        yield normalizeOpenAIEvent({type: "response.output_text.delta", item_id: "preamble", delta: "We need request tool structured."})!;
+        yield normalizeOpenAIEvent({type: "response.output_item.done", item: {id: "preamble", type: "message", phase: "commentary", content: [{type: "output_text", text: "We need request tool structured."}]}})!;
+        for (const [id, phase, text] of [["tool", "commentary", tool], ["answer", "final_answer", answer]]) {
+          yield normalizeOpenAIEvent({type: "response.output_item.added", item: {id, type: "message", role: "assistant", phase, content: []}})!;
+          yield normalizeOpenAIEvent({type: "response.output_text.delta", item_id: id, delta: text})!;
+          yield normalizeOpenAIEvent({type: "response.output_item.done", item: {id, type: "message", role: "assistant", phase, content: [{type: "output_text", text}]}})!;
+        }
+        yield normalizeOpenAIEvent({type: "response.completed", response: {id: "r", model: "gpt-6-luna", usage: {input_tokens: 10, output_tokens: 30, total_tokens: 40}}})!;
+      },
+    })});
+    await provider.onTokenAdded(1, "test", {accessToken: "unused", refreshToken: "", accountId: "unused", accessTokenExpiresAt: Date.now()+60000});
+    const dispatcher = new QgridDispatcherClass();
+    dispatcher.openaiDispatcher = provider;
+    const input = {model: "openai/gpt-6-luna", prompt: "lookup", tools: [{name: "lookupMarker", inputSchema: {type: "object"}}], jsonSchema: JSON.stringify({type: "object",properties: {marker: {type: "string"}}})};
+    const deltas: string[] = [];
+    let result: QueryOutput | undefined;
+    if (mode === "generate") result = await dispatcher.query(input);
+    else await dispatcher.queryStream(input, {onDelta: text => deltas.push(text), onComplete: value => {result = value;}, onError: error => {throw error;}});
+    expect(result?.finishReason).toBe("tool-calls");
+    expect(result?.content[0]).toMatchObject({type: "tool-call", toolName: "lookupMarker", input: "{}"});
+    expect(result?.usage.output_tokens).toBe(30); // Drain through completion; don't undercount discarded text.
+    if (mode === "stream") expect(deltas.join("")).toBe(tool);
+    await provider.stop();
+  });
+
+  it("accepts only boolean thinking values on both query and prepareStream's shared input", () => {
+    for (const thinking of [true, false, undefined]) {
+      expect(QueryInput.parse({ prompt: "hi", thinking }).thinking).toBe(thinking);
+    }
+    expect(QueryInput.safeParse({ prompt: "hi", thinking: "false" }).success).toBe(false);
+  });
+
+  it.each(["openai/gpt-6-sol", "anthropic/claude-sonnet-4-6"])(
+    "forwards thinking on generate and stream, suppressing effort only for explicit off (%s)",
+    async (model) => {
+      const dispatcher = new QgridDispatcherClass();
+      const generate = vi.fn(async () => providerResult());
+      const generateStream = vi.fn(async (_req: GenerateRequest, cb: GenerateStreamCallbacks) => {
+        cb.onComplete(providerResult());
+      });
+      dispatcher.openaiDispatcher = { generate, generateStream } as never;
+      dispatcher.anthropicDispatcher = { generate, generateStream } as never;
+      for (const thinking of [false, true, undefined]) {
+        const input = { prompt: "hi", model, thinking, effort: "high" };
+        await dispatcher.query(input);
+        await dispatcher.queryStream(input, { onDelta: vi.fn(), onComplete: vi.fn(), onError: vi.fn() });
+        const expected = { thinking, effort: thinking === false ? undefined : "high" };
+        expect(generate).toHaveBeenLastCalledWith(expect.objectContaining(expected));
+        expect(generateStream).toHaveBeenLastCalledWith(expect.objectContaining(expected), expect.any(Object));
+      }
+    },
+  );
+
   it("counts completed query and stream generations separately for providers sharing a token name", async () => {
     const dispatcher = new QgridDispatcherClass();
     dispatcher.replaceCache(

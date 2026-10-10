@@ -18,7 +18,6 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 
-import { resolveAnthropicEffort } from "../common/effort";
 import { type JsonValue, type TokenUsageBreakdown, type UserInput } from "../common/provider-types";
 import {
   ARGV_SAFE_MAX_UTF8_BYTES,
@@ -28,14 +27,13 @@ import { createTtftTracker } from "../common/ttft";
 import {
   ANTHROPIC_CLAUDE_CWD,
   anthropicConfigDir,
-  ANTHROPIC_DEFAULT_EFFORT,
   ANTHROPIC_DISALLOWED_TOOLS,
   assertSupportedOneMillionSuffix,
   canonicalAnthropicModel,
   needsCli1mSuffix,
   supports1MContext,
-  usesAdaptiveThinking,
 } from "./anthropic-constants";
+import { assertAnthropicThinkingRuntime, resolveAnthropicThinking } from "./anthropic-thinking";
 import {
   buildStreamJsonInput,
   type ClaudeStreamJsonState,
@@ -106,6 +104,7 @@ export interface ClaudeSessionRequest {
   system?: string;
   jsonSchema?: string; // 있으면 structured output
   effort?: string;
+  thinking?: boolean;
   timeoutMs: number;
   coldHistory?: Array<JsonValue>;
   input: Array<UserInput>;
@@ -147,18 +146,6 @@ export function applyOneMillionSuffix(model: string, needsSuffix: boolean): stri
 
 export function oneMillionEnv(supported: boolean): { CLAUDE_CODE_DISABLE_1M_CONTEXT?: "1" } {
   return supported ? {} : { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" };
-}
-
-export function thinkingEnv(model: string): {
-  CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING?: "1";
-  MAX_THINKING_TOKENS?: "0";
-} {
-  return usesAdaptiveThinking(model)
-    ? {}
-    : {
-        CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1",
-        MAX_THINKING_TOKENS: "0",
-      };
 }
 
 // SON-495: structured output retry 를 1 로 고정한다. CC 가 attempt 를 reject 하고 retry 하면
@@ -206,11 +193,13 @@ export function buildClaudeArgs(opts: {
   system?: string;
   systemPromptFile?: string;
   effort?: string;
+  thinking?: boolean;
   jsonSchema?: string;
   sessionId: string;
   needsOneMillionSuffix?: boolean;
   includePartialMessages?: boolean;
 }): Array<string> {
+  const thinking = resolveAnthropicThinking(opts.model, opts.thinking, opts.effort);
   const useStructured = Boolean(opts.jsonSchema && opts.jsonSchema.length > 0);
   if (useStructured) assertAnthropicSchemaArgvSize(opts.jsonSchema!);
   // --tools "" 로 전체 차단, structured(jsonSchema 있음) 면 StructuredOutput 만 허용.
@@ -244,11 +233,10 @@ export function buildClaudeArgs(opts: {
     // inline [System] 금지 — 정식 채널만(R7). 생략 시 CC default(23k) 주입되므로 반드시 명시.
     // 크기에 따라 --system-prompt(작음) / --system-prompt-file(큼)로 분기(systemArgs).
     ...systemArgs,
-    // Fable 5 는 adaptive thinking 이 필수이고, Opus 5 는 공식 기본 adaptive 동작을 보존한다.
-    ...(usesAdaptiveThinking(opts.model) ? [] : ["--thinking", "disabled"]),
-    // Claude Code 어휘 밖의 effort(OpenAI 전용 ultra, 옛 none/minimal 등)는 조용히 버리고 qgrid 기본을 쓴다.
+    // One CLI control owns thinking; no competing adaptive/budget environment overrides.
+    ...(thinking.mode ? ["--thinking", thinking.mode] : []),
     "--effort",
-    resolveAnthropicEffort(opts.effort) ?? ANTHROPIC_DEFAULT_EFFORT,
+    thinking.effort,
     "--disable-slash-commands",
     "--session-id",
     opts.sessionId,
@@ -269,6 +257,8 @@ export function runClaudeSession(
   // 직접 호출(테스트/미래 caller) 대비 방어적으로 한 번 더 통과시킨다(이미 canonical 이면 no-op).
   assertSupportedOneMillionSuffix(req.model);
   const model = canonicalAnthropicModel(req.model);
+  const thinking = resolveAnthropicThinking(model, req.thinking, req.effort);
+  assertAnthropicThinkingRuntime(thinking.extraBody);
   const supportsOneMillion = supports1MContext(model);
   const needsOneMillionSuffix = needsCli1mSuffix(model);
   const sessionId = randomUUID();
@@ -293,6 +283,7 @@ export function runClaudeSession(
       system: useSystemPromptFile ? undefined : req.system,
       systemPromptFile,
       effort: req.effort,
+      thinking: req.thinking,
       jsonSchema: req.jsonSchema,
       sessionId,
       needsOneMillionSuffix,
@@ -324,8 +315,8 @@ export function runClaudeSession(
           TMPDIR: process.env.TMPDIR,
           CLAUDE_CODE_OAUTH_TOKEN: req.token,
           CLAUDE_CONFIG_DIR: configDir,
+          ...(thinking.extraBody ? { CLAUDE_CODE_EXTRA_BODY: thinking.extraBody } : {}),
           CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
-          ...thinkingEnv(model),
           ...oneMillionEnv(supportsOneMillion),
           CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
           CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",

@@ -111,6 +111,35 @@ export function applyToolCallEmulation(
   );
 }
 
+export function isToolCallEnvelope(
+  text: string,
+  tools: QgridTool[],
+  answerKind: AnswerKind,
+  phase?: string,
+): boolean {
+  if (phase === "commentary") {
+    // Commentary is not the structured answer. Only an explicit tool control
+    // object is eligible, and that object must still pass the strict parser.
+    let value: unknown;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      return false;
+    }
+    if (
+      !value ||
+      typeof value !== "object" ||
+      !("result" in value) ||
+      !value.result ||
+      typeof value.result !== "object" ||
+      !("action" in value.result) ||
+      value.result.action !== "tool_call"
+    )
+      return false;
+  }
+  return parseEnvelope(text, tools, answerKind).action === "tool_call";
+}
+
 function parseEnvelope(text: string, tools: QgridTool[], answerKind: AnswerKind) {
   if (Buffer.byteLength(text, "utf8") > STRUCTURED_ENVELOPE_LIMITS.maxUtf8Bytes) {
     throw new ToolCallEmulationError(

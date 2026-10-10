@@ -61,7 +61,7 @@ export interface OpenAIResponsesOptions {
   toolChoice?: string | OpenAIResponseItem;
   parallelToolCalls?: boolean;
   reasoning?: {
-    effort?: OpenAIEffort;
+    effort?: OpenAIEffort | "none";
     summary?: "auto" | "concise" | "detailed";
   };
   verbosity?: "low" | "medium" | "high";
@@ -170,7 +170,7 @@ export interface OpenAIUsage {
 
 export type OpenAINormalizedEvent =
   | { type: "created"; responseId?: string }
-  | { type: "text-delta"; text: string }
+  | { type: "text-delta"; text: string; itemId?: string }
   | {
       type: "image";
       id?: string;
@@ -235,7 +235,11 @@ export function normalizeOpenAIEvent(raw: unknown): OpenAINormalizedEvent | unde
     return { type: "created", ...(response?.id ? { responseId: String(response.id) } : {}) };
   }
   if (type === "response.output_text.delta" && typeof event.delta === "string") {
-    return { type: "text-delta", text: event.delta };
+    return {
+      type: "text-delta",
+      text: event.delta,
+      ...(typeof event.item_id === "string" ? { itemId: event.item_id } : {}),
+    };
   }
   if (
     (type === "response.output_item.added" || type === "response.output_item.done") &&

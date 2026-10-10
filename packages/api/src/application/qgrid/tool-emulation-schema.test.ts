@@ -23,16 +23,16 @@ describe("buildToolCallSchema", () => {
     },
   ];
 
-  it("documents that emulated tools must be requested through StructuredOutput", () => {
+  it("requests tools in the response body and ends the turn until the client returns results", () => {
     const schema = buildToolCallSchema(tools);
 
     expect(schema).toHaveProperty(
       "description",
-      expect.stringContaining("Do not invoke listed client tools as native Claude Code tools"),
+      expect.stringContaining("then end your turn"),
     );
     expect(schema).toHaveProperty(
       ["properties", "result", "anyOf", 1, "description"],
-      expect.stringContaining("Do not call these tools as native"),
+      expect.stringContaining("wait for the next request containing tool results"),
     );
     expect(schema).toHaveProperty(
       [
@@ -49,6 +49,9 @@ describe("buildToolCallSchema", () => {
       ],
       expect.stringContaining("getWeather"),
     );
+    expect(JSON.stringify(schema)).not.toContain("StructuredOutput");
+    expect(JSON.stringify(schema)).not.toContain("Claude Code");
+    expect(schema).toHaveProperty("description", expect.stringContaining("Do not invent tool results"));
   });
 
   it("makes degenerate combinations grammatically impossible", () => {

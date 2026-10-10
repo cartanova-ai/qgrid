@@ -77,7 +77,7 @@ claude -p
   --model <canonical-model-or-1m-suffix>
   --system-prompt <text>                  # small system prompt
   --system-prompt-file <path>             # large system prompt
-  --thinking disabled                       # omitted for Fable 5/5.1, Opus 5, Opus 5.5, Sonnet 5.5 and Haiku 5.5
+  --thinking <disabled|adaptive>             # resolved from thinking and the existing model default
   --effort <effort-or-low>
   --disable-slash-commands
   --session-id <uuid>
@@ -97,7 +97,11 @@ Important details:
 - Large system prompts over 64 KiB are written to a temporary file to avoid argv `E2BIG` — this
   same branch absorbs large injected schema contracts, so the old 64 KiB schema argv limit no
   longer applies (only the global 512 KiB caller-schema complexity limit remains).
-- `--thinking disabled`, `MAX_THINKING_TOKENS=0`, and adaptive thinking env suppression keep thinking off for existing models. Fable 5, Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5 require always-on adaptive thinking (Fable: CLI catalog `rejects_disabled_thinking`; Opus 5.5: official spec, thinking cannot be turned off; Sonnet 5.5: API `{type: "disabled"}` returns 400 and the CLI catalog marks `rejects_disabled_thinking`; Haiku 5.5 (released 2026-10-07): the API accepts disabled thinking only at `high` effort or below and returns 400 at `xhigh`/`max`, and the Claude Code 2.1.293 catalog marks `rejects_disabled_thinking`). Opus 5 defaults to adaptive thinking and rejects disabled thinking at `xhigh`/`max` effort. qgrid omits all three suppressors for these models (`usesAdaptiveThinking`) and uses `effort` to control depth.
+- One policy resolves the CLI thinking flag and effort before spawning. Omission preserves the existing model policy: Fable 5/5.1, Opus 5/5.5, Sonnet 5.5 and Haiku 5.5 keep adaptive defaults; other models use `--thinking disabled`. Explicit `true` uses `--thinking adaptive` and the normal effort resolution. Explicit `false` uses `--thinking disabled --effort low` only on supported models, ignoring caller/default effort. `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING` and `MAX_THINKING_TOKENS` are no longer sent. Do not reintroduce overlapping suppressors or inherit `CLAUDE_CODE_EFFORT_LEVEL`.
+- The 2026-10-10 off policy includes Haiku 4.5/5.5, Sonnet 4.5/4.6/5/5.5, and Opus 4.5/4.6/4.7/4.8/5. Fable 5/5.1 and Opus 5.5 reject disabled thinking at the backend. Off requests for unverified models fail before spawning instead of changing models or silently enabling thinking.
+- Haiku 5.5 and Sonnet 5.5 require Claude Code 2.1.295 or newer for explicit false. Cache the result of `claude --version`; unknown or older versions return an input error. The policy computes `CLAUDE_CODE_EXTRA_BODY` containing only `thinking: {type: "disabled"}` for Haiku or `thinking: {type: "between_tools"}` for Sonnet, alongside `--thinking disabled --effort low`. Native delivery was verified on 2.1.295; invalid-type and Sonnet-disabled negative controls confirmed that the CLI applied the body field. `between_tools` disables pre-answer thinking but may emit thinking blocks between tools. Never inherit this env variable or expose arbitrary body overrides to callers.
+- Legacy environment suppression versus CLI-only disabled was compared on Sonnet 4.6 and Opus 4.8: both completed with zero thinking tokens in the short-text baseline. The comparison supports removing the duplicate suppressors without changing the omitted-option policy.
+
 
 ## Spawn env
 
@@ -109,14 +113,13 @@ Included env:
 - `TMPDIR`
 - `CLAUDE_CODE_OAUTH_TOKEN`
 - `CLAUDE_CONFIG_DIR`
+- `CLAUDE_CODE_EXTRA_BODY` only when computed by the thinking policy for explicit Haiku/Sonnet 5.5 off; never inherited
 - `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`
-- `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1` except for Fable 5/5.1 and Opus 5
 - `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`
 - `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`
 - `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS=1`
 - `CLAUDE_CODE_DISABLE_WORKFLOWS=1`
 - `CLAUDE_CODE_ATTRIBUTION_HEADER=0`
-- `MAX_THINKING_TOKENS=0` except for Fable 5/5.1 and Opus 5
 - `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` when model does not support qgrid's 1M path
 - `MAX_STRUCTURED_OUTPUT_RETRIES` for streaming structured output only (not non-streaming `generate`)
 

@@ -24,6 +24,16 @@ qgrid supports the AI SDK `tools` interface, but it does not use native provider
 - qgrid maps that structured object back into AI SDK `tool-call` content.
 - The AI SDK executes the actual tool functions and calls qgrid again with tool results.
 
+OpenAI can emit separate commentary and final-answer message items in one response.
+Plain commentary is an intermediate update, not an emulation payload: do not join
+it to the final JSON. Known final-answer message deltas still stream incrementally.
+For tool emulation, a complete message that passes the strict envelope and tool-name
+validation with `action: tool_call` is the client handoff boundary. Stop aggregating
+and streaming later text from that response: it cannot incorporate a tool result
+that the client has not produced yet. Drain the upstream response to preserve usage,
+errors, and cancellation. Never split concatenated JSON inside a single message or
+recover malformed envelopes. Ordinary text requests keep their existing aggregation.
+
 `generateText` and `streamText` default to `stepCountIs(1)`. When an executable
 tool can run before the final answer, callers must set a bounded `stopWhen`
 (for example `stepCountIs(3)`) or the AI SDK stops after the first tool-call
@@ -99,8 +109,15 @@ The schema explicitly tells the model:
 
 - use `tool_call` when client-side tool execution is needed;
 - use `answer` only for a final answer;
-- do not invoke listed tools as native Claude Code tools;
+- return the tool request as the JSON response body, then end the turn and wait for client results;
+- do not invent tool results or emit an answer before the required results arrive;
 - put tool arguments in `args` as a JSON string.
+
+Do not instruct OpenAI to use a `StructuredOutput` or Claude Code tool: neither is
+provided on this route. The legacy schema descriptions contained that stale
+instruction; schema descriptions now explain the actual client handoff protocol.
+The discriminated union, required fields, argument encoding and user-schema refs
+are unchanged. Prompt wording improves guidance but does not guarantee model compliance.
 
 Delivery differs by provider (SON-532). OpenAI: `qgrid.dispatcher.ts` strictifies the composed
 envelope through `buildStrictOutputSchema` and passes it as the response format — constrained

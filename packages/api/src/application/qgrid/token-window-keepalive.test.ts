@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  KEEPALIVE_MODEL,
   KEEPALIVE_PROJECT_NAME,
   POST_KEEPALIVE_USAGE_DELAY_MS,
   rescheduleTokenWindowKeepalive,
@@ -76,7 +75,7 @@ describe("token window keepalive", () => {
 
     expect(dispatch).toHaveBeenCalledWith({
       prompt: "Reply OK.",
-      model: KEEPALIVE_MODEL,
+      model: "anthropic/claude-haiku-5-5",
       effort: "low",
       projectName: KEEPALIVE_PROJECT_NAME,
       preferredTokenId: 1,

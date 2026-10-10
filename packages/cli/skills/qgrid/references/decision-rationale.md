@@ -37,6 +37,15 @@ Key decisions:
 - The SDK should stay a thin adapter. Server APIs own request-log lifecycle, provider dispatch, structured-output emulation, and provider runtime details.
 - Request logging defaults to enabled. `providerOptions.qgrid.logger: false` is the single per-generation opt-out for both native qgrid logs and `createQgridLogger` telemetry logs; it must not alter generation or tool behavior.
 
+## Thinking Control
+
+Source: `docs/plans/2026-10-10-001-feat-thinking-control-plan.md`.
+
+- Use the independent `providerOptions.qgrid.thinking?: boolean` switch. False makes effort irrelevant; do not reject the combination or expose a cross-provider `effort: "none"` value.
+- Preserve omitted-option behavior. Reject unsupported and runtime-unverified off requests before token acquisition/spawn, without fallback. Backend capability and Claude Code delivery are separate evidence.
+- Use one Anthropic CLI thinking policy instead of overlapping environment suppressors. Preserve the OAuth env allowlist, token-specific config, empty settings, isolated cwd, memory/CLAUDE.md/skills/workflow disabling, tools, attribution, and 1M policy. These isolation controls prevent previously observed cross-request context injection and account metadata leakage.
+- Haiku/Sonnet 5.5 use a narrowly computed native `CLAUDE_CODE_EXTRA_BODY` thinking field, guarded by Claude Code >=2.1.295. Do not inherit that variable, expose arbitrary body overrides, add a transport, or add a relay. Sonnet's `between_tools` exception remains visible: it turns off pre-answer thinking but can retain thinking blocks between tools.
+
 ## Tool Calling And Request-Log Lifecycle
 
 Sources:

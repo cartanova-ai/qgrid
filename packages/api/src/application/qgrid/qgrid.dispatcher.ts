@@ -37,7 +37,7 @@ import {
 } from "./qgrid.types";
 import { composeSystemWithSchemaContract } from "./schema-prompt";
 import { type TokenSubscriber } from "./token-subscriber";
-import { applyToolCallEmulation } from "./tool-emulation";
+import { applyToolCallEmulation, isToolCallEnvelope } from "./tool-emulation";
 import { buildToolCallSchema } from "./tool-emulation-schema";
 
 export type InternalQueryInput = QueryInput & {
@@ -130,7 +130,11 @@ export class QgridDispatcherClass {
         model: route.model,
         systemPrompt: input.system,
         outputSchema,
-        effort: input.effort,
+        stopAfterOutputMessage: input.tools?.length
+          ? (text, phase) => isToolCallEnvelope(text, input.tools!, answerKind, phase)
+          : undefined,
+        thinking: input.thinking,
+        effort: input.thinking === false ? undefined : input.effort,
         verbosity: input.verbosity,
         reasoningSummary: input.reasoningSummary,
         serviceTier: input.serviceTier,
@@ -169,7 +173,8 @@ export class QgridDispatcherClass {
         // outputSchema 는 전달하지 않는다 — anthropic 에서 항상 undefined(U1)이며,
         // CC 로 가는 --json-schema 채널 자체가 닫혀 있음을 여기서 명시한다.
         systemPrompt: composeSystemWithSchemaContract(input.system, input),
-        effort: input.effort,
+        thinking: input.thinking,
+        effort: input.thinking === false ? undefined : input.effort,
         timeoutMs: input.timeout,
         abortSignal,
         coldInput: decision.coldInput,
@@ -211,7 +216,11 @@ export class QgridDispatcherClass {
           model: route.model,
           systemPrompt: input.system,
           outputSchema,
-          effort: input.effort,
+          stopAfterOutputMessage: input.tools?.length
+            ? (text, phase) => isToolCallEnvelope(text, input.tools!, answerKind, phase)
+            : undefined,
+          thinking: input.thinking,
+          effort: input.thinking === false ? undefined : input.effort,
           verbosity: input.verbosity,
           reasoningSummary: input.reasoningSummary,
           serviceTier: input.serviceTier,
@@ -268,7 +277,8 @@ export class QgridDispatcherClass {
           model: input.model,
           // 스키마/envelope 계약은 --json-schema 대신 system 말미의 텍스트로 안내한다(SON-532)
           systemPrompt: composeSystemWithSchemaContract(input.system, input),
-          effort: input.effort,
+          thinking: input.thinking,
+          effort: input.thinking === false ? undefined : input.effort,
           coldInput: decision.coldInput,
           coldHistory: decision.coldHistory,
           preferredTokenId: input.preferredTokenId,

@@ -14,7 +14,7 @@ const logger = getLogger(["qgrid", "effort"]);
  */
 
 // Codex 구독 백엔드 모델 카탈로그(~/.codex/models_cache.json) 의 supported_reasoning_levels 합집합.
-// 공개 OpenAI API 의 `none`/`minimal` 은 이 경로에 없다. 모델별 상한은 model-cost.ts 의 카탈로그에 있다.
+// Public effort options exclude none/minimal. thinking:false maps to wire-level none separately.
 export const OPENAI_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export type OpenAIEffort = (typeof OPENAI_EFFORTS)[number];
 

@@ -15,7 +15,7 @@ const RESET_GRACE_MS = 1_000;
 // usage API 성공 응답은 1분 캐시된다. keepalive 직후 즉시 재조회하면 이전 윈도우를
 // 다시 보므로 캐시가 지난 뒤 한 번 확인하고, 그때도 새 윈도우가 없으면 다음 5h까지 기다린다.
 export const POST_KEEPALIVE_USAGE_DELAY_MS = 61_000;
-export const KEEPALIVE_MODEL = "anthropic/claude-haiku-4-5";
+export const KEEPALIVE_MODEL = "anthropic/claude-haiku-5-5";
 export const KEEPALIVE_PROJECT_NAME = "qgrid-token-window-keepalive";
 export const KEEPALIVE_SETTING_KEY = "qgrid.tokenWindowKeepaliveEnabled";
 export const KEEPALIVE_ENV_KEY = TOKEN_WINDOW_KEEPALIVE_RUNNER_ENV_KEY;
