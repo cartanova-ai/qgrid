@@ -163,6 +163,7 @@ async function inspectToken(
     await deps.dispatch({
       prompt: "Reply OK.",
       model: KEEPALIVE_MODEL,
+      thinking: false,
       effort: "low",
       projectName: KEEPALIVE_PROJECT_NAME,
       preferredTokenId: token.id,

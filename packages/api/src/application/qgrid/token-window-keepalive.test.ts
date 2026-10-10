@@ -76,6 +76,7 @@ describe("token window keepalive", () => {
     expect(dispatch).toHaveBeenCalledWith({
       prompt: "Reply OK.",
       model: "anthropic/claude-haiku-5-5",
+      thinking: false,
       effort: "low",
       projectName: KEEPALIVE_PROJECT_NAME,
       preferredTokenId: 1,
