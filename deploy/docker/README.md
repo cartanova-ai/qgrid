@@ -14,7 +14,16 @@ docker build --platform linux/amd64 --build-arg QGRID_VERSION=2.10.3 -t qgrid:2.
 CI reuses the local release tarball that passed the CLI smoke check and verifies
 its installed version. It does not download the just-published package again:
 npm metadata and tarball propagation can lag behind a successful publish.
+CI builds and tests once, copies the existing API/web output into the CLI bundle,
+then packs both release packages without repeating lifecycle hooks. npm receives
+those exact tarballs. Ordinary manual CLI packing retains its prepack checks.
 The tarball is ignored by Git.
+
+GitHub Actions caches the image layers. OS packages and the pinned Claude CLI
+are installed before the changing qgrid tarball and version label, so a release
+can reuse them. To measure a warm build of an existing version, run the workflow
+manually with `benchmark_image=true`; it builds and smoke-tests without replacing
+an existing published image tag.
 
 Node and Claude Code versions are pinned in the Dockerfile. The server starts
 the packaged API directly, without running either CLI's update path. It runs as

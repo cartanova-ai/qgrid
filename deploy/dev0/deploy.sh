@@ -12,15 +12,25 @@ image="ghcr.io/cartanova-ai/qgrid:$version"
 docker pull "$image"
 QGRID_IMAGE="$(docker image inspect --format '{{index .RepoDigests 0}}' "$image")"
 export QGRID_IMAGE
-docker stack deploy --detach=false --resolve-image always -c stack.yml qgrid
+docker stack deploy --detach=true --resolve-image always -c stack.yml qgrid
 
 for _ in $(seq 1 90); do
-  container="$(docker ps -q --filter label=com.docker.swarm.service.name=qgrid_api --filter "ancestor=$QGRID_IMAGE")"
-  if [[ -n "$container" ]] && [[ "$(docker inspect --format '{{.State.Health.Status}}' "$container")" == healthy ]]; then
-    printf 'QGRID_IMAGE=%s\n' "$QGRID_IMAGE" > deployed-image.env
-    echo "qgrid $version is healthy ($QGRID_IMAGE)"
-    exit 0
+  IFS='|' read -r service_image update_state <<< "$(docker service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}|{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' qgrid_api)"
+  if [[ "$service_image" != "$QGRID_IMAGE" || "$update_state" == paused || "$update_state" == rollback* ]]; then
+    echo "The requested qgrid deployment was replaced, paused, or rolled back ($update_state)." >&2
+    docker service ps --no-trunc qgrid_api
+    exit 1
   fi
+  tasks="$(docker service ps -q --filter desired-state=running qgrid_api)"
+  for task in $tasks; do
+    IFS='|' read -r task_state task_image container <<< "$(docker inspect --type task --format '{{.Status.State}}|{{.Spec.ContainerSpec.Image}}|{{if .Status.ContainerStatus}}{{.Status.ContainerStatus.ContainerID}}{{end}}' "$task")"
+    if [[ "$task_state" == running && "$task_image" == "$QGRID_IMAGE" && -n "$container" ]] &&
+      [[ "$(docker inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null || true)" == healthy ]]; then
+      printf 'QGRID_IMAGE=%s\n' "$QGRID_IMAGE" > deployed-image.env
+      echo "qgrid $version is healthy ($QGRID_IMAGE); Swarm rollback monitoring continues."
+      exit 0
+    fi
+  done
   sleep 2
 done
 

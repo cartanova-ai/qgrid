@@ -18,8 +18,12 @@ bash deploy.sh 2.10.3
 ```
 
 The script pulls the image before changing the service, resolves its immutable
-digest, deploys the stack, and checks the requested container's health. On
-success, `deployed-image.env` records the deployed digest. Releases do not
+digest, deploys the stack without waiting for Swarm's update monitor, and checks
+the requested image's running service task. It returns success as soon as that
+container is healthy; paused or rolled-back updates fail. Swarm's 240-second
+monitor and automatic rollback remain active after the command exits. A later
+failure can still roll back the service, so `deployed-image.env` records the digest
+that became healthy, not a guarantee of the currently running image. Releases do not
 automatically upgrade dev0; deployment is an explicit operation.
 
 The stack runs one replica constrained to dev0. Host networking preserves the

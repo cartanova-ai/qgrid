@@ -17,7 +17,8 @@
   ],
   "type": "module",
   "scripts": {
-    "bundle": "pnpm run check:bundle-dependencies && cd ../api && pnpm build && cd ../cli && rm -rf bundle && mkdir -p bundle/public && touch bundle/.env && cp -r ../api/dist ./bundle/dist && cp -r ../api/web-dist ./bundle/web-dist && cp -r ../api/src ./bundle/src",
+    "bundle": "cd ../api && pnpm build && cd ../cli && pnpm run bundle:copy",
+    "bundle:copy": "pnpm run check:bundle-dependencies && rm -rf bundle && mkdir -p bundle/public && touch bundle/.env && cp -r ../api/dist ./bundle/dist && cp -r ../api/web-dist ./bundle/web-dist && cp -r ../api/src ./bundle/src",
     "build": "tsdown",
     "check:bundle-dependencies": "node tooling/check-bundled-api-dependencies.mjs",
     "postinstall": "node postinstall.mjs",

@@ -3,6 +3,12 @@ name: Build and Publish
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      benchmark_image:
+        description: Build and verify an existing image version to measure cache performance (never overwrite it)
+        type: boolean
+        default: false
 
 permissions:
   id-token: write # Required for npm trusted publisher (OIDC)
@@ -63,14 +69,21 @@ jobs:
       - name: Build
         run: mise run build
 
+      - name: Pack release artifacts
+        run: |
+          PACK_DIR="$RUNNER_TEMP/qgrid-release"
+          mkdir -p "$PACK_DIR"
+          mise exec -- pnpm --dir packages/cli run bundle:copy
+          mise exec -- pnpm --dir packages/cli --config.ignore-scripts=true pack --pack-destination "$PACK_DIR"
+          mise exec -- pnpm --dir packages/ai-sdk --config.ignore-scripts=true pack --pack-destination "$PACK_DIR"
+          cp "$PACK_DIR"/cartanova-qgrid-cli-*.tgz deploy/docker/qgrid-cli.tgz
+          printf '%s\n' "QGRID_RELEASE_DIR=$PACK_DIR" >> "$GITHUB_ENV"
+
       - name: Smoke test published CLI runtime
         run: |
-          PACK_DIR="$(mktemp -d)"
           INSTALL_DIR="$(mktemp -d)"
           NODE_BIN="$(mise exec -- node -e 'process.stdout.write(process.execPath)')"
-          mise exec -- pnpm --dir packages/cli pack --pack-destination "$PACK_DIR"
-          cp "$PACK_DIR"/cartanova-qgrid-cli-*.tgz "$GITHUB_WORKSPACE/deploy/docker/qgrid-cli.tgz"
-          mise exec -- npm install --prefix "$INSTALL_DIR" --ignore-scripts "$PACK_DIR"/cartanova-qgrid-cli-*.tgz
+          mise exec -- npm install --prefix "$INSTALL_DIR" --ignore-scripts "$QGRID_RELEASE_DIR"/cartanova-qgrid-cli-*.tgz
           cd "$INSTALL_DIR/node_modules/@cartanova/qgrid-cli"
           "$NODE_BIN" --input-type=module -e "await import('sonamu')"
           printf '%s\n' "QGRID_SMOKE_INSTALL_DIR=$INSTALL_DIR" >> "$GITHUB_ENV"
@@ -107,7 +120,7 @@ jobs:
 
       # npm publish (버전 안 바뀌면 스킵)
       - name: Publish packages
-        run: mise run publish:packages
+        run: mise exec -- pnpm exec tsx scripts/publish.ts "$QGRID_RELEASE_DIR"
         env:
           NPM_CONFIG_PROVENANCE: true
 
@@ -144,16 +157,18 @@ jobs:
           fi
 
       - name: Build release image
-        if: steps.image.outputs.exists == 'false'
+        if: steps.image.outputs.exists == 'false' || inputs.benchmark_image
         uses: docker/build-push-action@v7
         with:
           context: deploy/docker
           load: true
           tags: ${{ steps.image.outputs.name }}
           build-args: QGRID_VERSION=${{ steps.image.outputs.version }}
+          cache-from: type=gha,scope=qgrid-linux-amd64
+          cache-to: type=gha,mode=max,scope=qgrid-linux-amd64
 
       - name: Smoke test release image
-        if: steps.image.outputs.exists == 'false'
+        if: steps.image.outputs.exists == 'false' || inputs.benchmark_image
         env:
           QGRID_RELEASE_IMAGE: ${{ steps.image.outputs.name }}
           POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
