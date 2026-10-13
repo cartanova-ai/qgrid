@@ -622,9 +622,13 @@ function SortableTokenCard({ token }: { token: Token }) {
           </div>
           <span
             className={`text-[11px] tabular-nums font-medium shrink-0 ${theme.cost}`}
-            title="이 토큰의 누적 비용"
+            title={
+              costData && costData.unknownImageCostCount > 0
+                ? `이미지 비용을 알 수 없는 요청 ${costData.unknownImageCostCount}건이 있습니다. 확인된 비용만 포함합니다.`
+                : "이 토큰의 누적 비용"
+            }
           >
-            {formatUsd(costData?.usd ?? 0)}
+            {formatUsd(costData?.usd ?? 0, (costData?.unknownImageCostCount ?? 0) > 0)}
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-1 mb-2">

@@ -1,5 +1,6 @@
 import {
   CODEX_IMAGE_GENERATION_MODEL,
+  imageGenerationCostMethod,
   resolveImageGenerationOptions,
 } from "./qgrid-image-generation";
 import {
@@ -62,13 +63,15 @@ export function imageGenerationToolArgs(
     ...(args.imageGenerationOptions ? { requestedOptions: args.imageGenerationOptions } : {}),
     ...(options.generation
       ? { observedGeneration: options.generation }
-      : {
-          pricingAssumption: {
-            model: CODEX_IMAGE_GENERATION_MODEL,
-            quality: resolved.quality,
-            size: resolved.size,
-          },
-        }),
+      : imageGenerationCostMethod(args.imageGenerationOptions)
+        ? {
+            pricingAssumption: {
+              model: CODEX_IMAGE_GENERATION_MODEL,
+              quality: resolved.quality,
+              size: resolved.size,
+            },
+          }
+        : {}),
   });
 }
 

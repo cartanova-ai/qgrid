@@ -19,6 +19,15 @@ it("logs observed standalone settings separately from requested controls without
 });
 
 describe("qgrid response log formatting", () => {
+  it("keeps custom requests and hosted observations separate without inventing a price assumption", () => {
+    const args = { prompt: "draw in 9:20", imageGenerationOptions: { size: "1152x2560" } };
+    const generation = { route: "codex-responses" as const, size: "841x1870", quality: "low" };
+    const observed = JSON.parse(imageGenerationToolArgs(args, { generation }));
+    expect(observed.requestedOptions.size).toBe("1152x2560");
+    expect(observed.observedGeneration).toEqual(generation);
+    expect(observed).not.toHaveProperty("pricingAssumption");
+    expect(JSON.parse(imageGenerationToolArgs(args))).not.toHaveProperty("pricingAssumption");
+  });
   it("logs the returned MIME and requested output format", () => {
     expect(formatImagePartForLog({ type: "image", data: "webp", mediaType: "image/webp" })).toContain("data:image/webp;base64,webp");
     expect(JSON.parse(imageGenerationToolArgs({ prompt: "draw", imageGenerationOptions: { outputFormat: "webp" } })).tool.outputFormat).toBe("webp");

@@ -564,7 +564,7 @@ describe("RequestLogModel cost provenance", () => {
    * @param confirmedTotal SUM 쿼리가 돌려줄 micro-USD 합계
    * @param legacyRows 재계산 대상 row 들
    */
-  function mockTotalCostQueries(confirmedTotal: number, legacyRows: unknown[]) {
+  function mockTotalCostQueries(confirmedTotal: number, legacyRows: unknown[], unknownImageCostCount = 0) {
     // subset qb 는 SELECT 를 비우고(clear) 집계/축소된 컬럼만 다시 얹는다 — 구현과 같은 체인.
     const sumChain = {
       where: vi.fn(),
@@ -572,7 +572,7 @@ describe("RequestLogModel cost provenance", () => {
       whereRaw: vi.fn(),
       clear: vi.fn(),
       select: vi.fn(),
-      first: vi.fn(async () => ({ total: confirmedTotal })),
+      first: vi.fn(async () => ({ total: confirmedTotal, unknownImageCostCount })),
     };
     sumChain.where.mockReturnValue(sumChain);
     sumChain.whereIn.mockReturnValue(sumChain);
@@ -606,7 +606,7 @@ describe("RequestLogModel cost provenance", () => {
   it("uses exact stored cost for rows with a cost source", async () => {
     mockTotalCostQueries(3_000, []);
 
-    await expect(RequestLogModel.totalCost()).resolves.toBe(0.003);
+    await expect(RequestLogModel.totalCost()).resolves.toEqual({ usd: 0.003, unknownImageCostCount: 0 });
   });
 
   it("sums every row in SQL without a cost_source predicate", async () => {
@@ -637,7 +637,7 @@ describe("RequestLogModel cost provenance", () => {
       },
     ]);
 
-    await expect(RequestLogModel.totalCost()).resolves.toBeCloseTo(0.4725, 10);
+    await expect(RequestLogModel.totalCost().then((result) => result.usd)).resolves.toBeCloseTo(0.4725, 10);
   });
 
   it("adds only the delta for legacy rows already counted in the SQL sum", async () => {
@@ -656,7 +656,7 @@ describe("RequestLogModel cost provenance", () => {
       },
     ]);
 
-    await expect(RequestLogModel.totalCost()).resolves.toBeCloseTo(0.4725, 10);
+    await expect(RequestLogModel.totalCost().then((result) => result.usd)).resolves.toBeCloseTo(0.4725, 10);
   });
 
   it("leaves the stored value untouched for legacy rows without a model name", async () => {
@@ -675,7 +675,7 @@ describe("RequestLogModel cost provenance", () => {
       },
     ]);
 
-    await expect(RequestLogModel.totalCost()).resolves.toBeCloseTo(0.005, 10);
+    await expect(RequestLogModel.totalCost().then((result) => result.usd)).resolves.toBeCloseTo(0.005, 10);
   });
 
   it("applies list filters to both cost queries so totals match the filtered list", async () => {
@@ -721,7 +721,7 @@ describe("RequestLogModel cost provenance", () => {
       },
     ]);
 
-    await expect(RequestLogModel.totalCost()).resolves.toBeCloseTo(0.4755, 10);
+    await expect(RequestLogModel.totalCost().then((result) => result.usd)).resolves.toBeCloseTo(0.4755, 10);
   });
 });
 
@@ -738,10 +738,13 @@ describe("RequestLogModel PostgreSQL", () => {
         { cost_usd: 5_000, image_cost_usd: 10_000, cost_source: "provider" },
         { cost_usd: 1_000, image_cost_usd: 20_000, cost_source: null },
         { cost_usd: 900_000, image_cost_usd: 700_000, cost_source: null },
+        { cost_usd: 1_000, image_cost_usd: null, cost_source: "provider", is_image_generation: true },
+        { cost_usd: 2_000, image_cost_usd: null, cost_source: "provider", is_image_generation: false },
+        { cost_usd: 500_000, image_cost_usd: null, cost_source: "provider", is_image_generation: true },
       ].entries()) {
         const id = await RequestLogModel.createRun({
           user_prompt: "cost regression",
-          project_name: index < 2 ? projectName : `${projectName}-other`,
+          project_name: index === 2 || index === 5 ? `${projectName}-other` : projectName,
         });
         ids.push(id);
         await RequestLogModel.getPuri("w").table("request_logs").where("id", id).update({
@@ -754,10 +757,12 @@ describe("RequestLogModel PostgreSQL", () => {
 
       const params = { sonamuFilter: { project_name: projectName }, num: 0, page: 1 };
       const { rows } = await RequestLogModel.findMany("C", params);
-      expect(rows.map((row) => row.id)).toEqual(expect.arrayContaining(ids.slice(0, 2)));
-      expect(rows).toHaveLength(2);
-      // Confirmed: .005 + .010; legacy driver repriced to .003, plus .020 image.
-      await expect(RequestLogModel.totalCost(params)).resolves.toBeCloseTo(0.038, 10);
+      expect(rows.map((row) => row.id)).toEqual(expect.arrayContaining([ids[0], ids[1], ids[3], ids[4]]));
+      expect(rows).toHaveLength(4);
+      // .038 known images + .001 hosted driver + .002 text; other project excluded.
+      const total = await RequestLogModel.totalCost(params);
+      expect(total.usd).toBeCloseTo(0.041, 10);
+      expect(total.unknownImageCostCount).toBe(1);
     } finally {
       await RequestLogModel.del(ids);
     }

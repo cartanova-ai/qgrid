@@ -8,6 +8,24 @@ import {
 } from "./openai-backend-protocol";
 
 describe("OpenAI Codex backend protocol", () => {
+  it.each(["png", "jpeg", "webp"])("preserves reported hosted %s generation settings", (output_format) => {
+    expect(normalizeOpenAIEvent({ type: "response.output_item.done", item: {
+      type: "image_generation_call", result: "aGVsbG8=", output_format,
+      size: "841x1870", quality: "low", background: "opaque",
+    } })).toMatchObject({ generation: {
+      route: "codex-responses", size: "841x1870", quality: "low", background: "opaque",
+    } });
+  });
+
+  it("reports PNG byte dimensions instead of a conflicting backend size", () => {
+    const bytes = Buffer.alloc(24);
+    Buffer.from("89504e470d0a1a0a", "hex").copy(bytes);
+    bytes.writeUInt32BE(841, 16);
+    bytes.writeUInt32BE(1870, 20);
+    expect(normalizeOpenAIEvent({ type: "response.output_item.done", item: {
+      type: "image_generation_call", result: bytes.toString("base64"), size: "1152x2560",
+    } })).toMatchObject({ generation: { route: "codex-responses", size: "841x1870" } });
+  });
   it("distinguishes partial function items from completed arguments", () => {
     const item = { type: "function_call", call_id: "call", name: "generate_transparent_image", arguments: "{}" };
     expect(normalizeOpenAIEvent({ type: "response.output_item.added", item })).toEqual({ type: "output-item", item, completed: false });
@@ -129,6 +147,6 @@ describe("OpenAI Codex backend protocol", () => {
         type: "response.output_item.done",
         item: { type: "image_generation_call", id: "img", result: "aGVsbG8=", revised_prompt: "better" },
       }),
-    ).toEqual({ type: "image", id: "img", base64: "aGVsbG8=", mimeType: "image/png", revisedPrompt: "better" });
+    ).toEqual({ type: "image", id: "img", base64: "aGVsbG8=", mimeType: "image/png", revisedPrompt: "better", generation: { route: "codex-responses" } });
   });
 });

@@ -248,11 +248,33 @@ export function normalizeOpenAIEvent(raw: unknown): OpenAINormalizedEvent | unde
   ) {
     const item = event.item as OpenAIResponseItem;
     if (item.type === "image_generation_call" && typeof item.result === "string") {
+      // PNG exposes dimensions in its fixed header. Other formats retain the
+      // backend's observed size; never substitute requested image controls.
+      const header = Buffer.from(item.result.slice(0, 32), "base64");
+      const pngSize =
+        header.length >= 24 &&
+        header.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex")) &&
+        header.readUInt32BE(16) > 0 &&
+        header.readUInt32BE(20) > 0
+          ? `${header.readUInt32BE(16)}x${header.readUInt32BE(20)}`
+          : undefined;
+      const size =
+        pngSize ??
+        (typeof item.size === "string" && /^[1-9]\d*x[1-9]\d*$/.test(item.size)
+          ? item.size
+          : undefined);
       return {
         type: "image",
         ...(typeof item.id === "string" ? { id: item.id } : {}),
         base64: item.result,
         mimeType: imageMimeType(item.result, item.output_format),
+        generation: {
+          route: "codex-responses",
+          ...(size ? { size } : {}),
+          ...(typeof item.model === "string" ? { model: item.model } : {}),
+          ...(typeof item.quality === "string" ? { quality: item.quality } : {}),
+          ...(typeof item.background === "string" ? { background: item.background } : {}),
+        },
         ...(typeof item.revised_prompt === "string"
           ? { revisedPrompt: item.revised_prompt }
           : typeof item.revisedPrompt === "string"

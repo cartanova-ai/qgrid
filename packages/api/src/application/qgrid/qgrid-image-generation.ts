@@ -18,7 +18,7 @@ export type ResolvedImageGenerationOptions = {
 // https://developers.openai.com/api/docs/guides/image-generation#calculating-costs
 const IMAGE_OUTPUT_COST_MICRO_USD: Record<
   ImageGenerationQuality,
-  Record<ImageGenerationSize, number>
+  Partial<Record<ImageGenerationSize, number>>
 > = {
   low: {
     "1024x1024": 6_000,
@@ -49,7 +49,13 @@ export function resolveImageGenerationOptions(
 export function imageGenerationCostMethod(
   options: ImageGenerationOptions | undefined,
   result?: QueryOutput,
-): string {
+): string | null {
+  if (
+    result?.content.some(
+      (item) => item.type === "image" && item.generation?.route === "codex-responses",
+    )
+  )
+    return null;
   if (
     result?.content.some(
       (item) => item.type === "image" && item.generation?.route === "codex-images",
@@ -58,6 +64,7 @@ export function imageGenerationCostMethod(
     return "estimated:gpt-image-2:reported-usage:public-prices:conservative";
   }
   const resolved = resolveImageGenerationOptions(options);
+  if (IMAGE_OUTPUT_COST_MICRO_USD[resolved.quality][resolved.size] === undefined) return null;
   return `assumed:${CODEX_IMAGE_GENERATION_MODEL}:${resolved.quality}:${resolved.size}:png`;
 }
 
@@ -68,6 +75,9 @@ export function estimateImageGenerationCostMicroUsd(
   const images = result.content.filter((item) => item.type === "image");
   const imageCount = images.length;
   if (imageCount === 0) return null;
+  // Hosted Responses reports observed settings but no trustworthy image usage
+  // or guaranteed image model. Requested size/quality cannot price that output.
+  if (images.some((image) => image.generation?.route === "codex-responses")) return null;
   if (images.some((image) => image.generation?.route === "codex-images")) {
     // The standalone response's aggregate usage is carried by its first image only.
     // Do not multiply it by output count or price it as the requested text driver.
@@ -88,5 +98,6 @@ export function estimateImageGenerationCostMicroUsd(
     );
   }
   const resolved = resolveImageGenerationOptions(options);
-  return imageCount * IMAGE_OUTPUT_COST_MICRO_USD[resolved.quality][resolved.size];
+  const unitCost = IMAGE_OUTPUT_COST_MICRO_USD[resolved.quality][resolved.size];
+  return unitCost === undefined ? null : imageCount * unitCost;
 }

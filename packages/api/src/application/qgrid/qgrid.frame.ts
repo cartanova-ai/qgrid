@@ -500,8 +500,10 @@ class QgridFrameClass extends BaseFrameClass {
   // 화면의 목록 필터를 그대로 받아 같은 조건의 합계를 돌려준다 — 목록과 비용이
   // 서로 다른 모수를 보면 사용자에게는 숫자가 어긋난 것으로 읽힌다.
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
-  async totalCost(params?: RequestLogListParams): Promise<{ usd: number }> {
-    return { usd: await RequestLogModel.totalCost(params) };
+  async totalCost(
+    params?: RequestLogListParams,
+  ): Promise<{ usd: number; unknownImageCostCount: number }> {
+    return RequestLogModel.totalCost(params);
   }
 
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })

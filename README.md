@@ -203,6 +203,8 @@ const result = await generateText({
 const image = result.files[0]; // mediaType: "image/png", base64
 ```
 
+Image size options are hints, not exact-output guarantees. Put the desired ratio (for example, "9:20 portrait") in the prompt and omit `size` or use `"auto"`. Explicit positive-integer `WIDTHxHEIGHT` hints are also accepted. Read returned dimensions from `result.providerMetadata.qgrid.imageGeneration`; qgrid does not resize images. See the [SDK image contract](packages/ai-sdk/README.md#image-generation) for metadata and unknown image costs.
+
 Reference images are supported through AI SDK multimodal message parts:
 
 ```typescript

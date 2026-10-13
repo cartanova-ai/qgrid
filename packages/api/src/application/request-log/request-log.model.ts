@@ -820,7 +820,9 @@ class RequestLogModelClass extends BaseModelClass<
    * 필터 조건을 여기서 다시 구현하지 않고 `applyListFilters` 를 공유하는 것이 핵심이다 —
    * 두 쿼리가 각자 필터를 가지면 화면에서 필터를 걸었을 때 행 수와 비용이 조용히 어긋난다.
    */
-  async totalCost(rawParams: RequestLogListParams = { num: 0, page: 1 }): Promise<number> {
+  async totalCost(
+    rawParams: RequestLogListParams = { num: 0, page: 1 },
+  ): Promise<{ usd: number; unknownImageCostCount: number }> {
     const params = {
       num: 0,
       page: 1,
@@ -842,6 +844,9 @@ class RequestLogModelClass extends BaseModelClass<
       .select({
         total: Puri.rawNumber(
           "COALESCE(SUM(GREATEST(request_logs.cost_usd, 0) + COALESCE(request_logs.image_cost_usd, 0)), 0)",
+        ),
+        unknownImageCostCount: Puri.rawNumber(
+          "COUNT(*) FILTER (WHERE request_logs.is_image_generation = true AND request_logs.image_cost_usd IS NULL)",
         ),
       })
       .first();
@@ -867,7 +872,7 @@ class RequestLogModelClass extends BaseModelClass<
     const storedTotal = Number(stored?.total ?? 0) / MICRO_USD;
 
     // legacy row 는 위 SUM 에 저장값으로 이미 포함되어 있다. 재계산값과의 차액만 더한다.
-    return legacyRows.reduce((sum, row) => {
+    const usd = legacyRows.reduce((sum, row) => {
       const alreadySummed = Math.max(row.cost_usd ?? 0, 0) / MICRO_USD;
       const usage = normalizedUsageForCost(row);
       if (!usage.model) return sum;
@@ -884,6 +889,7 @@ class RequestLogModelClass extends BaseModelClass<
         alreadySummed
       );
     }, storedTotal);
+    return { usd, unknownImageCostCount: Number(stored?.unknownImageCostCount ?? 0) };
   }
 
   async distinctProjectNames(): Promise<string[]> {

@@ -144,6 +144,18 @@ describe("OpenAIDispatcher direct runtime", () => {
     }
   });
 
+  it.each(["auto", "1152x2560"])("forwards %s size hints and preserves hosted observations", async (size) => {
+    const args = QueryInput.parse({ prompt: "draw in 9:20", imageGeneration: true, imageGenerationOptions: { size } });
+    const generation = { route: "codex-responses" as const, size: "841x1870", quality: "low" };
+    const d = dispatcher((options) => {
+      expect(buildOpenAIResponsesRequest(options).tools).toContainEqual({ type: "image_generation", size });
+      return events({ type: "image", base64: "data", mimeType: "image/png", generation }, { type: "completed", responseId: "r" });
+    });
+    await d.onTokenAdded(1, "one", credentials);
+    const result = await d.generate(request({ imageGeneration: args.imageGeneration, imageGenerationOptions: args.imageGenerationOptions }));
+    expect(result.images).toMatchObject([{ generation }]);
+  });
+
   beforeEach(() => { refreshMock.mockReset(); });
 
   it("refreshes a quota 401 once, shares the recovery, and uses the new credentials", async () => {

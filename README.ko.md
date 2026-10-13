@@ -203,6 +203,8 @@ const result = await generateText({
 const image = result.files[0]; // mediaType: "image/png", base64
 ```
 
+크기 옵션은 정확한 출력을 보장하지 않는 힌트입니다. 원하는 비율(예: "세로 9:20")은 프롬프트에 적고 `size`는 생략하거나 `"auto"`로 두세요. 양의 정수 `가로x세로` 힌트도 받습니다. 실제 크기는 `result.providerMetadata.qgrid.imageGeneration`에서 확인하며 qgrid는 리사이즈하지 않습니다. metadata와 이미지 비용 처리 방식은 [SDK 이미지 계약](packages/ai-sdk/README.ko.md#image-generation)을 참고하세요.
+
 레퍼런스 이미지는 AI SDK multimodal message part로 전달할 수 있습니다:
 
 ```typescript

@@ -12,10 +12,10 @@ export const QgridTool = z.object({
 });
 export type QgridTool = z.infer<typeof QgridTool>;
 
-// Observed standalone Images response values, distinct from requested generation hints.
+// Observed image response values, distinct from requested generation hints.
 export const ImageGenerationMetadata = z.object({
-  route: z.literal("codex-images"),
-  model: z.literal("gpt-image-2"),
+  route: z.enum(["codex-images", "codex-responses"]),
+  model: z.string().optional(),
   background: z.string().optional(),
   quality: z.string().optional(),
   size: z.string().optional(),
@@ -79,7 +79,17 @@ export type ServiceTier = z.infer<typeof ServiceTier>;
 export const ImageGenerationQuality = z.enum(["low", "medium", "high"]);
 export type ImageGenerationQuality = z.infer<typeof ImageGenerationQuality>;
 
-export const ImageGenerationSize = z.enum(["1024x1024", "1024x1536", "1536x1024"]);
+// Subscription-backend hints, not public Images API resolution guarantees.
+export const ImageGenerationSize = z.union([
+  z.literal("auto"),
+  z
+    .string()
+    .regex(/^[1-9]\d*x[1-9]\d*$/)
+    .refine(
+      (size) => size.split("x").every((edge) => Number.isSafeInteger(Number(edge))),
+      "Image dimensions must be positive safe integers",
+    ),
+]);
 export type ImageGenerationSize = z.infer<typeof ImageGenerationSize>;
 
 export const ImageGenerationOptions = z

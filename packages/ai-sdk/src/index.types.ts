@@ -76,13 +76,16 @@ export type QgridOpenAIProviderOptions = QgridCommonProviderOptions & {
   imageGeneration?: boolean;
   /**
    * Image generation controls. The Responses backend selects the image model;
-   * quality/size cost estimates use the GPT Image 2 public calculator table.
+   * Size/quality are hints, not output guarantees. Hosted image cost is unknown;
+   * standalone usage is estimated using public image-token prices.
    */
   imageGenerationOptions?: {
     /** Responses output format. Defaults to PNG; transparent output only supports PNG. */
     outputFormat?: "png" | "jpeg" | "webp";
     quality?: "low" | "medium" | "high";
-    size?: "1024x1024" | "1024x1536" | "1536x1024";
+    /** Requested hint only; Codex may ignore it. Put the desired aspect ratio in the prompt.
+     * Omit or use auto for backend sizing; read actual output size from generation metadata. */
+    size?: "auto" | `${number}x${number}`;
     /** Transparent uses Codex standalone Images and validates PNG alpha. See README for limits. */
     background?: "auto" | "opaque" | "transparent";
   };
@@ -163,8 +166,9 @@ export type QgridSupportedModel =
 
 /** Observed image response values. Usage is response-level and appears on the first image only. */
 export type QgridImageGenerationMetadata = {
-  route: "codex-images";
-  model: "gpt-image-2";
+  route: "codex-images" | "codex-responses";
+  /** Present only when reported or known from the standalone route. */
+  model?: string;
   background?: string;
   quality?: string;
   size?: string;

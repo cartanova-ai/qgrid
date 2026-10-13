@@ -1443,15 +1443,16 @@ describe("qgrid AI SDK provider", () => {
     expect(secondQuery?.body.args).not.toHaveProperty("logMode");
   });
 
-  it("sends image generation options and maps files with optional generation metadata", async () => {
+  it.each(["codex-images", "codex-responses"] as const)("sends size hints and maps %s generation metadata", async (route) => {
     let queryBody: unknown;
+    const background = route === "codex-images" ? "transparent" : "opaque";
     const generation = {
-      route: "codex-images",
-      model: "gpt-image-2",
+      route,
+      ...(route === "codex-images" ? { model: "gpt-image-2" } : {}),
       quality: "medium",
-      size: "1254x1254",
-      background: "transparent",
-      usage: { input_tokens: 10, output_tokens: 100, total_tokens: 110 },
+      size: "841x1870",
+      background,
+      ...(route === "codex-images" ? { usage: { input_tokens: 10, output_tokens: 100, total_tokens: 110 } } : {}),
     };
     vi.stubGlobal(
       "fetch",
@@ -1484,14 +1485,14 @@ describe("qgrid AI SDK provider", () => {
       providerOptions: {
         qgrid: {
           imageGeneration: true,
-          imageGenerationOptions: { quality: "high", size: "1024x1024", background: "transparent" },
+          imageGenerationOptions: { quality: "high", size: "1152x2560", background },
         },
       },
     } as never);
 
     expect((queryBody as { args: Record<string, unknown> }).args).toMatchObject({
       imageGeneration: true,
-      imageGenerationOptions: { quality: "high", size: "1024x1024", background: "transparent" },
+      imageGenerationOptions: { quality: "high", size: "1152x2560", background },
     });
     // image → LanguageModelV3File 파트로 매핑, tool-call 오인 없음.
     expect(result.content).toEqual([

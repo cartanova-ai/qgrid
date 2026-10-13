@@ -17,6 +17,24 @@ function result(content: QgridContent[]): QueryOutput {
 }
 
 describe("standalone image cost estimates", () => {
+  it("accepts size hints without promising public API resolution limits", () => {
+    for (const size of ["auto", "1152x2560", "841x1870", "2160x3840"]) {
+      expect(QueryInput.parse({ prompt: "draw", imageGenerationOptions: { size } }).imageGenerationOptions?.size).toBe(size);
+    }
+    for (const size of ["9:20", "0x1024", "1.5x1024", "-1x1024", "9007199254740992x1"]) {
+      expect(QueryInput.safeParse({ prompt: "draw", imageGenerationOptions: { size } }).success).toBe(false);
+    }
+  });
+
+  it("leaves custom/auto size and observed hosted image costs unknown", () => {
+    const output = result([{ type: "image", data: "png" }]);
+    for (const size of ["auto", "1152x2560"] as const) {
+      expect(estimateImageGenerationCostMicroUsd(output, { size })).toBeNull();
+    }
+    expect(estimateImageGenerationCostMicroUsd(result([{ type: "image", data: "png", generation: {
+      route: "codex-responses", size: "841x1870", quality: "low",
+    } }]), options)).toBeNull();
+  });
   it("accepts automatic image mode while preserving boolean requests", () => {
     for (const imageGeneration of [true, false, "auto"] as const) {
       expect(QueryInput.parse({ prompt: "chat", imageGeneration }).imageGeneration).toBe(imageGeneration);

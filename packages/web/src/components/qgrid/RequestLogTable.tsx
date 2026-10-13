@@ -3,7 +3,7 @@ import ChevronLeftIcon from "~icons/lucide/chevron-left";
 import ChevronRightIcon from "~icons/lucide/chevron-right";
 import RefreshIcon from "~icons/lucide/refresh-cw";
 
-import { cacheHitRate, formatMicroUsd, formatUsd } from "@/lib/cost";
+import { cacheHitRate, formatRequestCost, formatUsd } from "@/lib/cost";
 import { requestModelDisplay } from "@/lib/request-model";
 import { type LogsSearch } from "@/routes/logs";
 import { QgridService, RequestLogService, TokenService } from "@/services/services.generated";
@@ -234,8 +234,15 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
             Failed to load total cost.
           </span>
         ) : (
-          <span className="text-[11px] tabular-nums font-medium text-sienna-600">
-            {costData ? formatUsd(costData.usd) : "—"}
+          <span
+            className="text-[11px] tabular-nums font-medium text-sienna-600"
+            title={
+              costData && costData.unknownImageCostCount > 0
+                ? `${costData.unknownImageCostCount} image requests have unknown image costs. Only known costs are included.`
+                : undefined
+            }
+          >
+            {costData ? formatUsd(costData.usd, costData.unknownImageCostCount > 0) : "—"}
           </span>
         )}
       </div>
@@ -387,12 +394,15 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                     <td className="px-3 py-1.5 text-right tabular-nums text-sand-500">
                       {row.tool_call_count > 0 ? row.tool_call_count : "—"}
                     </td>
-                    <td className="px-3 py-1.5 text-right tabular-nums text-sand-700">
-                      {row.image_cost_usd !== null
-                        ? formatMicroUsd((row.cost_usd ?? 0) + row.image_cost_usd)
-                        : row.cost_usd !== null
-                          ? formatMicroUsd(row.cost_usd)
-                          : "—"}
+                    <td
+                      className="px-3 py-1.5 text-right tabular-nums text-sand-700 whitespace-nowrap"
+                      title={
+                        row.is_image_generation && row.image_cost_usd === null
+                          ? "Image cost is unknown. Only known costs are shown."
+                          : undefined
+                      }
+                    >
+                      {formatRequestCost(row)}
                     </td>
                     <td className="px-2 py-1.5">
                       <ChevronRightIcon className="size-4 text-sand-400" />
