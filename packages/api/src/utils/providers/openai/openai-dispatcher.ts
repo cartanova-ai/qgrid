@@ -471,19 +471,34 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             );
           }
           transparentCalls.set(id, args.prompt);
-        } else if (event.type === "completed" && event.usage) {
-          driverCompleted = true;
-          servingModel = event.model ?? servingModel;
-          usage = {
-            totalTokens: event.usage.totalTokens,
-            inputTokens: event.usage.inputTokens,
-            outputTokens: event.usage.outputTokens,
-            cachedInputTokens: event.usage.cachedInputTokens,
-            reasoningOutputTokens: event.usage.reasoningTokens,
-          };
         } else if (event.type === "completed") {
           driverCompleted = true;
           servingModel = event.model ?? servingModel;
+          if (event.usage) {
+            usage = {
+              totalTokens: event.usage.totalTokens,
+              inputTokens: event.usage.inputTokens,
+              outputTokens: event.usage.outputTokens,
+              cachedInputTokens: event.usage.cachedInputTokens,
+              reasoningOutputTokens: event.usage.reasoningTokens,
+            };
+          }
+          if (event.imageGeneration) {
+            const hostedImages = images.filter(
+              (image) => image.generation?.route === "codex-responses",
+            );
+            for (const [index, image] of hostedImages.entries()) {
+              image.generation = {
+                route: "codex-responses",
+                ...(event.imageGeneration.model ? { model: event.imageGeneration.model } : {}),
+                ...image.generation,
+                // Tool usage covers the whole response, not each returned image.
+                ...(index === 0 && event.imageGeneration.usage
+                  ? { usage: event.imageGeneration.usage }
+                  : {}),
+              };
+            }
+          }
         } else if (event.type === "error") {
           if (req.imageGeneration)
             throw new ImageGenerationError("incomplete", event.error.message);

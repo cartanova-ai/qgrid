@@ -16,7 +16,7 @@ function result(content: QgridContent[]): QueryOutput {
   };
 }
 
-describe("standalone image cost estimates", () => {
+describe("image cost estimates", () => {
   it("accepts size hints without promising public API resolution limits", () => {
     for (const size of ["auto", "1152x2560", "841x1870", "2160x3840"]) {
       expect(QueryInput.parse({ prompt: "draw", imageGenerationOptions: { size } }).imageGenerationOptions?.size).toBe(size);
@@ -26,14 +26,15 @@ describe("standalone image cost estimates", () => {
     }
   });
 
-  it("leaves custom/auto size and observed hosted image costs unknown", () => {
+  it("uses the default size price for custom/auto hints and prices hosted output without usage", () => {
     const output = result([{ type: "image", data: "png" }]);
     for (const size of ["auto", "1152x2560"] as const) {
-      expect(estimateImageGenerationCostMicroUsd(output, { size })).toBeNull();
+      expect(estimateImageGenerationCostMicroUsd(output, { size })).toBe(41_000);
+      expect(imageGenerationCostMethod({ size }, output)).toBe("assumed:gpt-image-2:medium:1536x1024:png");
     }
     expect(estimateImageGenerationCostMicroUsd(result([{ type: "image", data: "png", generation: {
       route: "codex-responses", size: "841x1870", quality: "low",
-    } }]), options)).toBeNull();
+    } }]), options)).toBe(211_000);
   });
   it("accepts automatic image mode while preserving boolean requests", () => {
     for (const imageGeneration of [true, false, "auto"] as const) {
@@ -41,9 +42,9 @@ describe("standalone image cost estimates", () => {
     }
     expect(QueryInput.safeParse({ prompt: "chat", imageGeneration: "required" }).success).toBe(false);
   });
-  it("uses response usage once for multiple outputs without pricing requested settings or driver tokens", () => {
+  it.each(["codex-images", "codex-responses"] as const)("uses %s usage once for multiple outputs instead of size or driver tokens", (route) => {
     const output = result([
-      { type: "image", data: "first", generation: { ...generation,
+      { type: "image", data: "first", generation: { ...generation, route,
         usage: { input_tokens: 100, output_tokens: 200, total_tokens: 300,
           input_tokens_details: { text_tokens: 40, image_tokens: 60, cached_tokens: 50 } },
       } },
@@ -55,8 +56,18 @@ describe("standalone image cost estimates", () => {
     );
   });
 
-  it("does not substitute requested size pricing when standalone usage is missing", () => {
-    expect(estimateImageGenerationCostMicroUsd(result([{ type: "image", data: "png", generation }]), options)).toBeNull();
+  it("falls back to per-image pricing when standalone usage is missing", () => {
+    const output = result([{ type: "image", data: "png", generation }]);
+    expect(estimateImageGenerationCostMicroUsd(output, options)).toBe(211_000);
+    expect(imageGenerationCostMethod(options, output)).toBe("assumed:gpt-image-2:high:1024x1024:png");
+  });
+
+  it("respects reported zero usage instead of applying a per-image price", () => {
+    const output = result([{ type: "image", data: "png", generation: { ...generation,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    } }]);
+    expect(estimateImageGenerationCostMicroUsd(output, options)).toBe(0);
+    expect(imageGenerationCostMethod(options, output)).toBe("estimated:gpt-image-2:reported-usage:public-prices:conservative");
   });
 
   it("prices unknown input remainder at the image rate and ignores inconsistent splits", () => {

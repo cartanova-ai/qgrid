@@ -76,8 +76,8 @@ export type QgridOpenAIProviderOptions = QgridCommonProviderOptions & {
   imageGeneration?: boolean;
   /**
    * Image generation controls. The Responses backend selects the image model;
-   * Size/quality are hints, not output guarantees. Hosted image cost is unknown;
-   * standalone usage is estimated using public image-token prices.
+   * Size/quality are hints, not output guarantees. Image cost uses reported usage
+   * at public token rates, or a per-image quality/size estimate when usage is absent.
    */
   imageGenerationOptions?: {
     /** Responses output format. Defaults to PNG; transparent output only supports PNG. */

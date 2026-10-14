@@ -367,6 +367,7 @@ function MetricsPanel({ data, toolCallCount }: { data: RequestLog; toolCallCount
   const tokensPerSecEnabled = isTokensPerSecEnabled(data);
   return (
     <div className="panel overflow-hidden px-5 py-3 space-y-3">
+      <p className="text-[11px] text-sand-400">비용은 API 가격 기준 추정 비용입니다.</p>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-6 gap-y-3">
         <Metric label="Duration" value={`${(data.duration_ms / 1000).toFixed(1)}s`} />
         <Metric label="TTFT" value={formatRunTtftMs(data.ttft_ms)} />
@@ -801,7 +802,7 @@ function StepTreeItem({
                 value={`${generate.cacheCreation5mTokens === null ? "—" : formatNum(generate.cacheCreation5mTokens)} / ${generate.cacheCreation1hTokens === null ? "—" : formatNum(generate.cacheCreation1hTokens)}`}
               />
               <CompactMetric
-                label="Cost"
+                label="Estimated Cost"
                 value={generate.costUsd === null ? "—" : formatMicroUsd(generate.costUsd)}
               />
               <CompactMetric label="Cost Source" value={generate.costSource ?? "legacy"} />

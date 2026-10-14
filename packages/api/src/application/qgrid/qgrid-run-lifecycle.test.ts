@@ -436,13 +436,15 @@ describe("qgrid run lifecycle TTFT", () => {
     );
   });
 
-  it("passes configured image generation cost estimate into finishRun", async () => {
+  it("stores the hosted per-image estimate when image usage is absent", async () => {
     await afterQuery(
       10,
       2,
       { prompt: "draw", imageGeneration: true },
       queryOutput({
-        content: [{ type: "image", data: "iVBORw0KGgoBAgM", revisedPrompt: "green triangle" }],
+        content: [{ type: "image", data: "iVBORw0KGgoBAgM", revisedPrompt: "green triangle",
+          generation: { route: "codex-responses", size: "841x1870" },
+        }],
       }),
     );
 

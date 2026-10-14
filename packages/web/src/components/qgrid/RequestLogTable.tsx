@@ -236,13 +236,9 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
         ) : (
           <span
             className="text-[11px] tabular-nums font-medium text-sienna-600"
-            title={
-              costData && costData.unknownImageCostCount > 0
-                ? `${costData.unknownImageCostCount} image requests have unknown image costs. Only known costs are included.`
-                : undefined
-            }
+            title="현재 필터에 해당하는 요청의 API 가격 기준 추정 비용 합계"
           >
-            {costData ? formatUsd(costData.usd, costData.unknownImageCostCount > 0) : "—"}
+            API 가격 기준 추정 비용 {costData ? formatUsd(costData.usd) : "—"}
           </span>
         )}
       </div>
@@ -396,11 +392,7 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                     </td>
                     <td
                       className="px-3 py-1.5 text-right tabular-nums text-sand-700 whitespace-nowrap"
-                      title={
-                        row.is_image_generation && row.image_cost_usd === null
-                          ? "Image cost is unknown. Only known costs are shown."
-                          : undefined
-                      }
+                      title="API 가격 기준 추정 비용"
                     >
                       {formatRequestCost(row)}
                     </td>

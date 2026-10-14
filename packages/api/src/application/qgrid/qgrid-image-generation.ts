@@ -1,24 +1,25 @@
 import {
   type ImageGenerationOptions,
   type ImageGenerationQuality,
-  type ImageGenerationSize,
   type QueryOutput,
 } from "./qgrid.types";
 
 export const CODEX_IMAGE_GENERATION_MODEL = "gpt-image-2";
 export const DEFAULT_IMAGE_GENERATION_QUALITY: ImageGenerationQuality = "medium";
-export const DEFAULT_IMAGE_GENERATION_SIZE: ImageGenerationSize = "1536x1024";
+export const DEFAULT_IMAGE_GENERATION_SIZE = "1536x1024";
+
+type PricedImageSize = "1024x1024" | "1024x1536" | "1536x1024";
 
 export type ResolvedImageGenerationOptions = {
   quality: ImageGenerationQuality;
-  size: ImageGenerationSize;
+  size: PricedImageSize;
 };
 
 // OpenAI gpt-image-2 image output cost estimates by quality/size:
 // https://developers.openai.com/api/docs/guides/image-generation#calculating-costs
 const IMAGE_OUTPUT_COST_MICRO_USD: Record<
   ImageGenerationQuality,
-  Partial<Record<ImageGenerationSize, number>>
+  Record<PricedImageSize, number>
 > = {
   low: {
     "1024x1024": 6_000,
@@ -40,31 +41,27 @@ const IMAGE_OUTPUT_COST_MICRO_USD: Record<
 export function resolveImageGenerationOptions(
   options: ImageGenerationOptions | undefined,
 ): ResolvedImageGenerationOptions {
+  const size = options?.size;
   return {
     quality: options?.quality ?? DEFAULT_IMAGE_GENERATION_QUALITY,
-    size: options?.size ?? DEFAULT_IMAGE_GENERATION_SIZE,
+    // Unknown/custom sizes use the default price, without changing output hints.
+    size:
+      size === "1024x1024" || size === "1024x1536" || size === "1536x1024"
+        ? size
+        : DEFAULT_IMAGE_GENERATION_SIZE,
   };
 }
 
 export function imageGenerationCostMethod(
   options: ImageGenerationOptions | undefined,
   result?: QueryOutput,
-): string | null {
+): string {
   if (
-    result?.content.some(
-      (item) => item.type === "image" && item.generation?.route === "codex-responses",
-    )
-  )
-    return null;
-  if (
-    result?.content.some(
-      (item) => item.type === "image" && item.generation?.route === "codex-images",
-    )
+    result?.content.some((item) => item.type === "image" && item.generation?.usage !== undefined)
   ) {
     return "estimated:gpt-image-2:reported-usage:public-prices:conservative";
   }
   const resolved = resolveImageGenerationOptions(options);
-  if (IMAGE_OUTPUT_COST_MICRO_USD[resolved.quality][resolved.size] === undefined) return null;
   return `assumed:${CODEX_IMAGE_GENERATION_MODEL}:${resolved.quality}:${resolved.size}:png`;
 }
 
@@ -75,14 +72,10 @@ export function estimateImageGenerationCostMicroUsd(
   const images = result.content.filter((item) => item.type === "image");
   const imageCount = images.length;
   if (imageCount === 0) return null;
-  // Hosted Responses reports observed settings but no trustworthy image usage
-  // or guaranteed image model. Requested size/quality cannot price that output.
-  if (images.some((image) => image.generation?.route === "codex-responses")) return null;
-  if (images.some((image) => image.generation?.route === "codex-images")) {
-    // The standalone response's aggregate usage is carried by its first image only.
+  const usage = images.find((image) => image.generation?.usage)?.generation?.usage;
+  if (usage) {
+    // Response-level image usage is carried by its first image only.
     // Do not multiply it by output count or price it as the requested text driver.
-    const usage = images.find((image) => image.generation?.usage)?.generation?.usage;
-    if (!usage) return null;
     // Public GPT Image 2 rates verified 2026-09-08: text input $5/M, image input
     // $8/M, output $30/M. Amounts below are microUSD, so no /1M conversion.
     // https://developers.openai.com/api/docs/pricing#image-generation
@@ -99,5 +92,5 @@ export function estimateImageGenerationCostMicroUsd(
   }
   const resolved = resolveImageGenerationOptions(options);
   const unitCost = IMAGE_OUTPUT_COST_MICRO_USD[resolved.quality][resolved.size];
-  return unitCost === undefined ? null : imageCount * unitCost;
+  return imageCount * unitCost;
 }

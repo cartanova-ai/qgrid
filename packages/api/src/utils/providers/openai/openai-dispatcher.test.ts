@@ -7,6 +7,7 @@ import { QueryInput, QuotaThresholdExceededError } from "../../../application/qg
 import { type GenerateRequest } from "../common/provider-dispatcher";
 import {
   buildOpenAIResponsesRequest,
+  normalizeOpenAIEvent,
   type OpenAINormalizedEvent,
   type OpenAIResponsesOptions,
 } from "./openai-backend-protocol";
@@ -409,6 +410,47 @@ describe("OpenAIDispatcher direct runtime", () => {
     const result = await d.generate(request({ imageGeneration: "auto" }));
     expect(result.images).toMatchObject([{ data: "first", mediaType: "image/png" }, { data: "second", mediaType: "image/webp" }]);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([true, false])("preserves aggregate hosted image usage separately from driver usage (driver usage: %s)", async (withDriverUsage) => {
+    const imageUsage = {
+      input_tokens: 2260,
+      input_tokens_details: { image_tokens: 2012, text_tokens: 248 },
+      output_tokens: 1415,
+      output_tokens_details: { image_tokens: 1415, text_tokens: 0 },
+      total_tokens: 3675,
+    };
+    const rawEvents = [
+      ...["first", "second"].map((id) => ({ type: "response.output_item.done", item: {
+        id, type: "image_generation_call", result: "UklGRgAAAABXRUJQ",
+        size: "1037x1516", quality: "medium", background: "opaque", output_format: "webp",
+      } })),
+      { type: "response.completed", response: {
+        id: "r", model: "gpt-6-luna",
+        ...(withDriverUsage ? { usage: { input_tokens: 10, output_tokens: 3, total_tokens: 13 } } : {}),
+        tool_usage: { image_gen: imageUsage },
+        tools: [{ type: "image_generation", model: "gpt-image-2-codex", quality: "auto", size: "auto", background: "auto", output_format: "webp", n: 1 }],
+      } },
+    ];
+    const d = dispatcher((options) => {
+      expect(buildOpenAIResponsesRequest(options).tools).toEqual([{
+        type: "image_generation", quality: "high", size: "1024x1536", output_format: "webp",
+      }]);
+      return events(...rawEvents.map(normalizeOpenAIEvent).filter((event): event is OpenAINormalizedEvent => event !== undefined));
+    });
+    await d.onTokenAdded(1, "one", credentials);
+    const result = await d.generate(request({ model: "gpt-6-luna", imageGeneration: true,
+      imageGenerationOptions: { quality: "high", size: "1024x1536", outputFormat: "webp" },
+    }));
+    expect(result.usage).toMatchObject({
+      inputTokens: withDriverUsage ? 10 : 0,
+      outputTokens: withDriverUsage ? 3 : 0,
+      totalTokens: withDriverUsage ? 13 : 0,
+    });
+    const generation = { route: "codex-responses", model: "gpt-image-2-codex", size: "1037x1516", quality: "medium", background: "opaque" };
+    expect(result.images?.map((image) => image.generation)).toEqual([
+      { ...generation, usage: imageUsage }, generation,
+    ]);
   });
 
   it("lets automatic mode return text or a hosted image with one driver request", async () => {

@@ -6,8 +6,8 @@ export function microUsdToUsd(microUsd: number): number {
   return microUsd / MICRO_USD;
 }
 
-export function formatUsd(usd: number, partial = false): string {
-  return `${partial ? "Known " : ""}$${usd.toFixed(COST_DECIMALS)}`;
+export function formatUsd(usd: number): string {
+  return `$${usd.toFixed(COST_DECIMALS)}`;
 }
 
 export function formatMicroUsd(microUsd: number): string {
@@ -19,9 +19,8 @@ export function formatRequestCost(row: {
   cost_usd: number | null;
   image_cost_usd: number | null;
 }): string {
-  const partial = row.is_image_generation && row.image_cost_usd === null;
-  if (row.cost_usd === null && row.image_cost_usd === null) return partial ? "Unknown" : "—";
-  return formatUsd(microUsdToUsd((row.cost_usd ?? 0) + (row.image_cost_usd ?? 0)), partial);
+  if (row.cost_usd === null && row.image_cost_usd === null) return "—";
+  return formatUsd(microUsdToUsd((row.cost_usd ?? 0) + (row.image_cost_usd ?? 0)));
 }
 
 /**

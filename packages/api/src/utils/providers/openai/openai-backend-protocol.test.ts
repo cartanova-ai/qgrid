@@ -149,4 +149,26 @@ describe("OpenAI Codex backend protocol", () => {
       }),
     ).toEqual({ type: "image", id: "img", base64: "aGVsbG8=", mimeType: "image/png", revisedPrompt: "better", generation: { route: "codex-responses" } });
   });
+
+  it("preserves zero image-tool usage without treating it as missing", () => {
+    const usage = { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+    expect(normalizeOpenAIEvent({ type: "response.completed", response: {
+      id: "r", tool_usage: { image_gen: usage },
+    } })).toEqual({
+      type: "completed", responseId: "r",
+      imageGeneration: { route: "codex-responses", usage },
+    });
+  });
+
+  it.each([undefined, null, {}, { input_tokens: "4", output_tokens: 1, total_tokens: 5 }, { input_tokens: -1, output_tokens: 1, total_tokens: 0 }])(
+    "ignores missing or malformed image-tool usage: %j", (usage) => {
+      expect(normalizeOpenAIEvent({ type: "response.completed", response: {
+        id: "r", tool_usage: { image_gen: usage },
+        tools: [{ type: "image_generation", model: "gpt-image-2-codex", size: "auto", quality: "auto" }],
+      } })).toEqual({
+        type: "completed", responseId: "r",
+        imageGeneration: { route: "codex-responses", model: "gpt-image-2-codex" },
+      });
+    },
+  );
 });

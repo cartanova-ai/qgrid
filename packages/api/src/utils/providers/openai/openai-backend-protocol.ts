@@ -1,6 +1,6 @@
 import os from "node:os";
 
-import { type ImageGenerationMetadata } from "../../../application/qgrid/qgrid.types";
+import { ImageGenerationMetadata } from "../../../application/qgrid/qgrid.types";
 import { type OpenAIEffort } from "../common/effort";
 
 export const CHATGPT_CODEX_RESPONSES_URL =
@@ -180,7 +180,13 @@ export type OpenAINormalizedEvent =
       generation?: ImageGenerationMetadata;
     }
   | { type: "output-item"; item: OpenAIResponseItem; completed?: boolean }
-  | { type: "completed"; responseId: string; usage?: OpenAIUsage; model?: string }
+  | {
+      type: "completed";
+      responseId: string;
+      usage?: OpenAIUsage;
+      model?: string;
+      imageGeneration?: ImageGenerationMetadata;
+    }
   | { type: "error"; error: OpenAIProtocolError };
 
 export class OpenAIProtocolError extends Error {
@@ -286,11 +292,27 @@ export function normalizeOpenAIEvent(raw: unknown): OpenAINormalizedEvent | unde
   }
   if (type === "response.completed") {
     const response = (event.response ?? {}) as Record<string, unknown>;
+    const toolUsage = response.tool_usage as Record<string, unknown> | undefined;
+    const parsedImageUsage = ImageGenerationMetadata.shape.usage.safeParse(toolUsage?.image_gen);
+    const imageUsage = parsedImageUsage.success ? parsedImageUsage.data : undefined;
+    const imageTool = Array.isArray(response.tools)
+      ? response.tools.find((tool) => tool?.type === "image_generation")
+      : undefined;
+    const imageModel = typeof imageTool?.model === "string" ? imageTool.model : undefined;
     return {
       type: "completed",
       responseId: String(response.id ?? ""),
       ...(response.usage ? { usage: usageFrom(response.usage) } : {}),
       ...(typeof response.model === "string" ? { model: response.model } : {}),
+      ...(imageUsage || imageModel
+        ? {
+            imageGeneration: {
+              route: "codex-responses" as const,
+              ...(imageModel ? { model: imageModel } : {}),
+              ...(imageUsage ? { usage: imageUsage } : {}),
+            },
+          }
+        : {}),
     };
   }
   if (type === "error" || type === "response.failed" || type === "response.incomplete") {

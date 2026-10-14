@@ -308,12 +308,13 @@ const result = await generateText({
 - `streamText`에서는 거부됩니다 (non-stream 전용).
 - 이미지 생성 요청은 provider 대화 상태를 보관하지 않고 전체 input을 직접 전송합니다.
 - 레퍼런스 이미지는 JSON data URL로 전송됩니다. 큰 사진은 압축하거나 리사이즈해서 전달하세요. 과도하게 큰 base64 입력은 SDK가 거부하며, 사진에는 WebP/JPEG를 권장합니다.
-- 일반 Responses 이미지 비용은 알 수 없어 `image_cost_usd: null`로 기록합니다. 요청한 크기·품질이나 텍스트 모델 사용량을 이미지 비용으로 간주하지 않습니다. 출력 metadata가 없는 기존 응답만 세 가지 표준 크기의 공개 가격표 추정을 유지하며, 임의 크기와 `auto`는 추정하지 않습니다.
+- 이미지 비용은 API 가격 기준 추정치입니다. 이미지 usage가 있으면 토큰 단가로 계산하고, 없으면 요청한 크기·품질의 장당 단가에 이미지 수를 곱합니다. 품질 생략 시 medium, 크기 생략·auto·사용자 지정 크기는 1536x1024 단가를 사용합니다. 텍스트 모델 비용에 더해 표시하며, 실제 출력 설정이나 구독 청구액을 뜻하지 않습니다. 기존 저장 비용은 일괄 재계산하지 않습니다.
 - `imageGenerationOptions.background`는 `"auto" | "opaque" | "transparent"`를 지원합니다. `"transparent"` 요청만 기존 ChatGPT 구독 토큰으로 Codex 전용 `images/generations` 또는 `images/edits` 경로를 사용합니다. 나머지는 기존 Responses 도구 경로를 유지합니다. 투명 경로는 텍스트 모델 없이 `gpt-image-2`를 직접 실행하며, tools·structured output은 지원하지 않습니다. 레퍼런스는 최대 5장입니다. 불투명·완전 빈 이미지·손상된 PNG는 오류로 처리하고, 별도 배경 제거로 대체하지 않습니다.
+- hosted 이미지 usage는 최종 응답의 `tool_usage.image_gen`에서 읽으며 텍스트 모델 usage와 분리합니다. 응답 전체 이미지 usage는 첫 이미지에만 붙입니다. 이미지별 model이 없으면 백엔드 이미지 도구 메타데이터로 보완합니다.
 - 두 경로 모두 `result.providerMetadata.qgrid.imageGeneration` 배열로 출력 정보를 제공합니다. `contentIndex`, `route`와 선택적인 `model`, `size`, `quality`, `background`, 이미지 `usage`가 포함됩니다. 경로는 `codex-responses` 또는 `codex-images`이며, 일반 경로에서 보고되지 않은 이미지 모델은 비워 둡니다. `result.content` 파일 파트에도 metadata가 있지만 `result.files[]`에는 없습니다. PNG 크기는 실제 바이트에서 읽고, JPEG/WebP는 백엔드가 보고한 출력 크기를 사용합니다. qgrid는 리사이즈하지 않습니다.
 - `imageGenerationOptions.size`는 `"auto"` 또는 `"1152x2560"` 같은 양의 정수 `가로x세로` 힌트를 받습니다. 정확한 출력 크기를 보장하지 않으므로 생략하거나 `auto`를 사용하고, 원하는 비율은 프롬프트에 적으세요. 2026-10-13 실호출에서 두 구독 경로 모두 크기 옵션을 무시했고, 9:20 요청은 `841x1870`, 4K 세로 요청은 `941x1672`, 4:1 요청은 3:1로 반환됐습니다. 약 157만 픽셀이라는 관측값은 모든 계정의 고정 상한이 아닙니다. 공개 Images API의 16배수·4K 규칙도 구독 경로의 보장 사양이 아닙니다. 확장된 크기 힌트와 일반 이미지 metadata를 사용하려면 서버와 SDK를 함께 업데이트하세요.
 - 투명 경로는 텍스트 모델을 실행하지 않아 일반 토큰 usage·비용이 0입니다. 이미지 usage는 별도로 보존하고, `image_cost_usd`는 보고된 토큰과 공개 API 단가로 추정합니다. 알려진 text/image input은 구분하고 불명확한 input은 보수적으로 계산하며, 캐시 할인은 반영하지 않습니다. 구독 청구액을 뜻하지 않습니다.
-- 이미지 도구 로그는 `requestedOptions`와 `observedGeneration`을 구분합니다. 관측 정보가 없고 가격표에 있는 크기의 기존 응답만 `pricingAssumption`을 유지합니다. 그 기본값 `1536x1024`/`medium`은 실제 출력 설정을 뜻하지 않습니다.
+- 이미지 도구 로그는 `requestedOptions`와 `observedGeneration`을 구분합니다. 관측 정보가 없는 응답은 기본 단가 가정을 포함한 `pricingAssumption`을 유지합니다. 그 기본값 `1536x1024`/`medium`은 실제 출력 설정을 뜻하지 않습니다.
 
 투명 생성은 위 `imageGenerationOptions`에 `background: "transparent"`를 추가하고, 프롬프트에도 피사체 밖의 투명 배경을 명시하세요. 크로마키·배경색 지시는 제거해야 합니다. 이 기능이 포함된 서버와 SDK가 모두 필요하며, 저장 시 PNG 알파를 유지하세요. 정확한 최종 크기는 소비 앱의 명시적인 crop/resize 정책으로 처리합니다.
 
