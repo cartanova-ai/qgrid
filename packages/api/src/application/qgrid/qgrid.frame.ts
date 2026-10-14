@@ -37,6 +37,7 @@ import {
   refreshAccessToken,
   RefreshFailedError,
 } from "./oauth";
+import { CODEX_IMAGE_GENERATION_MODEL } from "./qgrid-image-generation";
 import {
   afterQuery,
   beforeQuery,
@@ -45,6 +46,7 @@ import {
 } from "./qgrid-run-lifecycle";
 import {
   buildAndValidateStrictOutputSchema,
+  completedDriverFromImageFailure,
   type InternalQueryInput,
   QgridDispatcher,
 } from "./qgrid.dispatcher";
@@ -145,10 +147,33 @@ function parsePastedOAuthResult(input: string): { code: string; state: string } 
 }
 
 function rejectImageGenerationStream(args: QueryInput): void {
-  if (!args.imageGeneration) return;
+  if (!args.imageGeneration && args.model !== `openai/${CODEX_IMAGE_GENERATION_MODEL}`) return;
   throw new BadRequestException(
-    "qgrid: imageGeneration is not supported with streaming; use query/generateText instead." as LocalizedString,
+    "qgrid: imageGeneration is not supported with streaming; use query or generateImage with qgrid.image() instead." as LocalizedString,
   );
+}
+
+function rejectInvalidImageQuery(args: QueryInput): void {
+  const standalone = args.model === `openai/${CODEX_IMAGE_GENERATION_MODEL}`;
+  if (!standalone && args.imageGeneration !== "auto") return;
+  if (standalone && args.imageGeneration !== true) {
+    throw new BadRequestException(
+      "qgrid: the image model requires imageGeneration: true; use qgrid.image() with generateImage." as LocalizedString,
+    );
+  }
+  if (args.tools?.length || args.jsonSchema !== undefined) {
+    throw new BadRequestException(
+      "qgrid: automatic and standalone image generation do not support caller tools or structured output." as LocalizedString,
+    );
+  }
+  if (
+    args.imageGenerationOptions?.outputFormat &&
+    args.imageGenerationOptions.outputFormat !== "png"
+  ) {
+    throw new BadRequestException(
+      "qgrid: automatic and standalone image generation only support PNG output." as LocalizedString,
+    );
+  }
 }
 
 // anthropic 은 --json-schema 를 쓰지 않으므로(SON-532) strict 변환·argv 제한 없이 원형의
@@ -247,6 +272,7 @@ class QgridFrameClass extends BaseFrameClass {
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async query(args: QueryInput): Promise<QueryOutput> {
+    rejectInvalidImageQuery(args);
     rejectInvalidCallerSchemas(args);
     const resolvedArgs = await resolveTokenName(args);
     const disconnect = createHttpDisconnectHandle();
@@ -260,10 +286,19 @@ class QgridFrameClass extends BaseFrameClass {
       try {
         result = await QgridDispatcher.query(resolvedArgs, disconnect.signal);
       } catch (e) {
+        const completedDriver = completedDriverFromImageFailure(e);
+        const completedStep = completedDriver
+          ? ([{ stepIndex, result: completedDriver }] as const)
+          : ([] as const);
         if (disconnect.signal.aborted) {
-          await finishRunAborted(requestLogId, resolvedArgs);
+          await finishRunAborted(requestLogId, resolvedArgs, ...completedStep);
         } else {
-          await finishRunWithError(requestLogId, (e as Error).message, resolvedArgs);
+          await finishRunWithError(
+            requestLogId,
+            (e as Error).message,
+            resolvedArgs,
+            ...completedStep,
+          );
         }
         throw e;
       }

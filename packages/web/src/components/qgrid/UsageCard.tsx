@@ -620,10 +620,7 @@ function SortableTokenCard({ token }: { token: Token }) {
               {token.name ?? "Unnamed"}
             </span>
           </div>
-          <span
-            className={`text-[11px] tabular-nums font-medium shrink-0 ${theme.cost}`}
-            title="이 토큰의 누적 API 가격 기준 추정 비용"
-          >
+          <span className={`text-[11px] tabular-nums font-medium shrink-0 ${theme.cost}`}>
             {formatUsd(costData?.usd ?? 0)}
           </span>
         </div>

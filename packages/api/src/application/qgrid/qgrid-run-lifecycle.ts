@@ -100,12 +100,12 @@ export async function beforeQuery(args: QueryInput): Promise<{
   return { requestLogId, stepIndex };
 }
 
-export async function afterQuery(
+async function appendGenerateStep(
   requestLogId: number,
   stepIndex: number,
   args: QueryInput,
   result: QueryOutput,
-): Promise<RunLifecycleResult> {
+) {
   // provider가 canonical model을 돌려줘도 요청 route 자체([1m] 등)는 보존한다.
   const requestedModelName = withProviderPrefix(
     args.model,
@@ -132,6 +132,21 @@ export async function afterQuery(
     ttft_ms: result.ttftMs,
     finish_reason: result.finishReason,
   });
+  return { requestedModelName, servedModelName };
+}
+
+export async function afterQuery(
+  requestLogId: number,
+  stepIndex: number,
+  args: QueryInput,
+  result: QueryOutput,
+): Promise<RunLifecycleResult> {
+  const { requestedModelName, servedModelName } = await appendGenerateStep(
+    requestLogId,
+    stepIndex,
+    args,
+    result,
+  );
 
   const imageParts = getImageParts(result);
   const imageCostMicroUsd = estimateImageGenerationCostMicroUsd(
@@ -200,12 +215,17 @@ export async function finishRunWithError(
   requestLogId: number,
   errorMessage: string,
   args?: QueryInput,
+  completedStep?: { stepIndex: number; result: QueryOutput },
 ): Promise<void> {
-  await finishTerminalRun(requestLogId, "error", errorMessage, args);
+  await finishTerminalRun(requestLogId, "error", errorMessage, args, completedStep);
 }
 
-export async function finishRunAborted(requestLogId: number, args?: QueryInput): Promise<void> {
-  await finishTerminalRun(requestLogId, "aborted", "client disconnected", args);
+export async function finishRunAborted(
+  requestLogId: number,
+  args?: QueryInput,
+  completedStep?: { stepIndex: number; result: QueryOutput },
+): Promise<void> {
+  await finishTerminalRun(requestLogId, "aborted", "client disconnected", args, completedStep);
 }
 
 async function finishTerminalRun(
@@ -213,8 +233,18 @@ async function finishTerminalRun(
   status: "error" | "aborted",
   errorMessage: string,
   args?: QueryInput,
+  completedStep?: { stepIndex: number; result: QueryOutput },
 ): Promise<void> {
   try {
+    if (completedStep && args) {
+      try {
+        await appendGenerateStep(requestLogId, completedStep.stepIndex, args, completedStep.result);
+      } catch (e) {
+        logger.error(
+          `appendGenerateStep failed while finishing ${status}: ${(e as Error).message}`,
+        );
+      }
+    }
     let aggregate: Awaited<ReturnType<typeof RequestLogModel.aggregateStepUsage>> | undefined;
     try {
       aggregate = await RequestLogModel.aggregateStepUsage(requestLogId);
@@ -226,6 +256,16 @@ async function finishTerminalRun(
       status,
       error_message: errorMessage,
       history: args ? filterHistoryForStorage(args.history) : undefined,
+      ...(completedStep
+        ? {
+            token_name: completedStep.result.tokenName,
+            requested_model_name: withProviderPrefix(
+              args?.model,
+              args?.model ?? completedStep.result.requestedModel ?? completedStep.result.model,
+            ),
+            model_name: withProviderPrefix(args?.model, completedStep.result.model),
+          }
+        : {}),
       ...(aggregate
         ? {
             input_tokens: aggregate.input_tokens,

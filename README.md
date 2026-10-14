@@ -37,7 +37,7 @@ As a result:
   ```
 - **Pool N subscriptions** — Combine teammates' subscription accounts for parallel processing. Smooth weighted routing distributes requests across tokens, while per-token quota thresholds exclude overloaded tokens.
 - **Request Log dashboard** — Inspect token usage, cost, cache hits, TTFT, tool-call traces, and reasoning for every request in real time through a web UI.
-- **Image generation** — Opt into Codex's `image_generation` tool per request and receive PNG files through the standard AI SDK response.
+- **Image generation** — Use AI SDK `generateImage` with `qgrid.image()` for direct subscription-backed generation and editing. Dashboard chat offers an image tool automatically and uses the same Images endpoints for ordinary and transparent output.
 - **OpenAI + Anthropic** — Register subscription tokens for both. One-click OAuth login.
 
 ---
@@ -193,37 +193,38 @@ const { text } = await generateText({
 ### Image generation
 
 ```typescript
-// OpenAI route, generateText only — enables Codex's image_generation tool for this request
-const result = await generateText({
-  model: qgrid("openai/gpt-5.6-terra"),
+import { generateImage } from "ai";
+import { qgrid, type QgridImageProviderOptions } from "@cartanova/qgrid-ai-sdk";
+
+// Calls the subscription Images endpoint directly, without a chat model
+const { image, usage, providerMetadata } = await generateImage({
+  model: qgrid.image("openai/gpt-image-2"),
   prompt: "An illustration of a whale flying through space",
-  providerOptions: { qgrid: { imageGeneration: true } },
+  providerOptions: {
+    qgrid: { background: "opaque" } satisfies QgridImageProviderOptions,
+  },
 });
 
-const image = result.files[0]; // mediaType: "image/png", base64
+image.uint8Array; // Returned PNG bytes
+usage.inputTokens; // Image-model usage
+providerMetadata.qgrid?.images[0]; // requestLogId, generation settings and detailed usage
 ```
 
-Image size options are hints, not exact-output guarantees. Put the desired ratio (for example, "9:20 portrait") in the prompt and omit `size` or use `"auto"`. Explicit positive-integer `WIDTHxHEIGHT` hints are also accepted. Read returned dimensions from `result.providerMetadata.qgrid.imageGeneration`; qgrid does not resize images. See the [SDK image contract](packages/ai-sdk/README.md#image-generation) for metadata and unknown image costs.
+The model ID is Codex's request identifier, not proof of the serving image-model version. Standard top-level `size` and flat `providerOptions.qgrid.quality` are hints, not exact-output guarantees. Describe the desired ratio in the prompt and read observed settings from `providerMetadata.qgrid.images[].generation`; qgrid does not resize output. Image usage is priced separately with public API rates, without a chat-driver cost. See the [SDK image contract](packages/ai-sdk/README.md#image-generation) for options, limitations, and the estimate fallback when usage is absent.
 
-Reference images are supported through AI SDK multimodal message parts:
+Reference editing uses the standard image prompt:
 
 ```typescript
-const result = await generateText({
-  model: qgrid("openai/gpt-5.6-terra"),
-  messages: [
-    {
-      role: "user",
-      content: [
-        { type: "text", text: "Use this image as a style reference and create a poster" },
-        { type: "file", mediaType: "image/png", data: referenceImageBase64 },
-      ],
-    },
-  ],
-  providerOptions: { qgrid: { imageGeneration: true } },
+const { image } = await generateImage({
+  model: qgrid.image("openai/gpt-image-2"),
+  prompt: {
+    text: "Use this image as a style reference and create a poster",
+    images: [referenceImageBytes],
+  },
 });
 ```
 
-Reference images are sent as JSON data URLs, so compress or resize large photos before passing them in. The SDK rejects oversized base64 inputs with a clear error; WebP/JPEG is recommended for photos.
+Up to five PNG/JPEG/WebP references are supported. Compress or resize large inline photos before sending them; oversized inputs are rejected. `generateText` has no image-generation options and does not support general vision. Dashboard `qgrid_chat` retains its separate automatic image routing.
 
 ---
 

@@ -12,6 +12,7 @@ import {
   type OpenAIResponsesOptions,
 } from "./openai-backend-protocol";
 import { ImageGenerationError, OpenAIDispatcher } from "./openai-dispatcher";
+import { buildStandaloneImageRequest } from "./openai-image-generation";
 import { type OpenAITransportKind } from "./openai-transport-config";
 
 const credentials = {
@@ -117,7 +118,7 @@ describe("OpenAIDispatcher direct runtime", () => {
   it("applies thinking:false to the automatic image text driver", async () => {
     const run = vi.fn((options: OpenAIResponsesOptions) => {
       expect(options.reasoning).toEqual({ effort: "none" });
-      expect(options.imageGeneration).toBe(true);
+      expect(options.imageGeneration).toBeUndefined();
       return events({ type: "text-delta", text: "hello" }, { type: "completed", responseId: "r" });
     });
     const d = dispatcher(run);
@@ -407,7 +408,7 @@ describe("OpenAIDispatcher direct runtime", () => {
     ));
     const d = dispatcher(run);
     await d.onTokenAdded(1, "one", credentials);
-    const result = await d.generate(request({ imageGeneration: "auto" }));
+    const result = await d.generate(request({ imageGeneration: true }));
     expect(result.images).toMatchObject([{ data: "first", mediaType: "image/png" }, { data: "second", mediaType: "image/webp" }]);
     expect(run).toHaveBeenCalledTimes(1);
   });
@@ -453,26 +454,70 @@ describe("OpenAIDispatcher direct runtime", () => {
     ]);
   });
 
-  it("lets automatic mode return text or a hosted image with one driver request", async () => {
-    for (const image of [false, true]) {
-      const run = vi.fn((options: OpenAIResponsesOptions) => {
-        const body = buildOpenAIResponsesRequest(options);
-        expect(body.parallel_tool_calls).toBe(false);
-        expect(body.tools).toEqual(expect.arrayContaining([{ type: "image_generation" }, expect.objectContaining({ name: "generate_transparent_image" })]));
-        return events(...(image ? [{ type: "image" as const, base64: "png", mimeType: "image/png" as const }] : [{ type: "text-delta" as const, text: "hello" }]), { type: "completed", responseId: "r" });
-      });
-      const d = dispatcher(run);
-      await d.onTokenAdded(1, "one", credentials);
-      const result = await d.generate(request({ imageGeneration: "auto" }));
-      expect(run).toHaveBeenCalledTimes(1);
-      expect(image ? result.images?.length : result.text).toBe(image ? 1 : "hello");
-    }
+  it("registers only the internal image function and allows text-only replies", async () => {
+    const run = vi.fn((options: OpenAIResponsesOptions) => {
+      const body = buildOpenAIResponsesRequest(options);
+      expect(options.imageGeneration).toBeUndefined();
+      expect(body.parallel_tool_calls).toBe(false);
+      expect(body.instructions).toContain("self-contained prompt");
+      expect(body.tools).toEqual([expect.objectContaining({
+        type: "function", name: "generate_image", strict: false,
+        parameters: {
+          type: "object", additionalProperties: false,
+          required: ["prompt", "transparent_background", "num_last_images_to_include"],
+          properties: {
+            prompt: expect.objectContaining({ type: "string", minLength: 1 }),
+            transparent_background: { type: "boolean" },
+            num_last_images_to_include: { type: "integer", minimum: 0, maximum: 5 },
+          },
+        },
+      })]);
+      return events({ type: "text-delta", text: "hello" }, { type: "completed", responseId: "r" });
+    });
+    const d = dispatcher(run);
+    await d.onTokenAdded(1, "one", credentials);
+    const result = await d.generate(request({ imageGeneration: "auto" }));
+    expect(run).toHaveBeenCalledOnce();
+    expect(result.text).toBe("hello");
+    expect(result.images).toBeUndefined();
   });
 
-  it("runs one standalone transparent call after completed arguments and preserves driver accounting", async () => {
+  it.each(["zero-usage", "model-config"])("does not treat completed %s metadata as hosted image execution", async (metadata) => {
+    const completed = normalizeOpenAIEvent({
+      type: "response.completed",
+      response: {
+        id: "text-response", model: "gpt-6-luna",
+        usage: { input_tokens: 164, output_tokens: 9, total_tokens: 173 },
+        tools: metadata === "model-config"
+          ? [{ type: "image_generation", model: "gpt-image-2-codex" }]
+          : [{ type: "function", name: "generate_image" }],
+        ...(metadata === "zero-usage" ? { tool_usage: { image_gen: {
+          input_tokens: 0, output_tokens: 0, total_tokens: 0,
+          input_tokens_details: { text_tokens: 0, image_tokens: 0 },
+          output_tokens_details: { image_tokens: 0, text_tokens: 0 },
+        } } } : {}),
+        output: [{ type: "message" }],
+      },
+    });
+    expect(completed).toMatchObject({ type: "completed", imageGeneration: { route: "codex-responses" } });
+    const run = vi.fn(() => events({ type: "text-delta", text: "hello" }, completed!));
+    const d = dispatcher(run);
+    await d.onTokenAdded(1, "one", credentials);
+    const result = await d.generate(request({ imageGeneration: "auto" }));
+    expect(result).toMatchObject({ text: "hello", model: "gpt-6-luna", usage: { inputTokens: 164, outputTokens: 9, totalTokens: 173 } });
+    expect(result.images).toBeUndefined();
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])("runs a standalone image call (transparent: %s) and preserves driver and image usage", async (transparent) => {
     const calls: OpenAIResponsesOptions[] = [];
     const signals: Array<AbortSignal | undefined> = [];
-    const item = { type: "function_call", call_id: "call", name: "generate_transparent_image", arguments: JSON.stringify({ prompt: "remove background" }) };
+    const item = { type: "function_call", call_id: "call", name: "generate_image", arguments: JSON.stringify({ prompt: "a complete new image prompt", transparent_background: transparent, num_last_images_to_include: 0 }) };
+    const generation = {
+      route: "codex-images" as const, model: "gpt-image-2", size: "1024x1024", quality: "medium",
+      background: transparent ? "transparent" : "opaque",
+      usage: { input_tokens: 20, input_tokens_details: { text_tokens: 20, image_tokens: 0 }, output_tokens: 100, total_tokens: 120 },
+    };
     const d = dispatcher((options, signal) => {
       calls.push(options); signals.push(signal);
       if (calls.length === 1) return events(
@@ -481,29 +526,77 @@ describe("OpenAIDispatcher direct runtime", () => {
         { type: "output-item", item, completed: true },
         { type: "completed", responseId: "driver", model: "actual-driver", usage: { inputTokens: 10, cachedInputTokens: 2, outputTokens: 3, reasoningTokens: 1, totalTokens: 13 } },
       );
-      return events({ type: "image", base64: "png", mimeType: "image/png", generation: { route: "codex-images", model: "gpt-image-2" } }, { type: "completed", responseId: "image", model: "gpt-image-2", usage: { inputTokens: 999, outputTokens: 999, cachedInputTokens: 0, reasoningTokens: 0, totalTokens: 1998 } });
+      return events({ type: "image", base64: "png", mimeType: "image/png", generation }, { type: "completed", responseId: "image", model: "gpt-image-2", usage: { inputTokens: 999, outputTokens: 999, cachedInputTokens: 0, reasoningTokens: 0, totalTokens: 1998 } });
     });
     await d.onTokenAdded(1, "one", credentials);
     const history = [{ type: "message", role: "user", content: [{ type: "input_image", image_url: "https://example.com/ref.png" }] }];
-    const result = await d.generate(request({ imageGeneration: "auto", systemPrompt: "system", coldHistory: history, imageGenerationOptions: { outputFormat: "webp" } }));
+    const result = await d.generate(request({ imageGeneration: "auto", systemPrompt: "system", coldHistory: history, imageGenerationOptions: { quality: "high", size: "1024x1536" } }));
     expect(calls).toHaveLength(2);
-    expect(calls[1]).toMatchObject({ instructions: "system", imageGeneration: { background: "transparent", output_format: "png" } });
-    expect(calls[1]!.history[0]).toEqual(history[0]);
+    expect(calls[0]!.instructions).toContain("system");
+    expect(calls[0]!.history[0]).toEqual(history[0]);
+    expect(calls[1]).toEqual({
+      model: "gpt-image-2", imageGeneration: { background: transparent ? "transparent" : "opaque", output_format: "png", quality: "high", size: "1024x1536" },
+      history: [{ type: "message", role: "user", content: [{ type: "input_text", text: "a complete new image prompt" }] }],
+    });
+    expect(buildStandaloneImageRequest(calls[1]!).url).toMatch(/\/images\/generations$/);
     expect(calls[1]!.tools).toBeUndefined();
     expect(calls[1]!.outputSchema).toBeUndefined();
     expect(signals[0]).toBe(signals[1]);
-    expect(result).toMatchObject({ model: "actual-driver", usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 }, images: [{ generation: { model: "gpt-image-2" } }] });
+    expect(result).toMatchObject({ model: "actual-driver", usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13, cachedInputTokens: 2, reasoningOutputTokens: 1 }, images: [{ generation }] });
+    expect(d.clients.size).toBe(1);
+  });
+
+  it("edits with only the selected recent images in chronological order despite longer image history", async () => {
+    const calls: OpenAIResponsesOptions[] = [];
+    const history = [
+      ...Array.from({ length: 6 }, (_, i) => ({ type: "message", role: "user", content: [{ type: "input_image", image_url: `https://example.com/${i}.png` }] })),
+      { type: "image_generation_call", result: "UklGRgAAAABXRUJQ", output_format: "webp" },
+      { type: "message", role: "user", content: [{ type: "image_url", image_url: { url: "https://example.com/last.png" } }] },
+    ];
+    const d = dispatcher((options) => {
+      calls.push(options);
+      if (calls.length === 1) return events(
+        { type: "output-item", completed: true, item: { type: "function_call", call_id: "edit", name: "generate_image", arguments: JSON.stringify({ prompt: "combine these references", transparent_background: false, num_last_images_to_include: 3 }) } },
+        { type: "completed", responseId: "driver" },
+      );
+      return events({ type: "image", base64: "png", mimeType: "image/png" }, { type: "completed", responseId: "image" });
+    });
+    await d.onTokenAdded(1, "one", credentials);
+    await d.generate(request({ imageGeneration: "auto", coldHistory: history, coldInput: [{ type: "image", url: "https://example.com/current.png" }] }));
+    expect(calls[0]!.history).toHaveLength(history.length + 1);
+    const direct = buildStandaloneImageRequest(calls[1]!);
+    expect(direct.url).toMatch(/\/images\/edits$/);
+    expect(direct.body.prompt).toBe("user:\ncombine these references");
+    expect(direct.body.images).toEqual([
+      { image_url: "data:image/webp;base64,UklGRgAAAABXRUJQ" },
+      { image_url: "https://example.com/last.png" },
+      { image_url: "https://example.com/current.png" },
+    ]);
+    expect(calls).toHaveLength(2);
   });
 
   it("rejects incomplete, invalid, multiple and mixed automatic image calls before standalone execution", async () => {
-    const item = { type: "function_call", call_id: "call", name: "generate_transparent_image", arguments: JSON.stringify({ prompt: "remove background" }) };
+    const args = { prompt: "remove background", transparent_background: true, num_last_images_to_include: 0 };
+    const item = { type: "function_call", call_id: "call", name: "generate_image", arguments: JSON.stringify(args) };
     const done = { type: "output-item" as const, item, completed: true };
     const badEvents: OpenAINormalizedEvent[][] = [
       [{ ...done, completed: false }],
-      [{ ...done, item: { ...item, arguments: '{"prompt":"x","extra":true}' } }],
+      ...[
+        "{", "[]", "null", JSON.stringify({ prompt: "x" }),
+        JSON.stringify({ ...args, extra: true }),
+        JSON.stringify({ ...args, prompt: " " }),
+        JSON.stringify({ ...args, transparent_background: "true" }),
+        ...[-1, 0.5, 6, "1"].map((count) => JSON.stringify({ ...args, num_last_images_to_include: count })),
+        // Valid count, but this conversation has no images.
+        JSON.stringify({ ...args, num_last_images_to_include: 1 }),
+      ].map((arguments_) => [{ ...done, item: { ...item, arguments: arguments_ } }]),
       [done, { ...done, item: { ...item, call_id: "second" } }],
+      [done, { ...done, item: { ...item, arguments: JSON.stringify({ ...args, transparent_background: false }) } }],
+      [{ ...done, item: { ...item, call_id: "" } }],
+      [{ ...done, item: { ...item, name: "unexpected" } }],
       [done, { type: "image", base64: "png", mimeType: "image/png" }],
       [{ type: "output-item", item: { type: "image_generation_call" }, completed: false }],
+      [{ type: "completed", responseId: "native", imageGeneration: { route: "codex-responses", usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 } } }],
     ];
     for (const stream of badEvents) {
       const run = vi.fn(() => events(...stream, { type: "completed", responseId: "driver" }));
@@ -514,6 +607,25 @@ describe("OpenAIDispatcher direct runtime", () => {
     }
   });
 
+  it("requires driver completion before running its image call", async () => {
+    const run = vi.fn(() => events({ type: "output-item", completed: true, item: {
+      type: "function_call", call_id: "call", name: "generate_image",
+      arguments: JSON.stringify({ prompt: "draw", transparent_background: false, num_last_images_to_include: 0 }),
+    } }));
+    const d = dispatcher(run);
+    await d.onTokenAdded(1, "one", credentials);
+    await expect(d.generate(request({ imageGeneration: "auto" }))).rejects.toMatchObject({ kind: "incomplete" });
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it.each(["jpeg", "webp"] as const)("rejects automatic %s output before driver transport", async (outputFormat) => {
+    const run = vi.fn(() => events());
+    const d = dispatcher(run);
+    await d.onTokenAdded(1, "one", credentials);
+    await expect(d.generate(request({ imageGeneration: "auto", imageGenerationOptions: { outputFormat } }))).rejects.toMatchObject({ kind: "gate", message: expect.stringContaining("PNG") });
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("rejects structured output in auto mode before transport", async () => {
     const run = vi.fn(() => events());
     const d = dispatcher(run);
@@ -522,36 +634,73 @@ describe("OpenAIDispatcher direct runtime", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it.each(["missing-image", "missing-completion", "cancel"])("rejects standalone %s", async (failure) => {
+  it.each(["missing-image", "missing-completion", "cancel", "error", "network", "references"])("keeps completed driver accounting after standalone %s", async (failure) => {
     const controller = new AbortController();
+    const networkError = new TypeError("fetch failed", { cause: new Error("connection reset") });
     let count = 0;
     const d = dispatcher(async function* (_options, signal) {
       count++;
       if (count === 1) {
-        yield { type: "output-item", completed: true, item: { type: "function_call", call_id: "call", name: "generate_transparent_image", arguments: '{"prompt":"transparent"}' } };
-        yield { type: "completed", responseId: "driver" };
+        yield { type: "text-delta", text: "I will draw it." };
+        yield { type: "output-item", completed: true, item: { type: "function_call", call_id: "call", name: "generate_image", arguments: JSON.stringify({ prompt: "transparent", transparent_background: true, num_last_images_to_include: failure === "references" ? 1 : 0 }) } };
+        yield { type: "completed", responseId: "driver", model: "gpt-6-luna", usage: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 10, reasoningTokens: 5, totalTokens: 120 } };
       } else {
         if (failure === "cancel") { controller.abort(); expect(signal?.aborted).toBe(true); throw signal!.reason; }
+        if (failure === "network") throw networkError;
+        if (failure === "error") { yield { type: "error", error: new Error("image failed") }; return; }
         if (failure === "missing-image") yield { type: "completed", responseId: "image" };
         else yield { type: "image", base64: "png", mimeType: "image/png" };
       }
     });
     await d.onTokenAdded(1, "one", credentials);
-    await expect(d.generate(request({ imageGeneration: "auto", abortSignal: controller.signal }))).rejects.toMatchObject(failure === "cancel" ? { name: "AbortError" } : { kind: "incomplete" });
-    expect(count).toBe(2);
+    const error = await d.generate(request({ imageGeneration: "auto", abortSignal: controller.signal })).catch((error) => error);
+    expect(error).toMatchObject({
+      kind: "incomplete",
+      name: failure === "cancel" ? "AbortError" : failure === "network" ? "TypeError" : "ImageGenerationError",
+      completedDriver: {
+        text: "I will draw it.", tokenName: "one", model: "gpt-6-luna", requestedModel: "gpt-test",
+        usage: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 10, reasoningOutputTokens: 5, totalTokens: 120 },
+        durationMs: expect.any(Number), ttftMs: expect.any(Number),
+      },
+    });
+    expect(error.completedDriver.images).toBeUndefined();
+    if (failure === "network") {
+      expect(error.message).toBe(networkError.message);
+      expect(error.cause).toBe(networkError);
+      expect(error.cause.cause.message).toBe("connection reset");
+    }
+    expect(count).toBe(failure === "references" ? 1 : 2);
   });
 
   it("does not start standalone generation after cancellation", async () => {
     const controller = new AbortController();
     const run = vi.fn(async function* () {
-      yield { type: "output-item" as const, completed: true, item: { type: "function_call", call_id: "call", name: "generate_transparent_image", arguments: '{"prompt":"transparent"}' } };
+      yield { type: "output-item" as const, completed: true, item: { type: "function_call", call_id: "call", name: "generate_image", arguments: '{"prompt":"transparent","transparent_background":true,"num_last_images_to_include":0}' } };
       yield { type: "completed" as const, responseId: "driver" };
       controller.abort();
     });
     const d = dispatcher(run);
     await d.onTokenAdded(1, "one", credentials);
-    await expect(d.generate(request({ imageGeneration: "auto", abortSignal: controller.signal }))).rejects.toMatchObject({ name: "AbortError" });
+    await expect(d.generate(request({ imageGeneration: "auto", abortSignal: controller.signal }))).rejects.toMatchObject({ name: "AbortError", completedDriver: { tokenName: "one" } });
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["incomplete-driver", "direct-image", "plain-text"])("does not invent completed driver accounting for %s", async (path) => {
+    const failure = new Error("generation failed");
+    const d = dispatcher(async function* () {
+      if (path === "incomplete-driver") yield { type: "output-item", completed: true, item: {
+        type: "function_call", call_id: "call", name: "generate_image", arguments: '{"prompt":"draw","transparent_background":false,"num_last_images_to_include":0}',
+      } };
+      else yield { type: "completed", responseId: "response" };
+      throw failure;
+    });
+    await d.onTokenAdded(1, "one", credentials);
+    const error = await d.generate(request({
+      imageGeneration: path === "incomplete-driver" ? "auto" : path === "direct-image" ? true : undefined,
+      model: path === "direct-image" ? "gpt-image-2" : "gpt-6-luna",
+    })).catch((error) => error);
+    expect(error).toBe(failure);
+    expect(error.completedDriver).toBeUndefined();
   });
 
   it("maps images and preserves image failure classifications", async () => {

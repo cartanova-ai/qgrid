@@ -150,3 +150,92 @@ describe("standalone transparent images", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("standalone image model", () => {
+  it.each([true, { background: "opaque" }, { background: "auto" }])(
+    "generates ordinary PNGs directly without the Responses transport (%j)",
+    async (imageGeneration) => {
+      const stream = vi.fn();
+      const fetchMock = vi.fn<typeof fetch>(async () => Response.json({
+        data: [{ b64_json: png([255, 255]) }],
+      }));
+      const client = new OpenAIDirectClient({
+        credentials: { accessToken: "subscription-token", accountId: "account" },
+        fetch: fetchMock,
+        transport: { stream },
+      });
+      const events = await Array.fromAsync(client.responses({
+        ...options, model: "gpt-image-2", imageGeneration,
+      }));
+      expect(stream).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0]!;
+      expect(url).toBe("https://chatgpt.com/backend-api/codex/images/generations");
+      expect(init?.headers).toMatchObject({
+        Authorization: "Bearer subscription-token", "ChatGPT-Account-ID": "account",
+        Accept: "application/json",
+      });
+      const body = JSON.parse(String(init?.body));
+      expect(body.model).toBe("gpt-image-2");
+      expect(body.background).toBe(typeof imageGeneration === "object" ? imageGeneration.background : undefined);
+      expect(events[0]).toMatchObject({
+        type: "image", mimeType: "image/png",
+        generation: { route: "codex-images", model: "gpt-image-2", size: "2x1" },
+      });
+      expect(events[0]).not.toHaveProperty("generation.background");
+      expect(events[0]).not.toHaveProperty("generation.quality");
+      expect(events[1]).toMatchObject({ type: "completed", model: "gpt-image-2" });
+      expect(events[1]).not.toHaveProperty("usage");
+    },
+  );
+
+  it("edits references and preserves observed settings and aggregate usage once", async () => {
+    const usage = {
+      input_tokens: 2260, output_tokens: 1415, total_tokens: 3675,
+      input_tokens_details: { text_tokens: 248, image_tokens: 2012 },
+    };
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({
+      model: "gpt-image-2-codex", quality: "medium", background: "opaque", size: "1024x1536",
+      data: [{ b64_json: png([255, 255]), revised_prompt: "A red circle." }, { b64_json: png() }],
+      usage,
+    }));
+    const events = await run(fetchMock, {
+      model: "gpt-image-2",
+      imageGeneration: { background: "auto", quality: "high", size: "1024x1536", output_format: "png" },
+      history: [{ role: "user", content: [
+        { type: "input_text", text: "Use these references." },
+        { type: "input_image", image_url: "data:image/png;base64,reference" },
+        { type: "input_image", image_url: "https://example.com/reference.png" },
+      ] }],
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://chatgpt.com/backend-api/codex/images/edits");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: "gpt-image-2", background: "auto", quality: "high", size: "1024x1536",
+      images: [{ image_url: "data:image/png;base64,reference" }, { image_url: "https://example.com/reference.png" }],
+    });
+    expect(events[0]).toMatchObject({
+      type: "image", revisedPrompt: "A red circle.",
+      generation: { model: "gpt-image-2-codex", background: "opaque", quality: "medium", size: "2x1", usage },
+    });
+    expect(events[1]).not.toHaveProperty("generation.usage");
+    expect(events[2]).toMatchObject({ type: "completed", model: "gpt-image-2-codex" });
+    expect(events[2]).not.toHaveProperty("usage");
+  });
+
+  it.each([
+    { imageGeneration: false },
+    { imageGeneration: undefined },
+    { imageGeneration: { output_format: "webp" } },
+    { imageGeneration: { output_format: "jpeg" } },
+  ])("rejects disabled generation and unsupported output formats before I/O (%j)", async (overrides) => {
+    const fetchMock = vi.fn<typeof fetch>();
+    await expect(run(fetchMock, { model: "gpt-image-2", ...overrides })).rejects.toThrow(/enabled|PNG/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("validates decoded PNG content on the ordinary route", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json(result("bm90IHBuZw==")));
+    await expect(run(fetchMock, { model: "gpt-image-2", imageGeneration: true })).rejects.toThrow(/PNG/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

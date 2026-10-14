@@ -1,11 +1,6 @@
 import { type LanguageModelV3FunctionTool, type LanguageModelV3Message } from "@ai-sdk/provider";
 
-import {
-  type AppendStepInput,
-  type CreateRunInput,
-  type FinishRunInput,
-  type QgridInputPart,
-} from "./index.types";
+import { type AppendStepInput, type CreateRunInput, type FinishRunInput } from "./index.types";
 
 // API helpers
 export async function createRun(
@@ -160,56 +155,45 @@ type ExtractPromptAndHistoryResult = {
   prompt: string;
   system: string | undefined;
   history: unknown[];
-  input?: QgridInputPart[];
-  imageUrls: string[];
   droppedImageCount: number;
 };
 
 // Prompt helpers
 export function extractPromptAndHistory(
   messages: LanguageModelV3Message[],
-  options: { includeImages?: boolean } = {},
 ): ExtractPromptAndHistoryResult {
-  const includeImages = options.includeImages ?? true;
-  const imageUrls: string[] = [];
   let droppedImageCount = 0;
   let system: string | undefined;
   const nonSystem: LanguageModelV3Message[] = [];
 
   for (const msg of messages) {
     if (msg.role === "system") {
-      system = extractTextFromContent(msg.content);
+      system = extractPromptTextParts(msg.content).text;
     } else {
       nonSystem.push(msg);
     }
   }
 
   if (nonSystem.length === 0) {
-    return { prompt: "", system, history: [], imageUrls, droppedImageCount };
+    return { prompt: "", system, history: [], droppedImageCount };
   }
   if (nonSystem.length === 1 && nonSystem[0].role === "user") {
-    const extracted = extractUserContent(nonSystem[0].content, includeImages);
-    imageUrls.push(...extracted.imageUrls);
+    const extracted = extractPromptTextParts(nonSystem[0].content);
     droppedImageCount += extracted.droppedImageCount;
     return {
       prompt: extracted.text,
       system,
       history: [],
-      imageUrls,
       droppedImageCount,
-      ...(extracted.input ? { input: extracted.input } : {}),
     };
   }
 
   const last = nonSystem[nonSystem.length - 1];
   let prompt = "";
-  let input: QgridInputPart[] | undefined;
   if (last.role === "user") {
-    const extracted = extractUserContent(last.content, includeImages);
+    const extracted = extractPromptTextParts(last.content);
     prompt = extracted.text;
-    imageUrls.push(...extracted.imageUrls);
     droppedImageCount += extracted.droppedImageCount;
-    input = extracted.input;
   }
   const historyEnd = last.role === "user" ? nonSystem.length - 1 : nonSystem.length;
 
@@ -217,10 +201,9 @@ export function extractPromptAndHistory(
   for (let i = 0; i < historyEnd; i++) {
     const msg = nonSystem[i];
     if (msg.role === "user") {
-      const extracted = extractUserContent(msg.content, includeImages);
-      imageUrls.push(...extracted.imageUrls);
+      const extracted = extractPromptTextParts(msg.content);
       droppedImageCount += extracted.droppedImageCount;
-      const content = responsesContentItemsFromExtracted(extracted.parts);
+      const content = extracted.parts;
       history.push({
         type: "message",
         role: "user",
@@ -241,19 +224,8 @@ export function extractPromptAndHistory(
             arguments: typeof part.input === "string" ? part.input : JSON.stringify(part.input),
             call_id: part.toolCallId,
           });
-        } else {
-          const url = extractImageUrl(part);
-          if (!url) continue;
-          if (includeImages) {
-            imageUrls.push(url);
-            history.push({
-              type: "message",
-              role: "assistant",
-              content: [{ type: "input_image", image_url: url }],
-            });
-          } else {
-            droppedImageCount++;
-          }
+        } else if (isImagePart(part)) {
+          droppedImageCount++;
         }
       }
     } else if (msg.role === "tool") {
@@ -276,126 +248,41 @@ export function extractPromptAndHistory(
     }
   }
 
-  return { prompt, system, history, imageUrls, droppedImageCount, ...(input ? { input } : {}) };
+  return { prompt, system, history, droppedImageCount };
 }
 
-function extractTextFromContent(content: LanguageModelV3Message["content"]): string {
-  if (typeof content === "string") return content;
-  const parts: string[] = [];
-  for (const part of content) {
-    if ("text" in part && typeof part.text === "string") parts.push(part.text);
-  }
-  return parts.join("\n");
-}
-
-type ExtractedPromptPart = { kind: "text"; text: string } | { kind: "image"; url: string };
-
-function extractUserContent(
-  content: LanguageModelV3Message["content"],
-  includeImages: boolean,
-): {
+function extractPromptTextParts(content: LanguageModelV3Message["content"]): {
   text: string;
-  parts: ExtractedPromptPart[];
-  input?: QgridInputPart[];
-  imageUrls: string[];
+  parts: Array<{ type: "input_text"; text: string }>;
   droppedImageCount: number;
 } {
-  const extracted = extractMessageParts(content, { includeImages });
-  return {
-    text: extractTextFromContent(content),
-    parts: extracted.parts,
-    input: inputPartsFromExtracted(extracted.parts),
-    imageUrls: extracted.imageUrls,
-    droppedImageCount: extracted.droppedImageCount,
-  };
-}
-
-function extractMessageParts(
-  content: LanguageModelV3Message["content"],
-  options: { includeImages: boolean },
-): { parts: ExtractedPromptPart[]; imageUrls: string[]; droppedImageCount: number } {
   if (typeof content === "string") {
-    return { parts: [{ kind: "text", text: content }], imageUrls: [], droppedImageCount: 0 };
+    return { text: content, parts: [{ type: "input_text", text: content }], droppedImageCount: 0 };
   }
-  const parts: ExtractedPromptPart[] = [];
-  const imageUrls: string[] = [];
+  const parts: Array<{ type: "input_text"; text: string }> = [];
   let droppedImageCount = 0;
   for (const part of content) {
     if ("text" in part && typeof part.text === "string") {
-      parts.push({ kind: "text", text: part.text });
-      continue;
-    }
-    const url = extractImageUrl(part);
-    if (!url) continue;
-    if (options.includeImages) {
-      parts.push({ kind: "image", url });
-      imageUrls.push(url);
-    } else {
+      parts.push({ type: "input_text", text: part.text });
+    } else if (isImagePart(part)) {
       droppedImageCount++;
     }
   }
-  return { parts, imageUrls, droppedImageCount };
+  return { text: parts.map((part) => part.text).join("\n"), parts, droppedImageCount };
 }
 
-function inputPartsFromExtracted(
-  extractedParts: ExtractedPromptPart[],
-): QgridInputPart[] | undefined {
-  const parts: QgridInputPart[] = [];
-  for (const part of extractedParts) {
-    if (part.kind === "text") {
-      if (part.text.length > 0) parts.push({ type: "text", text: part.text, text_elements: [] });
-    } else {
-      parts.push({ type: "image", url: part.url });
-    }
-  }
-  return parts.some((part) => part.type === "image") ? parts : undefined;
-}
-
-function responsesContentItemsFromExtracted(
-  parts: ExtractedPromptPart[],
-): Array<{ type: "input_text"; text: string } | { type: "input_image"; image_url: string }> {
-  const items: Array<
-    { type: "input_text"; text: string } | { type: "input_image"; image_url: string }
-  > = [];
-  for (const part of parts) {
-    if (part.kind === "text") {
-      items.push({ type: "input_text", text: part.text });
-    } else {
-      items.push({ type: "input_image", image_url: part.url });
-    }
-  }
-  return items;
-}
-
-function extractImageUrl(part: unknown): string | undefined {
-  if (!part || typeof part !== "object") return undefined;
+function isImagePart(part: unknown): boolean {
+  if (!part || typeof part !== "object") return false;
   const record = part as Record<string, unknown>;
-  const type = record.type;
-  if (type !== "file" && type !== "image") return undefined;
-
-  const mediaType = typeof record.mediaType === "string" ? record.mediaType : "image/png";
-  if (type === "file" && !mediaType.toLowerCase().startsWith("image/")) return undefined;
-  const data = record.data ?? record.image;
-  if (typeof data === "string") {
-    if (isSupportedImageUrl(data)) return data;
-    if (/^[a-z][a-z0-9+.-]*:/i.test(data)) return undefined;
-    return `data:${mediaType};base64,${data}`;
-  }
-  if (data instanceof URL) {
-    const url = data.toString();
-    return isSupportedImageUrl(url) ? url : undefined;
-  }
-  if (data instanceof Uint8Array) return `data:${mediaType};base64,${bytesToBase64(data)}`;
-  if (data instanceof ArrayBuffer)
-    return `data:${mediaType};base64,${bytesToBase64(new Uint8Array(data))}`;
-  return undefined;
+  return (
+    record.type === "image" ||
+    (record.type === "file" &&
+      typeof record.mediaType === "string" &&
+      record.mediaType.toLowerCase().startsWith("image/"))
+  );
 }
 
-function isSupportedImageUrl(value: string): boolean {
-  return /^(https?:|data:|blob:)/i.test(value);
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
+export function bytesToBase64(bytes: Uint8Array): string {
   if (typeof Buffer !== "undefined") return Buffer.from(bytes).toString("base64");
   const chunkSize = 0x8000;
   let binary = "";
@@ -403,6 +290,27 @@ function bytesToBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
   }
   return btoa(binary);
+}
+
+const MAX_IMAGE_INPUT_DATA_URL_CHARS = 9_000_000;
+const MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL = "9M";
+
+export function assertImageInputFitsJsonTransport(imageUrls: string[]): void {
+  let totalDataUrlChars = 0;
+  for (const url of imageUrls) {
+    if (!url.toLowerCase().startsWith("data:")) continue;
+    totalDataUrlChars += url.length;
+    if (url.length > MAX_IMAGE_INPUT_DATA_URL_CHARS) {
+      throw new Error(
+        `qgrid: image input is too large for JSON transport (${url.length} chars). Compress or resize it before passing it to generateImage, for example as WebP/JPEG under ${MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL} total base64 data-url chars.`,
+      );
+    }
+  }
+  if (totalDataUrlChars > MAX_IMAGE_INPUT_DATA_URL_CHARS) {
+    throw new Error(
+      `qgrid: image inputs are too large for JSON transport (${totalDataUrlChars} total chars). Compress or resize them before passing them to generateImage, for example as WebP/JPEG under ${MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL} total base64 data-url chars.`,
+    );
+  }
 }
 
 // --- shared helpers (used by both index.ts and logger.ts) ---

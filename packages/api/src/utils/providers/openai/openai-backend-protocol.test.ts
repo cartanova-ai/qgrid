@@ -27,7 +27,7 @@ describe("OpenAI Codex backend protocol", () => {
     } })).toMatchObject({ generation: { route: "codex-responses", size: "841x1870" } });
   });
   it("distinguishes partial function items from completed arguments", () => {
-    const item = { type: "function_call", call_id: "call", name: "generate_transparent_image", arguments: "{}" };
+    const item = { type: "function_call", call_id: "call", name: "generate_image", arguments: "{}" };
     expect(normalizeOpenAIEvent({ type: "response.output_item.added", item })).toEqual({ type: "output-item", item, completed: false });
     expect(normalizeOpenAIEvent({ type: "response.output_item.done", item })).toEqual({ type: "output-item", item, completed: true });
   });

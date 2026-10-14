@@ -37,7 +37,7 @@ Qgrid는 두 구독 기반 런타임 위에 AI SDK `LanguageModelV3` custom prov
   ```
 - **N개 구독 풀링** — 팀원 구독 계정을 모아서 병렬 처리. smooth weighted routing으로 요청을 토큰에 분산. 토큰별 quota threshold로 사용률 초과 토큰은 라우팅에서 자동 제외.
 - **Request Log 대시보드** — 매 요청의 토큰 사용량, 비용, 캐시 적중, TTFT, tool-call 내역, reasoning을 웹 UI에서 실시간 확인.
-- **이미지 생성** — 요청 단위로 codex `image_generation` tool을 켜고 표준 AI SDK 응답으로 PNG 파일 수신.
+- **이미지 생성** — AI SDK `generateImage`와 `qgrid.image()`로 구독 기반 이미지 생성·편집을 직접 호출합니다. 대시보드 채팅은 이미지 도구를 기본 제공하며 일반·투명 이미지 모두 같은 Images 엔드포인트를 사용합니다.
 - **OpenAI + Anthropic** — 양쪽 구독 토큰 모두 등록 가능. OAuth 원클릭 로그인.
 
 ---
@@ -193,37 +193,38 @@ const { text } = await generateText({
 ### 이미지 생성
 
 ```typescript
-// OpenAI 경로 + generateText 전용 — 해당 요청에만 codex image_generation tool 활성화
-const result = await generateText({
-  model: qgrid("openai/gpt-5.6-terra"),
+import { generateImage } from "ai";
+import { qgrid, type QgridImageProviderOptions } from "@cartanova/qgrid-ai-sdk";
+
+// 채팅 모델 없이 구독 Images 엔드포인트 직접 호출
+const { image, usage, providerMetadata } = await generateImage({
+  model: qgrid.image("openai/gpt-image-2"),
   prompt: "우주를 나는 고래 일러스트",
-  providerOptions: { qgrid: { imageGeneration: true } },
+  providerOptions: {
+    qgrid: { background: "opaque" } satisfies QgridImageProviderOptions,
+  },
 });
 
-const image = result.files[0]; // mediaType: "image/png", base64
+image.uint8Array; // 실제 반환된 PNG bytes
+usage.inputTokens; // 이미지 모델 usage
+providerMetadata.qgrid?.images[0]; // requestLogId, generation: 생성 조건과 세부 usage
 ```
 
-크기 옵션은 정확한 출력을 보장하지 않는 힌트입니다. 원하는 비율(예: "세로 9:20")은 프롬프트에 적고 `size`는 생략하거나 `"auto"`로 두세요. 양의 정수 `가로x세로` 힌트도 받습니다. 실제 크기는 `result.providerMetadata.qgrid.imageGeneration`에서 확인하며 qgrid는 리사이즈하지 않습니다. metadata와 이미지 비용 처리 방식은 [SDK 이미지 계약](packages/ai-sdk/README.ko.md#image-generation)을 참고하세요.
+모델 ID는 Codex의 요청 식별자이며 실제 제공 모델 버전의 증거가 아닙니다. 표준 최상위 `size`와 중첩 없는 `providerOptions.qgrid.quality`는 정확한 출력을 보장하지 않는 힌트입니다. 원하는 비율은 프롬프트에 적고 실제 조건은 `providerMetadata.qgrid.images[].generation`에서 확인하세요. qgrid는 리사이즈하지 않습니다. 비용은 이미지 usage에 공개 API 단가를 적용한 추정치이며 별도 채팅 비용은 없습니다. 옵션·제약과 usage가 없을 때의 추정 방식은 [SDK 이미지 계약](packages/ai-sdk/README.ko.md#image-generation)을 참고하세요.
 
-레퍼런스 이미지는 AI SDK multimodal message part로 전달할 수 있습니다:
+참조 이미지 편집은 표준 이미지 프롬프트로 전달합니다:
 
 ```typescript
-const result = await generateText({
-  model: qgrid("openai/gpt-5.6-terra"),
-  messages: [
-    {
-      role: "user",
-      content: [
-        { type: "text", text: "이 이미지를 스타일 레퍼런스로 사용해서 포스터를 만들어줘" },
-        { type: "file", mediaType: "image/png", data: referenceImageBase64 },
-      ],
-    },
-  ],
-  providerOptions: { qgrid: { imageGeneration: true } },
+const { image } = await generateImage({
+  model: qgrid.image("openai/gpt-image-2"),
+  prompt: {
+    text: "이 이미지를 스타일 레퍼런스로 사용해서 포스터를 만들어줘",
+    images: [referenceImageBytes],
+  },
 });
 ```
 
-레퍼런스 이미지는 JSON data URL로 전송되므로 큰 사진은 압축하거나 리사이즈해서 전달하세요. SDK는 과도하게 큰 base64 입력을 명확한 에러로 거부하며, 사진에는 WebP/JPEG를 권장합니다.
+PNG/JPEG/WebP 참조 이미지는 최대 5개를 지원합니다. 큰 인라인 사진은 압축하거나 리사이즈해서 전달하세요. 과도하게 큰 입력은 거부합니다. `generateText`에는 이미지 생성 옵션이 없고 일반 이미지 인식도 지원하지 않습니다. 대시보드 `qgrid_chat`의 별도 자동 이미지 생성 경로는 유지됩니다.
 
 ---
 

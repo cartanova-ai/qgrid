@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { QgridFrame } from "./qgrid.frame";
 import { QueryInput } from "./qgrid.types";
+import { ImageGenerationError } from "../../utils/providers/openai/openai-dispatcher";
 
 const {
   findOneMock,
@@ -213,6 +214,7 @@ describe("QgridFrame.query request logging", () => {
     beforeQueryMock.mockReset().mockResolvedValue({ requestLogId: 41, stepIndex: 0 });
     afterQueryMock.mockReset().mockResolvedValue({});
     finishRunWithErrorMock.mockReset();
+    finishRunAbortedMock.mockReset();
     dispatcherQueryMock.mockReset();
     findActiveByProviderAndNameMock.mockReset();
   });
@@ -383,6 +385,45 @@ describe("QgridFrame.query request logging", () => {
     await expect(QgridFrame.query(args)).rejects.toThrow("provider failed");
 
     expect(finishRunWithErrorMock).toHaveBeenCalledWith(41, "provider failed", args);
+  });
+
+  it.each(["error", "abort", "logger-disabled"])("handles completed driver accounting on image %s", async (mode) => {
+    const requestRaw = Object.assign(new EventEmitter(), { aborted: false });
+    const responseRaw = Object.assign(new EventEmitter(), { destroyed: false, writableEnded: false });
+    vi.spyOn(Sonamu, "getContext").mockReturnValue({
+      transport: "http", request: { raw: requestRaw }, reply: { raw: responseRaw },
+    } as never);
+    const error = new ImageGenerationError("incomplete", "image failed");
+    error.completedDriver = {
+      text: "drawing", tokenName: "one", model: "gpt-6-luna", durationMs: 20, ttftMs: 2,
+      threadCoord: { workerId: 1, threadId: "", epoch: -1 },
+      usage: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 120 },
+    };
+    dispatcherQueryMock.mockImplementationOnce(async () => {
+      if (mode === "abort") { responseRaw.destroyed = true; responseRaw.emit("close"); }
+      throw error;
+    });
+    const args = {
+      prompt: "draw", model: "openai/gpt-6-luna", imageGeneration: "auto" as const,
+      ...(mode === "logger-disabled" ? { logger: false } : {}),
+    };
+    await expect(QgridFrame.query(args)).rejects.toBe(error);
+    expect(afterQueryMock).not.toHaveBeenCalled();
+    if (mode === "logger-disabled") {
+      expect(beforeQueryMock).not.toHaveBeenCalled();
+      expect(finishRunWithErrorMock).not.toHaveBeenCalled();
+      expect(finishRunAbortedMock).not.toHaveBeenCalled();
+    } else {
+      const completedStep = expect.objectContaining({
+        stepIndex: 0,
+        result: expect.objectContaining({
+          model: "gpt-6-luna", tokenName: "one", costUsd: 0.00002,
+          usage: expect.objectContaining({ input_tokens: 100, output_tokens: 20 }),
+        }),
+      });
+      if (mode === "abort") expect(finishRunAbortedMock).toHaveBeenCalledWith(41, args, completedStep);
+      else expect(finishRunWithErrorMock).toHaveBeenCalledWith(41, "image failed", args, completedStep);
+    }
   });
 
   it("marks an incoherent structured envelope failure as a request-log error", async () => {
@@ -775,6 +816,32 @@ describe("QgridFrame.query request logging", () => {
     expect(QueryInput.safeParse({ prompt: "hi", logger: false }).success).toBe(true);
   });
 
+  it.each([
+    { imageGeneration: undefined },
+    { imageGeneration: "auto" as const },
+    { imageGeneration: true, tools: [{ name: "lookup", inputSchema: { type: "object" } }] },
+    { imageGeneration: true, jsonSchema: '{"type":"object"}' },
+    { imageGeneration: true, imageGenerationOptions: { outputFormat: "webp" as const } },
+  ])("rejects unsupported standalone image requests before logging: %j", async (options) => {
+    await expect(QgridFrame.query({
+      prompt: "draw", model: "openai/gpt-image-2", ...options,
+    })).rejects.toMatchObject({ statusCode: 400 });
+    expect(beforeQueryMock).not.toHaveBeenCalled();
+    expect(dispatcherQueryMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { imageGenerationOptions: { outputFormat: "webp" as const } },
+    { tools: [{ name: "lookup", inputSchema: { type: "object" } }] },
+    { jsonSchema: '{"type":"object"}' },
+  ])("rejects unsupported auto image controls before logging: %j", async (options) => {
+    await expect(QgridFrame.query({
+      prompt: "draw", model: "openai/gpt-6-luna", imageGeneration: "auto", ...options,
+    })).rejects.toMatchObject({ statusCode: 400 });
+    expect(beforeQueryMock).not.toHaveBeenCalled();
+    expect(dispatcherQueryMock).not.toHaveBeenCalled();
+  });
+
   it("accepts bounded positive integer timeout values only", () => {
     expect(QueryInput.safeParse({ prompt: "hi", timeout: 360_000 }).success).toBe(true);
     expect(QueryInput.safeParse({ prompt: "hi", timeout: 0 }).success).toBe(false);
@@ -787,6 +854,12 @@ describe("QgridFrame.prepareStream", () => {
   beforeEach(() => {
     dispatcherQueryMock.mockReset();
     requestLogSaveMock.mockReset();
+  });
+
+  it("rejects an image model without a streaming image flag", async () => {
+    await expect(QgridFrame.prepareStream({
+      prompt: "draw", model: "openai/gpt-image-2",
+    })).rejects.toMatchObject({ statusCode: 400 });
   });
 
   it.each([true, "auto"] as const)("rejects imageGeneration=%s before creating an SSE stream", async (imageGeneration) => {

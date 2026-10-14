@@ -458,36 +458,67 @@ describe("qgrid run lifecycle TTFT", () => {
     );
   });
 
-  it("keeps standalone image accounting out of text usage and records response usage once", async () => {
+  it.each([
+    ["openai/gpt-5.5", "transparent"],
+    ["openai/gpt-image-2", "opaque"],
+  ] as const)("keeps standalone %s accounting out of text usage and records image usage once", async (model, background) => {
     const generation = {
       route: "codex-images" as const, model: "gpt-image-2" as const,
-      size: "1254x1254", quality: "medium", background: "transparent",
+      size: "1254x1254", quality: "medium", background,
     };
     aggregateStepUsageMock.mockResolvedValueOnce({
       input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0,
       duration_ms: 120, fallback_count: 0, cost_usd: 0, cost_source: "pricing_table",
     });
     await afterQuery(10, 0, {
-      prompt: "draw", model: "openai/gpt-5.5", imageGeneration: true,
-      imageGenerationOptions: { quality: "high", size: "1024x1024", background: "transparent" },
+      prompt: "draw", model, imageGeneration: true,
+      imageGenerationOptions: { quality: "high", size: "1024x1024", background },
     }, queryOutput({
-      model: "gpt-image-2", requestedModel: "gpt-5.5", costUsd: 0,
+      model: "gpt-image-2", costUsd: 0,
       usage: { input_tokens: 0, output_tokens: 0, reasoning_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
       content: [
         { type: "image", data: "first", generation: { ...generation, usage: {
           input_tokens: 10, output_tokens: 100, total_tokens: 110,
+          input_tokens_details: { text_tokens: 4, image_tokens: 6 },
         } } },
         { type: "image", data: "second", generation },
       ],
     }));
     expect(appendStepMock).toHaveBeenCalledWith(10, expect.objectContaining({
-      type: "generate", model_name: "openai/gpt-image-2", requested_model_name: "openai/gpt-5.5",
+      type: "generate", model_name: "openai/gpt-image-2", requested_model_name: model,
       input_tokens: 0, output_tokens: 0, cost_usd: 0,
     }));
     expect(finishRunMock).toHaveBeenCalledWith(10, expect.objectContaining({
-      input_tokens: 0, output_tokens: 0, cost_usd: 0, image_cost_usd: 3_080,
+      input_tokens: 0, output_tokens: 0, cost_usd: 0, image_cost_usd: 3_068,
       image_cost_method: "estimated:gpt-image-2:reported-usage:public-prices:conservative",
     }));
+  });
+
+  it("records auto chat driver cost and standalone image usage cost separately", async () => {
+    aggregateStepUsageMock.mockResolvedValueOnce({
+      input_tokens: 100, output_tokens: 20, cache_read_tokens: 0, cache_creation_tokens: 0,
+      duration_ms: 120, fallback_count: 0, cost_usd: 20, cost_source: "pricing_table",
+    });
+    await afterQuery(10, 0, {
+      prompt: "draw", model: "openai/gpt-6-luna", imageGeneration: "auto",
+    }, queryOutput({
+      model: "gpt-6-luna", costUsd: 0.00002,
+      usage: { input_tokens: 100, output_tokens: 20, reasoning_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      content: [{ type: "image", data: "image", generation: {
+        route: "codex-images", model: "gpt-image-2", background: "opaque",
+        usage: {
+          input_tokens: 10, output_tokens: 100, total_tokens: 110,
+          input_tokens_details: { text_tokens: 4, image_tokens: 6 },
+        },
+      } }],
+    }));
+    expect(finishRunMock).toHaveBeenCalledWith(10, expect.objectContaining({
+      model_name: "openai/gpt-6-luna", requested_model_name: "openai/gpt-6-luna",
+      input_tokens: 100, output_tokens: 20, cost_usd: 20, image_cost_usd: 3_068,
+      is_image_generation: true,
+      image_cost_method: "estimated:gpt-image-2:reported-usage:public-prices:conservative",
+    }));
+    expect(appendStepMock.mock.calls.filter(([, step]) => step.type === "generate")).toHaveLength(1);
   });
 
   it("uses requested image quality and size for cost estimate", async () => {
@@ -611,6 +642,7 @@ describe("qgrid run lifecycle TTFT", () => {
 
 describe("qgrid run lifecycle terminal rollup", () => {
   beforeEach(() => {
+    appendStepMock.mockReset().mockResolvedValue(1);
     aggregateStepUsageMock.mockReset().mockResolvedValue({
       input_tokens: 120,
       output_tokens: 30,
@@ -624,6 +656,50 @@ describe("qgrid run lifecycle terminal rollup", () => {
       cost_source: "mixed",
     });
     finishRunMock.mockReset();
+  });
+
+  it.each(["error", "aborted"] as const)("records a completed chat stage once before %s rollup", async (status) => {
+    const args = { prompt: "draw", model: "openai/gpt-6-astra", imageGeneration: "auto" as const };
+    const result = queryOutput({ model: "gpt-6-luna", requestedModel: "gpt-6-astra" });
+    const completedStep = { stepIndex: 2, result };
+    if (status === "error") await finishRunWithError(10, "image failed", args, completedStep);
+    else await finishRunAborted(10, args, completedStep);
+    expect(appendStepMock).toHaveBeenCalledOnce();
+    expect(appendStepMock).toHaveBeenCalledWith(10, expect.objectContaining({
+      step_index: 2, type: "generate", model_name: "openai/gpt-6-luna",
+      requested_model_name: "openai/gpt-6-astra", input_tokens: 5, output_tokens: 7,
+      cost_usd: 1_000, cost_source: "pricing_table", ttft_ms: 39,
+    }));
+    expect(appendStepMock.mock.invocationCallOrder[0]).toBeLessThan(aggregateStepUsageMock.mock.invocationCallOrder[0]!);
+    expect(finishRunMock).toHaveBeenCalledOnce();
+    expect(finishRunMock).toHaveBeenCalledWith(10, expect.objectContaining({
+      status, error_message: status === "error" ? "image failed" : "client disconnected",
+      token_name: "tok-A", model_name: "openai/gpt-6-luna", requested_model_name: "openai/gpt-6-astra",
+      // Existing steps and the final completed driver are rolled up together.
+      input_tokens: 120, output_tokens: 30, cost_usd: 7_500, cost_source: "mixed",
+    }));
+    const finish = finishRunMock.mock.calls[0]![1];
+    expect(finish.image_cost_usd).toBeUndefined();
+    expect(finish.image_cost_method).toBeUndefined();
+    expect(finish.is_image_generation).toBeUndefined();
+  });
+
+  it("still attempts aggregation and terminal status when the completed driver step cannot be logged", async () => {
+    appendStepMock.mockRejectedValueOnce(new Error("step write failed"));
+    await expect(finishRunWithError(10, "image failed", {
+      prompt: "draw", model: "openai/gpt-6-luna",
+    }, { stepIndex: 0, result: queryOutput({ model: "gpt-6-luna" }) })).resolves.toBeUndefined();
+    expect(aggregateStepUsageMock).toHaveBeenCalledWith(10);
+    expect(finishRunMock).toHaveBeenCalledWith(10, expect.objectContaining({
+      status: "error", error_message: "image failed", model_name: "openai/gpt-6-luna", token_name: "tok-A",
+    }));
+  });
+
+  it("does not replace the original failure when terminal persistence also fails", async () => {
+    finishRunMock.mockRejectedValueOnce(new Error("terminal write failed"));
+    await expect(finishRunWithError(10, "image failed", { prompt: "draw" }, {
+      stepIndex: 0, result: queryOutput(),
+    })).resolves.toBeUndefined();
   });
 
   it("keeps incurred step usage and cost when a run ends in error", async () => {

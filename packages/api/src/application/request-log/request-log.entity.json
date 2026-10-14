@@ -134,14 +134,14 @@
       "name": "image_cost_usd",
       "type": "integer",
       "nullable": true,
-      "desc": "이미지 생성 추정 비용"
+      "desc": "이미지 생성 비용"
     },
     {
       "name": "image_cost_method",
       "type": "string",
       "length": 100,
       "nullable": true,
-      "desc": "이미지 비용 추정 방식"
+      "desc": "이미지 비용 계산 방식"
     },
     {
       "name": "effort",

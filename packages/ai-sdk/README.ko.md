@@ -2,7 +2,7 @@
 
 [English](./README.md) · **한국어**
 
-AI SDK v6 custom `LanguageModelV3` provider for [qgrid](https://github.com/cartanova-ai/Qgrid).
+AI SDK v6 custom `LanguageModelV3` / `ImageModelV3` provider for [qgrid](https://github.com/cartanova-ai/Qgrid).
 
 **기존 AI SDK 코드 변경 없이, `model` 한 줄만 바꾸면 구독 토큰 풀링(토큰 N개 × concurrent permit) + request log 대시보드를 사용할 수 있습니다.**
 
@@ -211,8 +211,6 @@ const { text } = await generateText({
 | `reasoningSummary` | `"auto"` \| `"concise"` \| `"detailed"` \| `"none"` | OpenAI 전용 | 추론 요약 출력 방식 |
 | `serviceTier` | `string` | OpenAI 전용 | OpenAI/codex service tier |
 | `timeoutMs` | 양의 정수, 최대 `1_800_000` | Anthropic 전용 | 서버의 Claude Code 프로세스 제한시간(ms). SDK의 non-stream HTTP 제한은 이 값보다 60초 길게 설정. 기본값은 240초 |
-| `imageGeneration` | `boolean` | OpenAI 전용, non-stream | codex 내장 `image_generation` tool 활성화 ([아래](#image-generation) 참조) |
-| `imageGenerationOptions` | `{ quality?, size?, background? }` | OpenAI 전용 | 이미지 생성 옵션. `background: "transparent"`는 전용 경로 사용. 실제 크기·품질은 응답 metadata 확인 ([아래](#image-generation)). |
 | `fallbackModels` | `string[]` | deprecated | 호환용으로만 남긴 무시되는 필드. 사용하면 unsupported-option 경고를 반환하므로 호출부에서 제거하세요. Claude Code의 Fable refusal fallback과 무관 |
 
 ```typescript
@@ -270,53 +268,68 @@ const { text } = await generateText({
 
 ### Image Generation
 
-OpenAI/codex 경로 전용, `generateText` 전용입니다. 요청별로 이미지 생성을 활성화하고 결과를 AI SDK `files`로 받습니다. 투명 배경은 Codex 전용 Images 경로를, 그 외에는 내장 `image_generation` 도구를 사용합니다.
+이미지 생성과 참조 이미지 편집에는 표준 `generateImage`와 `qgrid.image()`를 사용합니다.
+구독 토큰으로 Codex Images 엔드포인트를 직접 호출하므로 Astra/Luna 같은 채팅 모델을
+선택하지 않습니다. 서버와 SDK를 이 인터페이스를 지원하는 버전으로 함께 업데이트하세요.
+
+`openai/gpt-image-2`는 Codex 구독 경로의 요청 식별자이며 실제 이미지 모델 버전을 2.0으로
+고정한다는 뜻은 아닙니다. OpenAI는 Codex에 Images 2.5를 제공한다고 발표했지만, 구독
+엔드포인트에서 Flare/Sunburst 선택을 보장할 방법은 확인되지 않았습니다. 응답에 모델이
+없을 때 메타데이터의 모델명도 요청 식별자를 사용하므로 실제 버전의 증거로 해석하지 마세요.
 
 ```typescript
-const result = await generateText({
-  model: qgrid("openai/gpt-5.6-terra"),
-  prompt: "우주를 나는 고래 일러스트",
+import { generateImage } from "ai";
+import { qgrid, type QgridImageProviderOptions } from "@cartanova/qgrid-ai-sdk";
+
+const { image, usage, providerMetadata } = await generateImage({
+  model: qgrid.image("openai/gpt-image-2", { projectName: "deti" }),
+  prompt: "세로형 포스터를 만들어줘",
   providerOptions: {
-    qgrid: {
-      imageGeneration: true,
-      imageGenerationOptions: { quality: "medium", size: "1536x1024" },
-    },
+    qgrid: { background: "opaque" } satisfies QgridImageProviderOptions,
   },
 });
 
-const image = result.files[0]; // mediaType: "image/png", base64
+image.uint8Array; // 실제 반환된 PNG bytes
+usage.inputTokens; // 이미지 모델 입력 토큰 (채팅 모델 usage가 아님)
+providerMetadata.qgrid?.images[0]; // requestLogId, generation: 생성 조건과 세부 usage
 ```
 
-레퍼런스 이미지는 일반 AI SDK multimodal message part로 전달할 수 있습니다:
+프로젝트 전체에는 `QGRID_PROJECT_NAME=deti` 설정을 권장합니다. 모델 설정에는 기존과 같이
+`serverUrl`과 `projectName`을 사용할 수 있습니다. `providerOptions.qgrid`에는 `quality`,
+`background`, `outputFormat: "png"`, `tokenName`, `logger`를 중첩 없이 전달합니다.
+표준 `size`는 provider options가 아닌 `generateImage` 최상위에 전달합니다.
+
+참조 이미지 편집도 표준 입력으로 전달합니다. `images`의 각 항목에는 `Buffer`,
+`Uint8Array`, base64 이미지 데이터 또는 HTTPS URL 문자열을 넣습니다. 참조가 있으면
+`/images/edits`, 없으면 `/images/generations`를 호출합니다. 큰 참조 사진은 압축하거나
+리사이즈해서 전달하세요. 과도하게 큰 인라인 이미지 입력은 전송 전에 거부합니다.
 
 ```typescript
-const result = await generateText({
-  model: qgrid("openai/gpt-5.6-terra"),
-  messages: [
-    {
-      role: "user",
-      content: [
-        { type: "text", text: "이 이미지를 스타일 레퍼런스로 사용해서 포스터를 만들어줘" },
-        { type: "file", mediaType: "image/png", data: referenceImageBase64 },
-      ],
-    },
-  ],
-  providerOptions: { qgrid: { imageGeneration: true } },
+const { image } = await generateImage({
+  model: qgrid.image("openai/gpt-image-2"),
+  prompt: { text: "이 캐릭터를 유지해서 포스터를 만들어줘", images: [referenceImageBytes] },
 });
 ```
 
-- `streamText`에서는 거부됩니다 (non-stream 전용).
-- 이미지 생성 요청은 provider 대화 상태를 보관하지 않고 전체 input을 직접 전송합니다.
-- 레퍼런스 이미지는 JSON data URL로 전송됩니다. 큰 사진은 압축하거나 리사이즈해서 전달하세요. 과도하게 큰 base64 입력은 SDK가 거부하며, 사진에는 WebP/JPEG를 권장합니다.
-- 이미지 비용은 API 가격 기준 추정치입니다. 이미지 usage가 있으면 토큰 단가로 계산하고, 없으면 요청한 크기·품질의 장당 단가에 이미지 수를 곱합니다. 품질 생략 시 medium, 크기 생략·auto·사용자 지정 크기는 1536x1024 단가를 사용합니다. 텍스트 모델 비용에 더해 표시하며, 실제 출력 설정이나 구독 청구액을 뜻하지 않습니다. 기존 저장 비용은 일괄 재계산하지 않습니다.
-- `imageGenerationOptions.background`는 `"auto" | "opaque" | "transparent"`를 지원합니다. `"transparent"` 요청만 기존 ChatGPT 구독 토큰으로 Codex 전용 `images/generations` 또는 `images/edits` 경로를 사용합니다. 나머지는 기존 Responses 도구 경로를 유지합니다. 투명 경로는 텍스트 모델 없이 `gpt-image-2`를 직접 실행하며, tools·structured output은 지원하지 않습니다. 레퍼런스는 최대 5장입니다. 불투명·완전 빈 이미지·손상된 PNG는 오류로 처리하고, 별도 배경 제거로 대체하지 않습니다.
-- hosted 이미지 usage는 최종 응답의 `tool_usage.image_gen`에서 읽으며 텍스트 모델 usage와 분리합니다. 응답 전체 이미지 usage는 첫 이미지에만 붙입니다. 이미지별 model이 없으면 백엔드 이미지 도구 메타데이터로 보완합니다.
-- 두 경로 모두 `result.providerMetadata.qgrid.imageGeneration` 배열로 출력 정보를 제공합니다. `contentIndex`, `route`와 선택적인 `model`, `size`, `quality`, `background`, 이미지 `usage`가 포함됩니다. 경로는 `codex-responses` 또는 `codex-images`이며, 일반 경로에서 보고되지 않은 이미지 모델은 비워 둡니다. `result.content` 파일 파트에도 metadata가 있지만 `result.files[]`에는 없습니다. PNG 크기는 실제 바이트에서 읽고, JPEG/WebP는 백엔드가 보고한 출력 크기를 사용합니다. qgrid는 리사이즈하지 않습니다.
-- `imageGenerationOptions.size`는 `"auto"` 또는 `"1152x2560"` 같은 양의 정수 `가로x세로` 힌트를 받습니다. 정확한 출력 크기를 보장하지 않으므로 생략하거나 `auto`를 사용하고, 원하는 비율은 프롬프트에 적으세요. 2026-10-13 실호출에서 두 구독 경로 모두 크기 옵션을 무시했고, 9:20 요청은 `841x1870`, 4K 세로 요청은 `941x1672`, 4:1 요청은 3:1로 반환됐습니다. 약 157만 픽셀이라는 관측값은 모든 계정의 고정 상한이 아닙니다. 공개 Images API의 16배수·4K 규칙도 구독 경로의 보장 사양이 아닙니다. 확장된 크기 힌트와 일반 이미지 metadata를 사용하려면 서버와 SDK를 함께 업데이트하세요.
-- 투명 경로는 텍스트 모델을 실행하지 않아 일반 토큰 usage·비용이 0입니다. 이미지 usage는 별도로 보존하고, `image_cost_usd`는 보고된 토큰과 공개 API 단가로 추정합니다. 알려진 text/image input은 구분하고 불명확한 input은 보수적으로 계산하며, 캐시 할인은 반영하지 않습니다. 구독 청구액을 뜻하지 않습니다.
-- 이미지 도구 로그는 `requestedOptions`와 `observedGeneration`을 구분합니다. 관측 정보가 없는 응답은 기본 단가 가정을 포함한 `pricingAssumption`을 유지합니다. 그 기본값 `1536x1024`/`medium`은 실제 출력 설정을 뜻하지 않습니다.
+- PNG/JPEG/WebP 참조 이미지는 요청당 최대 5개이고, 출력은 PNG입니다. 마스크 편집과 JPEG/WebP 출력은 지원하지 않습니다.
+- `n`은 AI SDK가 한 장씩 여러 호출로 나눕니다. 요청당 한 장 제한을 `maxImagesPerCall`로 우회할 수는 없습니다.
+- `size`와 `quality`는 힌트이며 구독 백엔드가 자동 결정할 수 있습니다. 실제 조건은 메타데이터에서 확인하세요. `aspectRatio`와 `seed`는 적용되지 않으며 AI SDK 경고를 반환합니다. 원하는 비율은 프롬프트로 전달하세요.
+- `usage`는 이미지 응답의 토큰 사용량입니다. 세부 입력 분류는 `providerMetadata.qgrid.images[]`에 보존합니다. 서버는 이 usage로 API 가격 기준 추정 비용을 기록하고, usage가 없으면 이미지당 가격 추정을 사용합니다. 별도 채팅 비용은 없습니다.
+- `logger: false`는 요청 로그만 비활성화합니다. 취소는 표준 `abortSignal`을 사용합니다.
 
-투명 생성은 위 `imageGenerationOptions`에 `background: "transparent"`를 추가하고, 프롬프트에도 피사체 밖의 투명 배경을 명시하세요. 크로마키·배경색 지시는 제거해야 합니다. 이 기능이 포함된 서버와 SDK가 모두 필요하며, 저장 시 PNG 알파를 유지하세요. 정확한 최종 크기는 소비 앱의 명시적인 crop/resize 정책으로 처리합니다.
+투명 출력은 `background: "transparent"`를 중첩 없이 전달하고 프롬프트에도 투명 배경을
+명시하세요. 크로마키·배경색 지시는 제거하고, 저장 시 PNG 알파를 유지하세요. 불투명·완전
+빈 이미지·손상된 PNG는 오류로 처리합니다. qgrid는 배경 제거 또는 리사이즈를 하지 않으며,
+정확한 최종 크기는 소비 앱의 명시적인 crop/resize 정책으로 처리합니다.
+
+`generateText`와 `streamText`는 이미지 생성 옵션이 없는 대화 모델 인터페이스입니다.
+일반적인 이미지 인식도 지원하지 않아 image part는 경고와 함께 무시됩니다. 이미지 생성·편집이
+목적이면 `generateImage`의 참조 입력을 사용하세요. 대시보드 `qgrid_chat`은 내부 이미지
+도구를 기본으로 등록합니다. 채팅 모델이 생성 여부를 판단하고 완결된 프롬프트를 작성하며,
+편집 시 최근 대화 이미지 중 최대 5개를 선택합니다. 서버는 일반·투명 이미지 모두 구독
+Images를 직접 호출하고 요청 로그에는 채팅과 이미지 usage의 추정 비용을 합산합니다.
+텍스트만 응답할 수도 있습니다. 공개 SDK 도구 팩토리는 제공하지 않으며, 자동 채팅 이미지도
+`generateImage`와 같이 PNG만 지원합니다.
 
 ## Telemetry Logger
 

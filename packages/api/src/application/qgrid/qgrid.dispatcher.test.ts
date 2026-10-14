@@ -6,10 +6,12 @@ import {
   type GenerateStreamCallbacks,
 } from "../../utils/providers/common/provider-dispatcher";
 import { systemHash } from "./conv-routing";
-import { OpenAIDispatcher } from "../../utils/providers/openai/openai-dispatcher";
+import { ImageGenerationError, OpenAIDispatcher } from "../../utils/providers/openai/openai-dispatcher";
 import { normalizeOpenAIEvent } from "../../utils/providers/openai/openai-backend-protocol";
-import { buildStrictOutputSchema, QgridDispatcherClass } from "./qgrid.dispatcher";
+import { buildStrictOutputSchema, completedDriverFromImageFailure, QgridDispatcherClass } from "./qgrid.dispatcher";
 import { QueryInput, type QueryOutput } from "./qgrid.types";
+import { PNG } from "pngjs";
+import { estimateImageGenerationCostMicroUsd } from "./qgrid-image-generation";
 import { type TokenSubsetA } from "../sonamu.generated";
 
 function providerResult(overrides: Partial<GenerateResult> = {}): GenerateResult {
@@ -36,6 +38,138 @@ function deeplyNestedOutputSchema(depth: number): string {
 }
 
 describe("QgridDispatcherClass", () => {
+  it("prices only the completed chat driver from an image failure", () => {
+    const error = new ImageGenerationError("incomplete", "images unavailable");
+    error.completedDriver = providerResult({
+      model: "gpt-6-luna", requestedModel: "gpt-6-astra", ttftMs: 4,
+      usage: { totalTokens: 120, inputTokens: 100, outputTokens: 20, cachedInputTokens: 10, reasoningOutputTokens: 5 },
+    });
+    const result = completedDriverFromImageFailure(error)!;
+    expect(result).toMatchObject({
+      model: "gpt-6-luna", requestedModel: "gpt-6-astra", tokenName: "provider/test",
+      usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 10, reasoning_tokens: 5 },
+      costSource: "pricing_table", finishReason: "stop", durationMs: 12, ttftMs: 4,
+      content: [{ type: "text", text: "ok" }],
+    });
+    expect(result.costUsd).toBeCloseTo(0.0000191, 10);
+    expect(estimateImageGenerationCostMicroUsd(result, undefined)).toBeNull();
+    expect(result.runContext).toBeUndefined();
+    expect(completedDriverFromImageFailure(new Error("failed"))).toBeUndefined();
+    expect(completedDriverFromImageFailure(new ImageGenerationError("gate", "invalid"))).toBeUndefined();
+  });
+  it.each([
+    [false, 0, "generations"],
+    [false, 2, "edits"],
+    [true, 1, "edits"],
+  ] as const)("auto chat uses Images %s/%s/%s and keeps both usages", async (transparent, referenceCount, endpoint) => {
+    const png = new PNG({ width: 2, height: 1 });
+    png.data.set([0, 0, 0, transparent ? 0 : 255, 255, 0, 0, 255]);
+    const imageUsage = {
+      input_tokens: 10, output_tokens: 100, total_tokens: 110,
+      input_tokens_details: { text_tokens: 4, image_tokens: 6 },
+    };
+    const fetchMock = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+      if (String(url).endsWith("/responses")) {
+        const events = [
+          { type: "response.output_item.done", item: {
+            type: "function_call", call_id: "image-call", name: "generate_image",
+            arguments: JSON.stringify({ prompt: "A red square", transparent_background: transparent, num_last_images_to_include: referenceCount }),
+          } },
+          { type: "response.completed", response: {
+            id: "driver", model: "gpt-6-luna",
+            usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
+          } },
+        ];
+        return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+      }
+      return Response.json({
+        data: [{ b64_json: PNG.sync.write(png).toString("base64") }],
+        background: transparent ? "transparent" : "opaque", quality: "medium", usage: imageUsage,
+      });
+    });
+    const provider = new OpenAIDispatcher("https", { fetch: fetchMock });
+    await provider.onTokenAdded(1, "chat-token", {
+      accessToken: "test-access", refreshToken: "", accountId: "test-account", accessTokenExpiresAt: Date.now() + 60000,
+    });
+    const dispatcher = new QgridDispatcherClass();
+    dispatcher.openaiDispatcher = provider;
+    try {
+      const result = await dispatcher.query({
+        model: "openai/gpt-6-luna", prompt: "Draw or edit a square", imageGeneration: "auto",
+        history: JSON.stringify([{ type: "message", role: "user", content: [{ type: "input_image", image_url: "https://example.com/old.png" }] }]),
+        input: [{ type: "image", url: "https://example.com/new.png" }],
+      });
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        "https://chatgpt.com/backend-api/codex/responses",
+        `https://chatgpt.com/backend-api/codex/images/${endpoint}`,
+      ]);
+      const driverInit = fetchMock.mock.calls[0]![1]!;
+      const imageInit = fetchMock.mock.calls[1]![1]!;
+      expect(JSON.parse(String(driverInit.body)).tools).toEqual([
+        expect.objectContaining({ type: "function", name: "generate_image" }),
+      ]);
+      const imageBody = JSON.parse(String(imageInit.body));
+      expect(imageBody).toMatchObject({ model: "gpt-image-2", background: transparent ? "transparent" : "opaque" });
+      expect(imageBody.prompt).toContain("A red square");
+      expect(imageBody.prompt).not.toContain("Draw or edit a square");
+      const refs = ["https://example.com/old.png", "https://example.com/new.png"].slice(-referenceCount);
+      expect(imageBody.images).toEqual(referenceCount ? refs.map((image_url) => ({ image_url })) : undefined);
+      expect(imageInit.signal).toBe(driverInit.signal);
+      expect(new Headers(imageInit.headers).get("authorization")).toBe(new Headers(driverInit.headers).get("authorization"));
+      expect(result).toMatchObject({ model: "gpt-6-luna", usage: { input_tokens: 100, output_tokens: 20 } });
+      expect(result.costUsd).toBeCloseTo(0.00002, 8);
+      expect(result.content.find((item) => item.type === "image")).toMatchObject({ generation: { route: "codex-images", usage: imageUsage } });
+      expect(estimateImageGenerationCostMicroUsd(result, undefined)).toBe(3068);
+    } finally {
+      await provider.stop();
+    }
+  });
+
+  it("routes the image model straight to subscription edits and keeps image usage separate", async () => {
+    const png = new PNG({ width: 1, height: 1 });
+    png.data.set([255, 0, 0, 255]);
+    const base64 = PNG.sync.write(png).toString("base64");
+    const usage = {
+      input_tokens: 10, output_tokens: 100, total_tokens: 110,
+      input_tokens_details: { text_tokens: 4, image_tokens: 6 },
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      data: [{ b64_json: base64 }], usage, background: "opaque", quality: "medium",
+    })));
+    const provider = new OpenAIDispatcher("https", { fetch: fetchMock });
+    await provider.onTokenAdded(1, "test", {
+      accessToken: "unused", refreshToken: "", accountId: "unused",
+      accessTokenExpiresAt: Date.now() + 60000,
+    });
+    const dispatcher = new QgridDispatcherClass();
+    dispatcher.openaiDispatcher = provider;
+    try {
+      const result = await dispatcher.query({
+        model: "openai/gpt-image-2", prompt: "recolor", imageGeneration: true,
+        input: [
+          { type: "text", text: "recolor", text_elements: [] },
+          { type: "image", url: `data:image/png;base64,${base64}` },
+        ],
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://chatgpt.com/backend-api/codex/images/edits",
+        expect.objectContaining({ method: "POST", signal: expect.any(AbortSignal) }),
+      );
+      expect(result).toMatchObject({
+        model: "gpt-image-2", costUsd: 0,
+        usage: { input_tokens: 0, output_tokens: 0 },
+        content: expect.arrayContaining([expect.objectContaining({
+          type: "image", mediaType: "image/png",
+          generation: { route: "codex-images", model: "gpt-image-2", background: "opaque", size: "1x1", quality: "medium", usage },
+        })]),
+      });
+      expect(result.runContext?.threadCoord).toBeUndefined();
+    } finally {
+      await provider.stop();
+    }
+  });
+
   it.each(["generate", "stream"])("%s yields a completed tool-call message before a speculative later answer", async (mode) => {
     const tool = JSON.stringify({result: {action: "tool_call", answer: null, toolCalls: [{toolName: "lookupMarker", args: "{}"}]}});
     const answer = JSON.stringify({result: {action: "answer", answer: {marker: ""}, toolCalls: null}});

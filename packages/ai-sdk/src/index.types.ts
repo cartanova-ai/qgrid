@@ -20,6 +20,24 @@ type QgridCommonProviderConfig = {
   /** request_logs.project_name. default: process.env.QGRID_PROJECT_NAME */
   projectName?: string;
 };
+
+/** Codex Images request ID, not a guaranteed serving version; does not select a chat model. */
+export type QgridImageModel = "openai/gpt-image-2";
+export type QgridImageProviderConfig = QgridCommonProviderConfig;
+
+/** `providerOptions.qgrid` for `generateImage({ model: qgrid.image(...) })`. */
+export type QgridImageProviderOptions = {
+  /** Requested hint only; the subscription backend may choose another quality. */
+  quality?: "low" | "medium" | "high";
+  background?: "auto" | "opaque" | "transparent";
+  /** The standalone subscription Images endpoint currently supports PNG only. */
+  outputFormat?: "png";
+  /** Strict active OpenAI token selection, including the `openai/` prefix. */
+  tokenName?: string;
+  /** Defaults to true. Set false to omit qgrid request logs. */
+  logger?: boolean;
+};
+
 export type QgridOpenAIProviderConfig = QgridCommonProviderConfig & {
   defaultEffort?: QgridOpenAIEffort;
 };
@@ -69,26 +87,6 @@ export type QgridOpenAIProviderOptions = QgridCommonProviderOptions & {
   reasoningSummary?: "auto" | "concise" | "detailed" | "none";
   /** Codex service tier. */
   serviceTier?: string;
-  /**
-   * OpenAI Responses image_generation tool 을 켠다. non-stream 전용.
-   * generateText 결과의 files 로 이미지를 받는다. streaming(streamText)에서는 거부된다.
-   */
-  imageGeneration?: boolean;
-  /**
-   * Image generation controls. The Responses backend selects the image model;
-   * Size/quality are hints, not output guarantees. Image cost uses reported usage
-   * at public token rates, or a per-image quality/size estimate when usage is absent.
-   */
-  imageGenerationOptions?: {
-    /** Responses output format. Defaults to PNG; transparent output only supports PNG. */
-    outputFormat?: "png" | "jpeg" | "webp";
-    quality?: "low" | "medium" | "high";
-    /** Requested hint only; Codex may ignore it. Put the desired aspect ratio in the prompt.
-     * Omit or use auto for backend sizing; read actual output size from generation metadata. */
-    size?: "auto" | `${number}x${number}`;
-    /** Transparent uses Codex standalone Images and validates PNG alpha. See README for limits. */
-    background?: "auto" | "opaque" | "transparent";
-  };
 };
 
 /** `providerOptions.qgrid` — Anthropic(Claude Code) 모델용. */

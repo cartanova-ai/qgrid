@@ -15,6 +15,7 @@ import {
   createQgridRequestTransport,
   qgridFetch,
 } from "./http-transport";
+import { createQgridImage } from "./image-model";
 import {
   type QgridSupportedModel,
   type QueryOutput,
@@ -49,31 +50,11 @@ import {
 const threadCoordStore = new Map<string, { coord: QgridThreadCoord; expiresAt: number }>();
 const CACHE_AFFINITY_NAMESPACE = "qgrid-cache-affinity-v1";
 const MAX_THREAD_COORDS = 1_000;
-const MAX_IMAGE_INPUT_DATA_URL_CHARS = 9_000_000;
-const MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL = "9M";
-
-function assertImageInputFitsJsonTransport(imageUrls: string[]): void {
-  let totalDataUrlChars = 0;
-  for (const url of imageUrls) {
-    if (!url.toLowerCase().startsWith("data:")) continue;
-    totalDataUrlChars += url.length;
-    if (url.length > MAX_IMAGE_INPUT_DATA_URL_CHARS) {
-      throw new Error(
-        `qgrid: image input is too large for JSON transport (${url.length} chars). Compress or resize it before passing it to imageGeneration, for example as WebP/JPEG under ${MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL} total base64 data-url chars.`,
-      );
-    }
-  }
-  if (totalDataUrlChars > MAX_IMAGE_INPUT_DATA_URL_CHARS) {
-    throw new Error(
-      `qgrid: image inputs are too large for JSON transport (${totalDataUrlChars} total chars). Compress or resize them before passing them to imageGeneration, for example as WebP/JPEG under ${MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL} total base64 data-url chars.`,
-    );
-  }
-}
 
 function warnDroppedImages(droppedImageCount: number): void {
   if (droppedImageCount <= 0) return;
   console.warn(
-    `[qgrid] ${droppedImageCount} image message part(s) were ignored because providerOptions.qgrid.imageGeneration is not enabled.`,
+    `[qgrid] ${droppedImageCount} image message part(s) were ignored because qgrid language models do not support image input. For image generation or editing, use generateImage with qgrid.image().`,
   );
 }
 
@@ -142,9 +123,6 @@ async function deriveCacheAffinityKey(
 }
 
 function qgridProviderMetadata(data: QueryOutput) {
-  const imageGeneration = data.content?.flatMap((item, contentIndex) =>
-    item.type === "image" && item.generation ? [{ contentIndex, ...item.generation }] : [],
-  );
   return {
     qgrid: {
       ...(data.requestLogId !== undefined ? { requestLogId: data.requestLogId } : {}),
@@ -157,7 +135,6 @@ function qgridProviderMetadata(data: QueryOutput) {
       costSource: data.costSource,
       cacheCreation5mInputTokens: data.usage.cache_creation_5m_input_tokens ?? null,
       cacheCreation1hInputTokens: data.usage.cache_creation_1h_input_tokens ?? null,
-      ...(imageGeneration?.length ? { imageGeneration } : {}),
     },
   };
 }
@@ -167,6 +144,11 @@ function getQgridProviderOptions(
 ): QgridResolvedProviderOptions {
   const qgridOptions =
     (options.providerOptions?.qgrid as QgridResolvedProviderOptions | undefined) ?? {};
+  if ("imageGeneration" in qgridOptions || "imageGenerationOptions" in qgridOptions) {
+    throw new Error(
+      "qgrid: imageGeneration and imageGenerationOptions were removed from language-model options. Use generateImage with qgrid.image().",
+    );
+  }
   if (qgridOptions.tokenName !== undefined && qgridOptions.tokenName.trim() === "") {
     throw new Error("qgrid: tokenName must not be empty");
   }
@@ -275,10 +257,10 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
       );
       const hasTools = tools && tools.length > 0;
       const qgridOptions = getQgridProviderOptions(options);
-      const imageGeneration = qgridOptions.imageGeneration;
-      const { prompt, system, history, input, imageUrls, droppedImageCount } =
-        extractPromptAndHistory(options.prompt, { includeImages: imageGeneration === true });
-      if (!imageGeneration) warnDroppedImages(droppedImageCount);
+      const { prompt, system, history, droppedImageCount } = extractPromptAndHistory(
+        options.prompt,
+      );
+      warnDroppedImages(droppedImageCount);
       const effectiveEffort =
         qgridOptions.thinking === false ? undefined : (qgridOptions.effort ?? effort);
       const verbosity = qgridOptions.verbosity;
@@ -287,16 +269,10 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
       const timeoutMs = qgridOptions.timeoutMs;
       const logger = qgridOptions.logger;
       const tokenName = qgridOptions.tokenName;
-      const imageGenerationOptions = qgridOptions.imageGenerationOptions;
-      if (imageGeneration) {
-        assertImageInputFitsJsonTransport(imageUrls);
-      }
       // 멀티턴 대화 식별자. 호출자가 자기 도메인 ID(예: 게임 세션 ID)만 넘기면,
       // thread 좌표 보관/회송은 threadCoordStore 가 내부에서 처리한다 → 클라이언트 무부담.
       const sessionKey = qgridOptions.sessionKey;
-      const cacheAffinityKey = imageGeneration
-        ? undefined
-        : await deriveCacheAffinityKey(modelId, sessionKey);
+      const cacheAffinityKey = await deriveCacheAffinityKey(modelId, sessionKey);
 
       // qgrid server는 object root schema만 받는다. tools 유무와 무관하게 같은 계약을 적용한다.
       const jsonSchema = serializeObjectResponseFormat(options.responseFormat);
@@ -330,7 +306,6 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
           body: JSON.stringify({
             args: {
               prompt,
-              ...(imageGeneration && input ? { input } : {}),
               model: modelId,
               system,
               effort: effectiveEffort,
@@ -348,8 +323,6 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
               ...(tokenName ? { tokenName } : {}),
               ...(runContext ? { runContext } : {}),
               ...(toolResultsPayload ? { toolResults: toolResultsPayload } : {}),
-              ...(imageGeneration ? { imageGeneration } : {}),
-              ...(imageGenerationOptions ? { imageGenerationOptions } : {}),
             },
           }),
           signal: options.abortSignal,
@@ -378,16 +351,6 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
           // 명시 분기: 미지의 variant 를 tool-call 로 오인하지 않는다.
           if (item.type === "text") {
             content.push({ type: "text", text: item.text });
-          } else if (item.type === "image") {
-            // qgrid raw image parts are base64-only; AI SDK file parts require a mediaType.
-            content.push({
-              type: "file",
-              mediaType: item.mediaType ?? "image/png",
-              data: item.data,
-              ...(item.generation
-                ? { providerMetadata: { qgrid: { imageGeneration: item.generation } } }
-                : {}),
-            });
           } else if (item.type === "tool-call") {
             content.push({
               type: "tool-call",
@@ -401,18 +364,6 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
           finishReason = { unified: "tool-calls", raw: "tool_call" };
       } else {
         content.push({ type: "text", text: data.text });
-      }
-
-      // version skew 방어: imageGeneration의 최종 응답에 이미지가 없으면(구버전 서버가
-      // 플래그를 strip 해 조용히 텍스트만 반환) 명시적 에러. 중간 client tool-call은 계속한다.
-      if (
-        imageGeneration &&
-        finishReason.unified !== "tool-calls" &&
-        !content.some((c) => c.type === "file")
-      ) {
-        throw new Error(
-          "qgrid: imageGeneration was requested but the response contained no image — the server may be an older version that does not support image generation.",
-        );
       }
 
       // client run state 업데이트
@@ -430,7 +381,7 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
       }
 
       // sessionKey 가 있으면 발급된 좌표를 저장 → 다음 호출에 자동 회송 (thread 재사용).
-      if (!imageGeneration && cacheAffinityKey && data.runContext?.threadCoord) {
+      if (cacheAffinityKey && data.runContext?.threadCoord) {
         setThreadCoord(cacheAffinityKey, data.runContext.threadCoord);
       }
 
@@ -458,15 +409,8 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
       const timeoutMs = qgridOptions.timeoutMs;
       const logger = qgridOptions.logger;
       const tokenName = qgridOptions.tokenName;
-      // 이미지 생성은 non-stream 전용(R2). 서버 왕복 전에 클라이언트에서 명시적으로 거부한다.
-      if (qgridOptions.imageGeneration) {
-        throw new Error(
-          "qgrid: imageGeneration is not supported with streamText — use generateText instead.",
-        );
-      }
       const { prompt, system, history, droppedImageCount } = extractPromptAndHistory(
         options.prompt,
-        { includeImages: false },
       );
       warnDroppedImages(droppedImageCount);
       const sessionKey = qgridOptions.sessionKey;
@@ -684,9 +628,14 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
   };
 }
 
+qgrid.image = createQgridImage;
+
 export { createQgridLogger } from "./logger";
 export type {
   QgridImageGenerationMetadata,
+  QgridImageModel,
+  QgridImageProviderConfig,
+  QgridImageProviderOptions,
   QgridAnthropicEffort,
   QgridAnthropicModel,
   QgridAnthropicProviderConfig,

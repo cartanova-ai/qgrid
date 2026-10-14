@@ -6,13 +6,26 @@ Use this reference before changing `packages/ai-sdk`.
 
 `packages/ai-sdk` is the active public SDK package. The old v1 SDK (`@cartanova/qgrid-sdk`) has been removed from the repository.
 
-qgrid's custom provider implements the AI SDK `LanguageModelV3` contract. General usage should follow the AI SDK docs and normal AI SDK APIs such as `generateText`, `streamText`, tools, structured output, and telemetry. Do not re-document generic AI SDK usage in qgrid-specific docs unless the behavior differs. qgrid docs and this skill should focus on qgrid-specific config, `providerOptions.qgrid`, request logging, runtime routing, cache/session behavior, and provider limitations.
+qgrid's custom provider implements `LanguageModelV3` through `qgrid()` and `ImageModelV3` through `qgrid.image()`. General usage should follow the AI SDK docs and normal AI SDK APIs such as `generateText`, `streamText`, `generateImage`, tools, structured output, and telemetry. Do not re-document generic AI SDK usage in qgrid-specific docs unless the behavior differs. qgrid docs and this skill should focus on qgrid-specific config, `providerOptions.qgrid`, request logging, runtime routing, cache/session behavior, and provider limitations.
+
+## Explicit image model
+
+Use `generateImage({ model: qgrid.image("openai/gpt-image-2"), prompt })` for explicit image generation. The image factory returns `ImageModelV3`, accepts `serverUrl` and `projectName`, and sends the existing query endpoint `model: "openai/gpt-image-2", imageGeneration: true`. These image-generation fields are internal wire inputs, not public language-model options. The server calls subscription Codex Images directly, without a chat driver. `qgrid()` / `generateText` handles text, tools, and structured output. Dashboard auto-image mode registers an internal `generate_image` function, which calls the same subscription Images endpoints for ordinary or transparent output after the chat model chooses a prompt and references. Do not add a public SDK image-tool factory.
+
+Reference editing uses AI SDK `prompt: { text, images }`, with up to five references. Omitted references use `images/generations`; supplied references use `images/edits`. The new direct interface returns PNG only; unsupported output formats and masks fail before generation. `n` is handled through AI SDK batching with `maxImagesPerCall: 1`; callers cannot override this to send a multi-image backend request. `seed` and `aspectRatio` produce unsupported warnings. Size and quality are hints, never exact-output guarantees; prompt for the intended ratio and preserve observed settings.
+
+`gpt-image-2` is the Codex wire request identifier, not proof that the serving weights are Images 2.0. OpenAI announced Images 2.5 in Codex; private-route probes accepted even nonexistent model IDs, so Flare/Sunburst selection is not established. Standalone metadata preserves a reported model, otherwise it falls back to the requested identifier. Do not describe that fallback as an observed serving version. GPT Image 2 and 2.5 have the same published token rates; per-image fallback prices remain GPT Image 2 estimates when usage is absent.
+
+Use `QgridImageProviderOptions` with `satisfies` on `providerOptions.qgrid`. Options are flat: `quality`, `background`, `outputFormat: "png"`, `tokenName`, and `logger`. Standard `size` belongs at the `generateImage` top level. Do not send chat effort, thinking, tools, or structured output to the image model.
+
+Map image response usage into standard `generateImage().usage`. Preserve per-image generation metadata and request-log IDs under `providerMetadata.qgrid.images[]`: AI SDK 6 merges that array and discards arbitrary provider-level keys. The raw query's top-level usage/cost remain zero chat-driver accounting; server logs price the separate image usage using the existing API-price estimator. Do not duplicate image price calculation in the SDK or count aggregate usage once per output. Without reported image usage, keep standard usage unknown and preserve the server's existing per-image cost fallback. `logger: false`, token targeting, project labeling, and cancellation still apply.
 
 For tool calling, qgrid intentionally follows the AI SDK interface while implementing provider calls through qgrid structured-output emulation. Read `tool-calling-and-multiturn.md` before changing tool behavior, `stopWhen`/multi-step behavior, or tool-call request logs.
 
 Main files:
 
 - `packages/ai-sdk/src/index.ts`: `qgrid()` provider implementation.
+- `packages/ai-sdk/src/image-model.ts`: `qgrid.image()` provider implementation.
 - `packages/ai-sdk/src/index.types.ts`: public config/options/types.
 - `packages/ai-sdk/src/utils.ts`: prompt/history/tool conversion.
 - `packages/ai-sdk/src/logger.ts`: telemetry logger integration.
@@ -55,7 +68,7 @@ const result = await generateText({
 
 Do not write `providerOptions: { ... } satisfies QgridProviderOptions`: the exported type describes the nested qgrid options object, not AI SDK's outer provider-name map. Use this typed pattern in qgrid setup guidance and examples so misspelled keys and invalid option values fail at compile time.
 
-`providerOptions.qgrid` supports:
+Language-model `providerOptions.qgrid` supports:
 
 - `tokenName`: strict active-token targeting for both providers. Include the provider prefix and
   match it to the model (`anthropic/yds` with `anthropic/*`, for example). Missing, inactive, or
@@ -70,8 +83,8 @@ Do not write `providerOptions: { ... } satisfies QgridProviderOptions`: the expo
 - `serviceTier`: OpenAI/Codex route only.
 - `timeoutMs`: Anthropic server-side Claude Code process timeout in milliseconds. It must be a positive integer no greater than 30 minutes and defaults to 240 seconds. For non-stream `generateText`, the SDK derives request-scoped Undici `headersTimeout` and `bodyTimeout` values as `timeoutMs + 60_000` without changing the process-global dispatcher.
 - `fallbackModels`: deprecated, ignored compatibility field. The provider emits a standard unsupported-option warning when supplied; remove it from callers. It is not Claude Code's upstream Fable safety-refusal fallback.
-- `imageGeneration`: OpenAI/Codex non-stream only. Enables Codex's built-in `image_generation` tool for that request.
-- `imageGenerationOptions`: optional `quality: "low" | "medium" | "high"`, `size` (`auto` or positive-integer `WIDTHxHEIGHT`), and `background: "auto" | "opaque" | "transparent"`. Transparent requests use Codex standalone Images with `gpt-image-2`; other requests use the hosted Responses tool. Transparent mode rejects tools/structured output, supports up to five references, validates real transparent and visible PNG pixels, and never invokes background-removal fallback. Size is a positive-integer WIDTHxHEIGHT hint, not an exact-output guarantee; omit it or use auto and put the desired aspect ratio in the prompt. Do not impose public Images API 16-pixel/4K rules on the private subscription route. Both routes expose observations (`codex-responses` or `codex-images`); hosted model is optional. PNG dimensions come from bytes; JPEG/WebP size comes from backend metadata. Image usage is priced at public token rates when present. Without usage, the requested quality/size table supplies a per-image estimate; auto/custom sizes use the 1536x1024 price and omitted quality uses medium. Returned size/quality may differ from requested settings; read `result.providerMetadata.qgrid.imageGeneration` or per-file `result.content` metadata. `result.files[]` contains bytes/mediaType only. Logs separate `requestedOptions` from `observedGeneration`; image usage is separate from the zero text-driver usage on this route.
+
+`imageGeneration` and `imageGenerationOptions` are not public SDK options. Language-model generation and streaming reject either key before transport, directing callers to `generateImage` with `qgrid.image()`. Use flat `QgridImageProviderOptions`; do not add deprecated language-model shims for the removed fields.
 
 `providerOptions.qgrid` does not currently support `projectName` or `project_name`. Prefer `QGRID_PROJECT_NAME` for the default project label; use config `projectName` only when a caller needs to override that default.
 
@@ -131,7 +144,7 @@ const result = await generateText({
 Fast mode contract:
 
 - It is OpenAI/Codex-only. Do not send it to `anthropic/*` models.
-- It works on both `generateText` and `streamText`; image generation remains non-stream for unrelated reasons.
+- It works on both `generateText` and `streamText`; it is not an image-model option.
 - Omit `serviceTier` for normal/default routing. qgrid's current API accepts `"fast"` and `"flex"`; callers should not send Codex's normalized `"priority"` value directly.
 - qgrid is a pass-through for this selection. Codex applies the tier only when its Fast mode feature is enabled and the selected model advertises support; otherwise Codex can omit the unsupported tier.
 - Fast mode changes upstream service-tier routing only. It does not change token weights or client concurrency.
@@ -139,7 +152,7 @@ Fast mode contract:
 
 ## Request construction
 
-The provider sends `POST /api/qgrid/query` for generate and `prepareStream` plus SSE for stream.
+The language provider sends `POST /api/qgrid/query` for generate and `prepareStream` plus SSE for stream.
 
 Payload responsibilities:
 
@@ -153,9 +166,8 @@ Payload responsibilities:
 - Preserve and resend `runContext` for tool-call follow-ups.
 - Let the server infer single-turn completion versus an open tool-call run. Logging-disabled tool calls still use the SDK's local pending-call correlation and continue without a request-log id.
 - Derive/store/resend opaque OpenAI affinity coordinates by `sessionKey`.
-- Send `imageGeneration` and `imageGenerationOptions` when configured.
-- Send AI SDK multimodal image/file message parts as qgrid `input` only when `imageGeneration` is enabled. Normal non-image-generation calls keep `user_prompt` text-only and do not forward image input.
-- Reject oversized reference-image data URLs before the request leaves the SDK. Reference images travel as JSON data URLs; callers should compress/resize large photos, preferably to WebP/JPEG.
+- Keep language-model prompts text-only. Ignore image parts with an unsupported warning; this adapter does not support general vision.
+- The separate image provider converts `generateImage` prompt references to qgrid `input` and rejects oversized inline reference images before transport. Callers should compress/resize large reference photos, preferably to WebP/JPEG.
 
 Tools and `jsonSchema` can be used together as of qgrid 2.5.4. On OpenAI the
 server composes them into one strict action envelope enforced by constrained
@@ -194,9 +206,7 @@ rejected.
 
 When tools are present, qgrid sends tool definitions to the server as `tools`; it does not send them to OpenAI or Anthropic as native provider tools. The server converts them into a strict structured-output schema and maps the model's structured result back into AI SDK `tool-call` content.
 
-Image generation is different from AI SDK client tools: it is an opt-in Codex-hosted tool exposed by qgrid through `providerOptions.qgrid.imageGeneration`. Use `generateText`; `streamText` rejects image generation before opening the stream.
-
-Reference images for image generation use normal AI SDK multimodal message parts. The provider wraps image/file base64 as `data:${mediaType};base64,...` qgrid `input` items. This is intentionally scoped to image-generation requests, not general vision/chat behavior.
+SDK image generation uses `ImageModelV3`, independently of AI SDK language-model tools. Pass references through `generateImage`'s `prompt: { text, images }`; the image provider wraps inline image bytes as data URLs and accepts HTTPS reference URLs. This supports image generation/editing, not general vision chat. Raw/server image flags remain available for dashboard chat and internal routing; they are not part of `QgridProviderOptions`.
 
 ## Response mapping
 
@@ -206,13 +216,12 @@ Since 2.10.0, `generateText` exposes the parent request-log ID at `result.provid
 
 Update both server and SDK to use this metadata. The field is omitted when logging is disabled or an older server does not return it. Tool-run steps share the parent ID; `runContext.requestLogId` remains separate continuation state. This does not expose external-provider telemetry logger IDs or add IDs to stream delta/error events.
 
-qgrid response content maps to AI SDK content:
+Language-model response content maps to AI SDK content:
 
 - qgrid `text` -> AI SDK text content.
 - qgrid `tool-call` -> AI SDK tool-call content.
-- qgrid `image` -> AI SDK file content with the returned `mediaType` (`image/png`, `image/jpeg`, or `image/webp`). Older responses without `mediaType` retain the PNG default.
 
-`imageGenerationOptions.outputFormat` accepts `png | jpeg | webp` for the hosted Responses route and maps to `image_generation.output_format`. Omission retains PNG. The standalone transparent route only supports PNG; a transparent request with JPEG/WebP is rejected before generation. Preserve the returned MIME type through response content, SDK file parts, and request-log image data URLs.
+The image provider maps direct Images output to standard AI SDK `image`/`images` and image `usage`, preserving generation metadata under `providerMetadata.qgrid.images[]`. It supports PNG output only. Raw/server hosted Responses output can be PNG/JPEG/WebP; preserve its actual MIME type in raw content and request-log data URLs.
 
 `finishReason` maps `tool-calls` when qgrid returns tool calls.
 
@@ -220,7 +229,7 @@ For tools plus structured output, qgrid serializes the final schema-constrained
 `answer` as JSON text. AI SDK then parses and validates that text into
 `Output.object`'s `output`. This path requires both server and SDK 2.5.4 or later.
 
-When `imageGeneration` was requested and the server returns no image part, the AI SDK provider throws a version-skew/error guard instead of silently accepting text-only output.
+The image provider requires exactly one output from route `codex-images` per call and rejects text-only, hosted-route, or multiple-image responses with a server/SDK version-skew guard.
 
 For a successful Fable refusal fallback (Fable 5 or 5.1):
 

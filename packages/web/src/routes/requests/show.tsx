@@ -367,7 +367,6 @@ function MetricsPanel({ data, toolCallCount }: { data: RequestLog; toolCallCount
   const tokensPerSecEnabled = isTokensPerSecEnabled(data);
   return (
     <div className="panel overflow-hidden px-5 py-3 space-y-3">
-      <p className="text-[11px] text-sand-400">비용은 API 가격 기준 추정 비용입니다.</p>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-6 gap-y-3">
         <Metric label="Duration" value={`${(data.duration_ms / 1000).toFixed(1)}s`} />
         <Metric label="TTFT" value={formatRunTtftMs(data.ttft_ms)} />
@@ -381,12 +380,11 @@ function MetricsPanel({ data, toolCallCount }: { data: RequestLog; toolCallCount
           )}
         />
         <Metric
-          label="Driver Cost"
+          label="Driver"
           value={data.cost_usd !== null ? formatMicroUsd(data.cost_usd) : "—"}
         />
-        <Metric label="Cost Source" value={data.cost_source ?? "legacy"} />
         <Metric
-          label="Image Cost"
+          label="Image"
           value={data.image_cost_usd !== null ? formatMicroUsd(data.image_cost_usd) : "—"}
         />
         <Metric label="Tool Calls" value={`${toolCallCount}회`} />
@@ -444,7 +442,6 @@ type GenerateStepEntry = {
   cacheCreation5mTokens: number | null;
   cacheCreation1hTokens: number | null;
   costUsd: number | null;
-  costSource: string | null;
   durationMs: number | null;
   ttftMs: number | null;
   finishReason: string | null;
@@ -515,13 +512,15 @@ function formatTokensPerSec(
   return `${Math.round(outputTokens / (generationMs / 1000)).toLocaleString()} tok/s`;
 }
 
-function CompactMetric({ label, value }: { label: string; value: string }) {
+function CompactMetric({ label, value }: { label?: string; value: string }) {
   return (
     // min-w-0 이 없으면 "Tokens/sec" 같은 긴 라벨이 그리드 셀을 밀어내 옆 칸 위로 겹친다.
-    <div className="min-w-0">
-      <div className="text-[10px] uppercase tracking-wider text-sand-400 font-medium truncate">
-        {label}
-      </div>
+    <div className="min-w-0 self-end">
+      {label && (
+        <div className="text-[10px] uppercase tracking-wider text-sand-400 font-medium truncate">
+          {label}
+        </div>
+      )}
       <div className="mt-0.5 text-[13px] font-semibold text-sand-800 tabular-nums truncate">
         {value}
       </div>
@@ -802,10 +801,8 @@ function StepTreeItem({
                 value={`${generate.cacheCreation5mTokens === null ? "—" : formatNum(generate.cacheCreation5mTokens)} / ${generate.cacheCreation1hTokens === null ? "—" : formatNum(generate.cacheCreation1hTokens)}`}
               />
               <CompactMetric
-                label="Estimated Cost"
                 value={generate.costUsd === null ? "—" : formatMicroUsd(generate.costUsd)}
               />
-              <CompactMetric label="Cost Source" value={generate.costSource ?? "legacy"} />
               <CompactMetric
                 label="Reasoning"
                 value={
@@ -886,7 +883,6 @@ function buildStepTree(steps: RequestLogStep[]): StepTreeEntry[] {
         cacheCreation5mTokens: step.cache_creation_5m_tokens,
         cacheCreation1hTokens: step.cache_creation_1h_tokens,
         costUsd: step.cost_usd,
-        costSource: step.cost_source,
         durationMs: step.duration_ms,
         ttftMs: step.ttft_ms,
         finishReason: step.finish_reason,

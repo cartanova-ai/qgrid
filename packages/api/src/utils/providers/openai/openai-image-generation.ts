@@ -18,17 +18,20 @@ const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 export function buildStandaloneImageRequest(options: OpenAIResponsesOptions) {
   if (options.outputSchema || options.tools?.length) {
     throw new OpenAIProtocolError(
-      "Transparent image generation does not support tools or structured output",
+      "Standalone image generation does not support tools or structured output",
     );
   }
-  const controls = options.imageGeneration;
-  if (!controls || controls === true || controls.background !== "transparent") {
+  if (!options.imageGeneration) {
+    throw new OpenAIProtocolError("Standalone images require image generation to be enabled");
+  }
+  const controls = typeof options.imageGeneration === "object" ? options.imageGeneration : {};
+  if (options.model !== "gpt-image-2" && controls.background !== "transparent") {
     throw new OpenAIProtocolError(
       "Standalone images require an explicit transparent background request",
     );
   }
   if (controls.output_format && controls.output_format !== "png") {
-    throw new OpenAIProtocolError("Transparent image generation only supports PNG output");
+    throw new OpenAIProtocolError("Standalone image generation only supports PNG output");
   }
   const text: string[] = [];
   const images: Array<{ image_url: string }> = [];
@@ -43,7 +46,7 @@ export function buildStandaloneImageRequest(options: OpenAIResponsesOptions) {
     }
     if (item.type !== "message" && typeof item.role !== "string") {
       throw new OpenAIProtocolError(
-        "Unsupported conversation item for transparent image generation",
+        "Unsupported conversation item for standalone image generation",
       );
     }
     if (typeof item.content === "string") {
@@ -51,11 +54,11 @@ export function buildStandaloneImageRequest(options: OpenAIResponsesOptions) {
       continue;
     }
     if (!Array.isArray(item.content)) {
-      throw new OpenAIProtocolError("Unsupported message content for transparent image generation");
+      throw new OpenAIProtocolError("Unsupported message content for standalone image generation");
     }
     for (const part of item.content) {
       if (!part || typeof part !== "object") {
-        throw new OpenAIProtocolError("Unsupported message part for transparent image generation");
+        throw new OpenAIProtocolError("Unsupported message part for standalone image generation");
       }
       if (
         ["input_text", "output_text", "text"].includes(part.type) &&
@@ -69,12 +72,12 @@ export function buildStandaloneImageRequest(options: OpenAIResponsesOptions) {
         }
         images.push({ image_url: url });
       } else {
-        throw new OpenAIProtocolError("Unsupported message part for transparent image generation");
+        throw new OpenAIProtocolError("Unsupported message part for standalone image generation");
       }
     }
   }
   if (images.length > 5)
-    throw new OpenAIProtocolError("Transparent image editing supports at most 5 reference images");
+    throw new OpenAIProtocolError("Standalone image editing supports at most 5 reference images");
   if (!text.some((part) => part.trim())) throw new OpenAIProtocolError("Image prompt is empty");
   return {
     url: CHATGPT_CODEX_RESPONSES_URL.replace(
@@ -84,7 +87,7 @@ export function buildStandaloneImageRequest(options: OpenAIResponsesOptions) {
     body: {
       model: "gpt-image-2",
       prompt: text.join("\n\n"),
-      background: "transparent",
+      ...(controls.background ? { background: controls.background } : {}),
       ...(controls.quality ? { quality: controls.quality } : {}),
       ...(controls.size ? { size: controls.size } : {}),
       ...(images.length ? { images } : {}),
@@ -92,8 +95,10 @@ export function buildStandaloneImageRequest(options: OpenAIResponsesOptions) {
   };
 }
 
-// Decode before accepting the result: an alpha channel alone can still be fully opaque.
-export function inspectTransparentPng(base64: string): { width: number; height: number } {
+function inspectGeneratedPng(
+  base64: string,
+  requireTransparency: boolean,
+): { width: number; height: number } {
   if (base64.length > Math.ceil(MAX_PNG_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
     throw new OpenAIProtocolError("Invalid or oversized generated PNG");
   }
@@ -116,6 +121,8 @@ export function inspectTransparentPng(base64: string): { width: number; height: 
   } catch {
     throw new OpenAIProtocolError("Image generation returned an invalid PNG");
   }
+  if (!requireTransparency) return { width: image.width, height: image.height };
+  // An alpha channel alone can still be fully opaque or have no visible content.
   let transparent = false;
   let visible = false;
   for (let i = 3; i < image.data.length; i += 4) {
@@ -130,6 +137,7 @@ export function inspectTransparentPng(base64: string): { width: number; height: 
 
 export async function readStandaloneImageResponse(
   response: Response,
+  requireTransparency: boolean,
 ): Promise<OpenAINormalizedEvent[]> {
   if (!response.body) throw new OpenAIProtocolError("Image response had no body");
   const reader = response.body.getReader();
@@ -155,6 +163,8 @@ export async function readStandaloneImageResponse(
       .min(1)
       .max(16),
     quality: z.string().optional(),
+    model: z.string().optional(),
+    background: z.string().optional(),
     usage: ImageGenerationMetadata.shape.usage,
   });
   let parsed: z.infer<typeof schema>;
@@ -163,8 +173,9 @@ export async function readStandaloneImageResponse(
   } catch {
     throw new OpenAIProtocolError("Invalid standalone image response");
   }
+  const background = parsed.background ?? (requireTransparency ? "transparent" : undefined);
   return parsed.data.map((item, index) => {
-    const dimensions = inspectTransparentPng(item.b64_json);
+    const dimensions = inspectGeneratedPng(item.b64_json, requireTransparency);
     return {
       type: "image",
       base64: item.b64_json,
@@ -172,8 +183,8 @@ export async function readStandaloneImageResponse(
       ...(item.revised_prompt ? { revisedPrompt: item.revised_prompt } : {}),
       generation: {
         route: "codex-images",
-        model: "gpt-image-2",
-        background: "transparent",
+        model: parsed.model ?? "gpt-image-2",
+        ...(background ? { background } : {}),
         size: `${dimensions.width}x${dimensions.height}`,
         ...(parsed.quality ? { quality: parsed.quality } : {}),
         ...(index === 0 && parsed.usage ? { usage: parsed.usage } : {}),

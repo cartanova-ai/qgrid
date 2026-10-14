@@ -1,7 +1,7 @@
 {
   "name": "@cartanova/qgrid-ai-sdk",
-  "version": "2.10.5",
-  "description": "AI SDK LanguageModelV3 provider for qgrid",
+  "version": "2.10.6",
+  "description": "AI SDK LanguageModelV3 and ImageModelV3 provider for qgrid",
   "repository": {
     "type": "git",
     "url": "https://github.com/cartanova-ai/qgrid"

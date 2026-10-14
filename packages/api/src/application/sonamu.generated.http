@@ -320,7 +320,7 @@ Content-Type: application/json
     "imageGeneration": false,
     "imageGenerationOptions": {
       "quality": "low",
-      "size": "1024x1024",
+      "size": "auto",
       "background": "auto",
       "outputFormat": "png"
     }
@@ -385,7 +385,7 @@ Content-Type: application/json
     "imageGeneration": false,
     "imageGenerationOptions": {
       "quality": "low",
-      "size": "1024x1024",
+      "size": "auto",
       "background": "auto",
       "outputFormat": "png"
     }

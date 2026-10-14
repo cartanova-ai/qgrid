@@ -29,6 +29,21 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 describe("OpenAI direct HTTPS client", () => {
+  it.each([true, { background: "opaque" }])("keeps chat-model images on Responses (%j)", async (imageGeneration) => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      sse({ type: "response.completed", response: { id: "hosted-image" } }),
+    );
+    const client = new OpenAIDirectClient({
+      credentials: { accessToken: "access", accountId: "acct" }, fetch: fetchMock,
+    });
+    await collect(client.responses({ model: "gpt-6-luna", history: [], imageGeneration }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(CHATGPT_CODEX_RESPONSES_URL);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: "gpt-6-luna", tools: [expect.objectContaining({ type: "image_generation" })],
+    });
+  });
+
   it("posts the pinned body and Codex identity without live calls", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () =>
       sse(

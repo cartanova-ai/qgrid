@@ -17,7 +17,10 @@ import {
   serializeAndValidateDispatchSchema,
 } from "../../utils/providers/common/schema-validation";
 import { strictify } from "../../utils/providers/common/strictifier";
-import { type OpenAIDispatcher } from "../../utils/providers/openai/openai-dispatcher";
+import {
+  ImageGenerationError,
+  type OpenAIDispatcher,
+} from "../../utils/providers/openai/openai-dispatcher";
 import { type TokenSubsetA } from "../sonamu.generated";
 import { decideConvRouting, issueConvContext } from "./conv-routing";
 import {
@@ -323,6 +326,13 @@ function buildRawOutputSchema(
   return input.tools?.length
     ? buildToolCallSchema(input.tools, callerOutputSchema)
     : callerOutputSchema;
+}
+
+export function completedDriverFromImageFailure(error: unknown): QueryOutput | undefined {
+  if (!(error instanceof ImageGenerationError) || !error.completedDriver) return undefined;
+  return applyToolCallEmulation(toEmulationResult(error.completedDriver), undefined, {
+    answerKind: "text",
+  });
 }
 
 // Anthropic adapter 는 cache creation 을 inputTokens 에 포함해 표준화하고, 별도 필드에도 보존한다.

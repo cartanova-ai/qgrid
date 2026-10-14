@@ -14,6 +14,7 @@ import {
 import { SmoothWeightedRoundRobin } from "../common/smooth-weighted-round-robin";
 import { ThinkingValidationError } from "../common/thinking";
 import {
+  imageMimeType,
   type JsonValue,
   type OpenAIResponseItem,
   type OpenAIResponsesOptions,
@@ -34,16 +35,25 @@ const THINKING_OFF_MODELS = new Set([
   "gpt-5.5",
 ]);
 const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
-const TRANSPARENT_IMAGE_TOOL = "generate_transparent_image";
+const IMAGE_TOOL = "generate_image";
+
+type ImageToolArguments = {
+  prompt: string;
+  transparent_background: boolean;
+  num_last_images_to_include: number;
+};
 
 export type ImageFailureKind = "gate" | "not_called" | "incomplete";
 
 export class ImageGenerationError extends Error {
+  completedDriver?: GenerateResult;
+
   constructor(
     readonly kind: ImageFailureKind,
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "ImageGenerationError";
   }
 }
@@ -104,6 +114,26 @@ function inputItems(req: GenerateRequest): OpenAIResponseItem[] {
   return [...history, { type: "message", role: "user", content }];
 }
 
+function imageReferences(req: GenerateRequest): OpenAIResponseItem[] {
+  return inputItems(req).flatMap((item) => {
+    if (item.type === "image_generation_call" && typeof item.result === "string") {
+      return [
+        {
+          type: "input_image",
+          image_url: `data:${imageMimeType(item.result, item.output_format)};base64,${item.result}`,
+        },
+      ];
+    }
+    if (!Array.isArray(item.content)) return [];
+    return item.content.filter(
+      (part): part is OpenAIResponseItem =>
+        part !== null &&
+        typeof part === "object" &&
+        (part.type === "input_image" || part.type === "image_url"),
+    );
+  });
+}
+
 function asReasoning(req: GenerateRequest): OpenAIResponsesOptions["reasoning"] | undefined {
   if (req.thinking === false) return { effort: "none" };
   const summary =
@@ -130,6 +160,9 @@ function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
       "Automatic image generation does not support structured output or external tools",
     );
   }
+  if (auto && outputFormat && outputFormat !== "png") {
+    throw new ImageGenerationError("gate", "Automatic image generation only supports PNG output");
+  }
   return {
     model: req.model ?? "",
     ...(req.systemPrompt ? { instructions: req.systemPrompt } : {}),
@@ -137,7 +170,7 @@ function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
       ? {
           instructions: [
             req.systemPrompt,
-            "Use image_generation for ordinary image generation or editing. Use generate_transparent_image only when a transparent background is requested. Text replies are allowed when no image is needed. Use only one kind of image tool per response, and at most one generate_transparent_image call.",
+            "Use generate_image when image generation or editing is needed; otherwise reply with text. Call it at most once per response. Supply a complete, self-contained prompt with all relevant conversation instructions. Set transparent_background to true only when a transparent background is requested. Set num_last_images_to_include to 0 for a new image without references. For editing or reference-based generation, choose the smallest number of recent conversation images that includes all needed references, at most 5. References retain their chronological order. Do not select images for an unrelated new request.",
           ]
             .filter(Boolean)
             .join("\n\n"),
@@ -145,20 +178,24 @@ function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
           tools: [
             {
               type: "function",
-              name: TRANSPARENT_IMAGE_TOOL,
+              name: IMAGE_TOOL,
               description:
-                "Generate or edit an image with a transparent background using the conversation's reference images.",
-              strict: true,
+                "Generate or edit an image, optionally with a transparent background or recent conversation images as references.",
+              // Astra's subscription backend rejects strict tools; validate arguments locally.
+              strict: false,
               parameters: {
                 type: "object",
                 properties: {
                   prompt: {
                     type: "string",
+                    minLength: 1,
                     description:
-                      "Complete instructions for the transparent image generation or edit.",
+                      "Complete, self-contained instructions for the image generation or edit.",
                   },
+                  transparent_background: { type: "boolean" },
+                  num_last_images_to_include: { type: "integer", minimum: 0, maximum: 5 },
                 },
-                required: ["prompt"],
+                required: ["prompt", "transparent_background", "num_last_images_to_include"],
                 additionalProperties: false,
               },
             },
@@ -173,12 +210,11 @@ function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
       : {}),
     ...(req.promptCacheKey ? { promptCacheKey: req.promptCacheKey } : {}),
     ...(req.outputSchema ? { outputSchema: { schema: req.outputSchema as JsonValue } } : {}),
-    ...(req.imageGeneration
+    ...(req.imageGeneration && !auto
       ? {
           imageGeneration: req.imageGenerationOptions
             ? {
                 ...imageControls,
-                ...(auto ? { background: "auto" } : {}),
                 ...(outputFormat ? { output_format: outputFormat } : {}),
               }
             : true,
@@ -368,12 +404,22 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     const images: GeneratedImage[] = [];
     let imageAttempted = false;
     const auto = req.imageGeneration === "auto";
-    const transparentCalls = new Map<string, string>();
-    const transparentCallIds = new Set<unknown>();
-    let transparentAttempted = false;
+    const imageCalls = new Map<string, ImageToolArguments>();
+    const imageCallIds = new Set<unknown>();
+    let imageToolAttempted = false;
     let driverCompleted = false;
     let servingModel = req.model ?? "";
     const metadata = selection.metadata;
+    const driverResult = (): GenerateResult => ({
+      text,
+      tokenName: metadata.name,
+      usage,
+      durationMs: Date.now() - startedAt,
+      ttftMs: firstDeltaAt === undefined ? null : firstDeltaAt - startedAt,
+      model: servingModel,
+      ...(servingModel !== req.model ? { requestedModel: req.model } : {}),
+      threadCoord: { workerId: selection.tokenId, threadId: req.promptCacheKey ?? "", epoch: -1 },
+    });
     const clientEntry = this.acquireClient(selection);
     try {
       for await (const event of clientEntry.client.responses(
@@ -428,6 +474,8 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             streamedMessageIds.add(event.item.id);
           }
         } else if (event.type === "image") {
+          if (auto)
+            throw new ImageGenerationError("incomplete", "Unexpected hosted image generation");
           imageAttempted = true;
           images.push({
             data: event.base64,
@@ -436,20 +484,22 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             ...(event.generation ? { generation: event.generation } : {}),
           });
         } else if (event.type === "output-item" && event.item.type === "image_generation_call") {
+          if (auto)
+            throw new ImageGenerationError("incomplete", "Unexpected hosted image generation");
           imageAttempted = true;
         } else if (auto && event.type === "output-item" && event.item.type === "function_call") {
-          if (event.item.name !== TRANSPARENT_IMAGE_TOOL) {
+          if (event.item.name !== IMAGE_TOOL) {
             throw new ImageGenerationError("incomplete", "Unexpected automatic image tool call");
           }
-          transparentAttempted = true;
-          transparentCallIds.add(event.item.call_id);
+          imageToolAttempted = true;
+          imageCallIds.add(event.item.call_id);
           if (!event.completed) continue;
           const id = event.item.call_id;
           let args: unknown;
           try {
             args = JSON.parse(String(event.item.arguments));
           } catch {
-            throw new ImageGenerationError("incomplete", "Invalid transparent image arguments");
+            throw new ImageGenerationError("incomplete", "Invalid image tool arguments");
           }
           if (
             typeof id !== "string" ||
@@ -457,21 +507,45 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             !args ||
             typeof args !== "object" ||
             Array.isArray(args) ||
-            Object.keys(args).length !== 1 ||
+            Object.keys(args).length !== 3 ||
             !("prompt" in args) ||
             typeof args.prompt !== "string" ||
-            !args.prompt.trim()
+            !args.prompt.trim() ||
+            !("transparent_background" in args) ||
+            typeof args.transparent_background !== "boolean" ||
+            !("num_last_images_to_include" in args) ||
+            typeof args.num_last_images_to_include !== "number" ||
+            !Number.isInteger(args.num_last_images_to_include) ||
+            args.num_last_images_to_include < 0 ||
+            args.num_last_images_to_include > 5
           ) {
-            throw new ImageGenerationError("incomplete", "Invalid transparent image arguments");
+            throw new ImageGenerationError("incomplete", "Invalid image tool arguments");
           }
-          if (transparentCalls.has(id) && transparentCalls.get(id) !== args.prompt) {
-            throw new ImageGenerationError(
-              "incomplete",
-              "Conflicting transparent image tool calls",
-            );
+          const previous = imageCalls.get(id);
+          if (
+            previous &&
+            (previous.prompt !== args.prompt ||
+              previous.transparent_background !== args.transparent_background ||
+              previous.num_last_images_to_include !== args.num_last_images_to_include)
+          ) {
+            throw new ImageGenerationError("incomplete", "Conflicting image tool calls");
           }
-          transparentCalls.set(id, args.prompt);
+          imageCalls.set(id, {
+            prompt: args.prompt,
+            transparent_background: args.transparent_background,
+            num_last_images_to_include: args.num_last_images_to_include,
+          });
         } else if (event.type === "completed") {
+          const imageUsage = event.imageGeneration?.usage;
+          // The backend also reports all-zero image usage for text-only responses.
+          if (
+            auto &&
+            imageUsage &&
+            (imageUsage.input_tokens > 0 ||
+              imageUsage.output_tokens > 0 ||
+              imageUsage.total_tokens > 0)
+          )
+            throw new ImageGenerationError("incomplete", "Unexpected hosted image generation");
           driverCompleted = true;
           servingModel = event.model ?? servingModel;
           if (event.usage) {
@@ -505,34 +579,39 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           throw event.error;
         }
       }
-      if (auto && transparentAttempted) {
-        if (
-          !driverCompleted ||
-          transparentCalls.size !== 1 ||
-          transparentCallIds.size !== 1 ||
-          imageAttempted
-        ) {
-          throw new ImageGenerationError(
-            "incomplete",
-            "Expected one completed transparent image call without another image tool",
-          );
+      if (auto && imageToolAttempted) {
+        if (!driverCompleted || imageCalls.size !== 1 || imageCallIds.size !== 1) {
+          throw new ImageGenerationError("incomplete", "Expected one completed image tool call");
         }
         if (req.abortSignal?.aborted) throw abortError(req.abortSignal);
-        const prompt = [...transparentCalls.values()][0]!;
+        const args = [...imageCalls.values()][0]!;
+        const referenceCount = args.num_last_images_to_include;
+        const references = referenceCount ? imageReferences(req) : [];
+        if (referenceCount > references.length) {
+          throw new ImageGenerationError(
+            "incomplete",
+            "Requested image references are unavailable",
+          );
+        }
         let imageCompleted = false;
         for await (const event of clientEntry.client.responses(
           {
-            model: req.model ?? "",
-            ...(req.systemPrompt ? { instructions: req.systemPrompt } : {}),
+            model: "gpt-image-2",
             history: [
-              ...inputItems(req),
-              { type: "message", role: "user", content: [{ type: "input_text", text: prompt }] },
+              {
+                type: "message",
+                role: "user",
+                content: [
+                  { type: "input_text", text: args.prompt },
+                  ...(referenceCount ? references.slice(-referenceCount) : []),
+                ],
+              },
             ],
             imageGeneration: {
               quality: req.imageGenerationOptions?.quality,
               size: req.imageGenerationOptions?.size,
               output_format: "png",
-              background: "transparent",
+              background: args.transparent_background ? "transparent" : "opaque",
             },
           },
           req.abortSignal,
@@ -546,38 +625,46 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             });
           else if (event.type === "completed") imageCompleted = true;
           else if (event.type === "error")
-            throw new ImageGenerationError("incomplete", event.error.message);
+            throw new ImageGenerationError("incomplete", event.error.message, {
+              cause: event.error,
+            });
         }
         imageAttempted = true;
         if (!imageCompleted)
-          throw new ImageGenerationError(
-            "incomplete",
-            "Transparent image generation did not complete",
-          );
+          throw new ImageGenerationError("incomplete", "Image generation did not complete");
       }
       if (auto && imageAttempted && !driverCompleted)
         throw new ImageGenerationError("incomplete", "Image generation response did not complete");
       if (req.abortSignal?.aborted) throw abortError(req.abortSignal);
+      if ((req.imageGeneration === true || (auto && imageAttempted)) && images.length === 0) {
+        throw new ImageGenerationError(
+          imageAttempted ? "incomplete" : "not_called",
+          imageAttempted
+            ? "image generation did not complete"
+            : "model did not call image generation",
+        );
+      }
+    } catch (error) {
+      if (auto && driverCompleted && imageToolAttempted) {
+        const failure =
+          error instanceof ImageGenerationError
+            ? error
+            : new ImageGenerationError(
+                "incomplete",
+                error instanceof Error ? error.message : String(error),
+                { cause: error },
+              );
+        if (error instanceof Error) failure.name = error.name;
+        // Only the completed chat stage is chargeable here; discard partial image output.
+        failure.completedDriver = driverResult();
+        throw failure;
+      }
+      throw error;
     } finally {
       this.releaseClient(clientEntry);
     }
-    if ((req.imageGeneration === true || (auto && imageAttempted)) && images.length === 0) {
-      throw new ImageGenerationError(
-        imageAttempted ? "incomplete" : "not_called",
-        imageAttempted
-          ? "image generation did not complete"
-          : "model did not call image generation",
-      );
-    }
     return {
-      text,
-      tokenName: metadata.name,
-      usage,
-      durationMs: Date.now() - startedAt,
-      ttftMs: firstDeltaAt === undefined ? null : firstDeltaAt - startedAt,
-      model: servingModel,
-      ...(servingModel !== req.model ? { requestedModel: req.model } : {}),
-      threadCoord: { workerId: selection.tokenId, threadId: req.promptCacheKey ?? "", epoch: -1 },
+      ...driverResult(),
       ...(images.length ? { images } : {}),
     };
   }

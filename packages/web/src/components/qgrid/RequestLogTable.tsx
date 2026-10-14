@@ -92,7 +92,7 @@ const COLUMNS: {
   { label: "Project", align: "left", width: "w-20" },
   { label: "Token", align: "left", width: "w-24" },
   { label: "Model", align: "left", width: "w-20" },
-  // structured output(jsonSchema) 요청 여부 — plain text 와 한눈에 구분한다.
+  // 이미지, structured output(jsonSchema), plain text 를 구분한다.
   { label: "Fmt", align: "left", width: "w-12" },
   // 숫자는 오른쪽 정렬해야 자릿수가 세로로 맞는다 — 6,317 과 34,897 이 왼쪽 정렬이면
   // 끝자리가 어긋나 열이 들쭉날쭉해 보인다.
@@ -104,7 +104,7 @@ const COLUMNS: {
   { label: "C.Write", align: "right", width: "w-20", sortKey: "cache_creation_tokens" },
   { label: "Hit", align: "right", width: "w-14" },
   { label: "Tools", align: "right", width: "w-14" },
-  { label: "Cost", align: "right", width: "w-20", sortKey: "cost_usd" },
+  { label: "$", align: "right", width: "w-20", sortKey: "cost_usd" },
 ];
 
 interface RequestLogTableProps {
@@ -234,11 +234,8 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
             Failed to load total cost.
           </span>
         ) : (
-          <span
-            className="text-[11px] tabular-nums font-medium text-sienna-600"
-            title="현재 필터에 해당하는 요청의 API 가격 기준 추정 비용 합계"
-          >
-            API 가격 기준 추정 비용 {costData ? formatUsd(costData.usd) : "—"}
+          <span className="text-[11px] tabular-nums font-medium text-sienna-600">
+            {costData ? formatUsd(costData.usd) : "—"}
           </span>
         )}
       </div>
@@ -358,7 +355,11 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                       )}
                     </td>
                     <td className="px-4 py-1.5 whitespace-nowrap">
-                      {row.is_structured ? (
+                      {row.is_image_generation ? (
+                        <span className="rounded bg-sage-100 px-1.5 py-0.5 font-mono text-[10px] text-sage-700">
+                          img
+                        </span>
+                      ) : row.is_structured ? (
                         <span className="rounded bg-sienna-100 px-1.5 py-0.5 font-mono text-[10px] text-sienna-700">
                           json
                         </span>
@@ -390,10 +391,7 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                     <td className="px-3 py-1.5 text-right tabular-nums text-sand-500">
                       {row.tool_call_count > 0 ? row.tool_call_count : "—"}
                     </td>
-                    <td
-                      className="px-3 py-1.5 text-right tabular-nums text-sand-700 whitespace-nowrap"
-                      title="API 가격 기준 추정 비용"
-                    >
+                    <td className="px-3 py-1.5 text-right tabular-nums text-sand-700 whitespace-nowrap">
                       {formatRequestCost(row)}
                     </td>
                     <td className="px-2 py-1.5">

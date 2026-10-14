@@ -450,8 +450,9 @@ export class OpenAIDirectClient {
 
   responses(options: OpenAIResponsesOptions, signal?: AbortSignal): OpenAIEventStream {
     if (
-      typeof options.imageGeneration === "object" &&
-      options.imageGeneration.background === "transparent"
+      options.model === "gpt-image-2" ||
+      (typeof options.imageGeneration === "object" &&
+        options.imageGeneration.background === "transparent")
     ) {
       return this.standaloneImages(options, signal);
     }
@@ -498,10 +499,19 @@ export class OpenAIDirectClient {
         continue;
       }
       if (!response.ok) throw await responseError(response);
-      const images = await readStandaloneImageResponse(response);
+      const images = await readStandaloneImageResponse(
+        response,
+        typeof options.imageGeneration === "object" &&
+          options.imageGeneration.background === "transparent",
+      );
       signal?.throwIfAborted();
       yield* images;
-      yield { type: "completed", responseId: requestId, model: "gpt-image-2" };
+      const firstImage = images[0];
+      yield {
+        type: "completed",
+        responseId: requestId,
+        model: firstImage?.type === "image" ? firstImage.generation?.model : "gpt-image-2",
+      };
       return;
     }
   }

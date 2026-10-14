@@ -730,8 +730,8 @@ export namespace QgridService {
                 mediaType?: "image/png" | "image/jpeg" | "image/webp";
                 revisedPrompt?: string | null;
                 generation?: {
-                  route: "codex-images";
-                  model: "gpt-image-2";
+                  route: "codex-images" | "codex-responses";
+                  model?: string;
                   background?: string;
                   quality?: string;
                   size?: string;
@@ -821,8 +821,8 @@ export namespace QgridService {
               mediaType?: "image/png" | "image/jpeg" | "image/webp";
               revisedPrompt?: string | null;
               generation?: {
-                route: "codex-images";
-                model: "gpt-image-2";
+                route: "codex-images" | "codex-responses";
+                model?: string;
                 background?: string;
                 quality?: string;
                 size?: string;

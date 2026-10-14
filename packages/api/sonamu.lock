@@ -9,7 +9,7 @@
   },
   {
     "path": "api/src/application/qgrid/qgrid.frame.ts",
-    "checksum": "654863acf0ac108c1b8b1ca59ad5deb7940aaf7e"
+    "checksum": "4ff88368a191730ca97bd8e6c5d9629719454a07"
   },
   {
     "path": "api/src/application/qgrid/qgrid.types.ts",
@@ -33,7 +33,7 @@
   },
   {
     "path": "api/src/application/request-log/request-log.entity.json",
-    "checksum": "b79a8ea3d63a458bda50111115fb493544e043c8"
+    "checksum": "75fcf89d75d47d4c1f26a84d5a2371c0d6417d9f"
   },
   {
     "path": "api/src/application/request-log/request-log.model.ts",
@@ -49,7 +49,7 @@
   },
   {
     "path": "api/src/application/setting/setting.model.ts",
-    "checksum": "ac715f94360f14685257933521aa2c28e7b2f066"
+    "checksum": "f37a960c9c3a90ae2b8293ae2990c2d593dce701"
   },
   {
     "path": "api/src/application/setting/setting.types.ts",
@@ -57,7 +57,7 @@
   },
   {
     "path": "api/src/application/sonamu.generated.http",
-    "checksum": "47217087af736b35dd3e92a906bda0cdcfe976f3"
+    "checksum": "b75dd397bfffccfed1b7e91598a7b69baaaf68ba"
   },
   {
     "path": "api/src/application/sonamu.generated.sso.ts",
@@ -89,7 +89,7 @@
   },
   {
     "path": "api/src/i18n/sd.generated.ts",
-    "checksum": "236ab4877951c9d276ac6ef69a4e937425ab49a9"
+    "checksum": "a21928a3605e60517ae6c4579c21f93e80d3cb40"
   },
   {
     "path": "api/src/sonamu.config.ts",
@@ -105,7 +105,7 @@
   },
   {
     "path": "web/src/i18n/sd.generated.ts",
-    "checksum": "701cea6c9903b0a04ae1c41b45aef8e3a53ca636"
+    "checksum": "48196242126864c9b44f2ba0b95db57aeb78a269"
   },
   {
     "path": "web/src/services/monit/monit.types.ts",
@@ -125,7 +125,7 @@
   },
   {
     "path": "web/src/services/services.generated.ts",
-    "checksum": "3906d8d16b69afc6e4f576235383bb313cde3f30"
+    "checksum": "46f0902f573fe77656fe7162115b1d3e957659ce"
   },
   {
     "path": "web/src/services/setting/setting.types.ts",

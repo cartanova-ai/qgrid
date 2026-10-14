@@ -128,14 +128,24 @@ AI SDK tools plus structured output:
 
 Image generation:
 
-- `packages/api/scripts/smoke-test-image-generation.ts`
+- `packages/api/e2e/image-generation.ts`
 - Human-initiated only.
 - Requires active OpenAI token with image entitlement and applicable migration.
 - For 2.9.8 chat, verify the actual browser POST and served bundle, not only a direct function test. A globally installed CLI on port 44900 can serve stale assets while repository tests pass; identify the listening process and its executable before assuming a rebuild or refresh affects it.
-- Cover auto text-only replies, native ordinary generation, server-side transparent editing, and replay of prior generated images. Explicit `true` must retain its image-required behavior. Verify driver usage stays separate from image usage and auto text replies are not image logs.
-- Verify extension, decoded bytes, and natural dimensions in chat image previews. A format request in prose is not evidence: the 2026-09-29 WebP probe returned PNG from a prompt-only request and WebP from explicit `outputFormat: "webp"`. Transparent output remains PNG.
-- Env: `QGRID_URL`, `QGRID_OPENAI_MODEL`.
+- Cover auto text-only replies and the single server-side `generate_image` function for ordinary generation and transparent editing. Zero selected references must create a fresh image despite older history; positive counts must select only the last N conversation images in order, up to five. Explicit raw `true` must retain its image-required hosted behavior for non-transparent chat-model requests. Verify driver usage stays separate from image usage and auto text replies are not image logs.
+- Verify extension, decoded bytes, and natural dimensions in chat image previews. A format request in prose is not evidence: the 2026-09-29 hosted-route WebP probe returned PNG from a prompt-only request and WebP from explicit `outputFormat: "webp"`. Auto chat and standalone output remain PNG-only and must reject explicit non-PNG options.
+- Requires `QGRID_REAL_PROVIDER_ACCEPTANCE=1`, explicit `QGRID_URL` and `QGRID_OPENAI_MODEL`. Optional `QGRID_TOKEN_NAME` pins a subscription token. `QGRID_IMAGE_SMOKE_CASES` selects named cases; the default covers eight images plus text, rejected inputs, and cancellation. Optional `batch`, `logger-off`, and `cancel-direct` cover SDK batching, no-log calls, and cancellation during direct Images requests. Never replay generations automatically.
+- Set `QGRID_IMAGE_E2E_OUTPUT` for PNGs and sanitized usage/cost/log evidence; `QGRID_IMAGE_E2E_PROJECT` groups test logs. Use an isolated DB and access-only test token, with notifications and keepalive disabled. For final acceptance, build the current API and cold-start `sonamu start` against that isolated DB rather than relying on HMR. HMR can leave a fresh dispatcher uninitialized; readiness alone does not prove the intended module version. The suite checks readiness before live calls.
+- Subscription `response.completed.tool_usage.image_gen` can be present with all-zero usage for text-only or function-tool replies. This metadata alone is not a hosted image execution. Keep the zero-usage regression test and verify auto text against the real backend.
+- Run auto text and generation with both Luna and Astra when changing the internal tool schema. Astra's private backend failed with `strict: true` even with bounds removed, while the same schema succeeded with `strict: false`. Keep `strict: false` and server-side validation; do not add a runtime fallback/retry.
 - Not part of CI; it consumes ChatGPT subscription quota.
+
+Image failure accounting:
+
+- `packages/api/e2e/image-failure-accounting.ts` calls the real subscription chat model and compares its completed usage with the persisted failed/aborted request and generate step.
+- Start a separate built local API with `NODE_OPTIONS=--import=<absolute path>/packages/api/e2e/image-failure-preload.mjs`. This test-only preload intercepts standalone Images requests with HTTP errors, network errors, invalid image responses, cancellation waits, or a synthetic success control. It never forwards Images requests upstream; no production test switch or fallback is added.
+- Both processes require `QGRID_REAL_PROVIDER_ACCEPTANCE=1`, `QGRID_IMAGE_E2E_FAULT_FILE`, and `QGRID_IMAGE_E2E_TRACE_FILE`. The preload requires `HOST=127.0.0.1` and an isolated `SONAMU_DB_NAME` starting with `qgrid_e2e_`. The runner also requires `QGRID_URL`, `QGRID_TOKEN_NAME`, and `QGRID_IMAGE_E2E_OUTPUT`.
+- Verify one completed driver step and exact input/output/cache usage and cost on failure; parent status and original errors stay failed/aborted, image cost stays unknown, and `logger: false` creates no records. The success control must not double-count driver usage. Trace files retain only completed model/usage metadata, never credentials or image bytes.
 
 Other scripts under `scripts/smoke-test-*` and `scripts/debug-*` are ad hoc probes. Read the script header and env vars before running.
 
@@ -188,21 +198,25 @@ Generated SSE handlers missing a newly added event field:
 - Treat as a real error, not a recoverable partial result.
 - Check schema strictness and `stream-json-adapter` behavior.
 
-`qgrid: imageGeneration is not supported with streamText`:
+`qgrid: imageGeneration and imageGenerationOptions were removed from language-model options`:
 
-- Image generation is non-stream only. Use `generateText`.
+- Either removed key makes `generateText` and `streamText` fail before transport. Use `generateImage` with `qgrid.image()` and flat `QgridImageProviderOptions` for image output.
+
+`qgrid language models do not support image input`:
+
+- General vision remains unsupported by the language adapter; it ignores image parts with this warning. Reference-image editing belongs in `generateImage`'s `prompt: { text, images }`.
 
 `image generation is not supported on the Anthropic route`:
 
 - Image generation is OpenAI/Codex-only.
 
-`imageGeneration was requested but the response contained no image`:
+`qgrid.image: expected one image from the direct subscription Images route`:
 
-- AI SDK version-skew guard. The client requested image generation, but the server returned text-only content. Check server version and the OpenAI image-generation path.
+- Image-provider version-skew guard. Each call requires exactly one image with `generation.route: "codex-images"`. Check that the server supports the explicit image model and update the server and SDK together.
 
 `reference image input is too large for JSON transport`:
 
-- AI SDK reference-image guard. The client passed a base64 image data URL large enough to likely exceed qgrid's JSON request body transport. Compress or resize the image before calling `generateText`, preferably as WebP/JPEG.
+- AI SDK reference-image guard. The client passed a base64 image data URL large enough to likely exceed qgrid's JSON request body transport. Compress or resize the image before calling `generateImage`, preferably as WebP/JPEG.
 
 `qgrid query transport failed: response headers timed out`:
 
