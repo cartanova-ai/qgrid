@@ -20,23 +20,27 @@ type LineItem =
   | { kind: "restart"; key: number; processStartedAt: number }
   | { kind: "dropped"; key: number; count: number };
 
-const LEVEL_RANK: Record<string, number> = {
-  trace: 0,
-  debug: 1,
-  info: 2,
-  warning: 3,
-  error: 4,
-  fatal: 5,
-};
+const LEVEL_RANK = new Map<string, number>(
+  Object.entries({
+    trace: 0,
+    debug: 1,
+    info: 2,
+    warning: 3,
+    error: 4,
+    fatal: 5,
+  }),
+);
 
-const LEVEL_LABEL: Record<string, string> = {
-  trace: "TRC",
-  debug: "DBG",
-  info: "INF",
-  warning: "WRN",
-  error: "ERR",
-  fatal: "FTL",
-};
+const LEVEL_LABEL = new Map<string, string>(
+  Object.entries({
+    trace: "TRC",
+    debug: "DBG",
+    info: "INF",
+    warning: "WRN",
+    error: "ERR",
+    fatal: "FTL",
+  }),
+);
 
 const TIME_FORMATTER = new Intl.DateTimeFormat("en-GB", {
   hour: "2-digit",
@@ -257,9 +261,9 @@ export function MonitConsole({
 
       switch (search.level) {
         case "warn":
-          return (LEVEL_RANK[item.entry.level] ?? 2) >= 3;
+          return (LEVEL_RANK.get(item.entry.level) ?? 2) >= 3;
         case "error":
-          return (LEVEL_RANK[item.entry.level] ?? 2) >= 4;
+          return (LEVEL_RANK.get(item.entry.level) ?? 2) >= 4;
         default:
           return true;
       }
@@ -545,7 +549,7 @@ function LogLine({ item }: { item: LineItem }) {
               : "text-sand-400",
         )}
       >
-        {LEVEL_LABEL[entry.level] ?? entry.level.slice(0, 3).toUpperCase()}
+        {LEVEL_LABEL.get(entry.level) ?? entry.level.slice(0, 3).toUpperCase()}
       </span>{" "}
       <span className="text-sienna-300">{categoryLabel(entry.category)}</span>{" "}
       <span>{entry.text}</span>

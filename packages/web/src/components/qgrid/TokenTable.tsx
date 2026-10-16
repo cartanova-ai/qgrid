@@ -14,22 +14,24 @@ type Token = TokenSubsetMapping["A"];
 function getExpiresAt(token: Token): number | null {
   const c = token.credentials;
 
-  if ("expiresAt" in c && typeof c.expiresAt === "number") return c.expiresAt;
-
-  if ("accessTokenExpiresAt" in c && typeof c.accessTokenExpiresAt === "number")
-    return c.accessTokenExpiresAt;
+  if ("accessTokenExpiresAt" in c) return c.accessTokenExpiresAt;
 
   // Grok stores an ISO-8601 timestamp.
-  if ("expiresAt" in c && typeof c.expiresAt === "string") {
+  if ("authMode" in c) {
     const ms = Date.parse(c.expiresAt);
 
     return Number.isNaN(ms) ? null : ms;
   }
 
-  return null;
+  return c.expiresAt;
 }
 
-function formatExpiry(expiresAt: number | null): { text: string; color: string } {
+interface ExpiryLabel {
+  text: string;
+  color: string;
+}
+
+function formatExpiry(expiresAt: number | null): ExpiryLabel {
   if (!expiresAt) return { text: "", color: "" };
   const diff = expiresAt - Date.now();
 

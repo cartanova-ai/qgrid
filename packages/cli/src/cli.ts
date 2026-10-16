@@ -95,7 +95,9 @@ export function ensureLatestRuntimeCliDependencies(): void {
         installedOutput = commandVersion(dep.command);
       }
     } catch (e) {
-      console.warn(`Warning: failed to update ${dep.label}: ${(e as Error).message}`);
+      console.warn(
+        `Warning: failed to update ${dep.label}: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
 
     if (!installedOutput) {
@@ -104,8 +106,7 @@ export function ensureLatestRuntimeCliDependencies(): void {
   }
 }
 
-function normalizePort(port: unknown): string {
-  const value = String(port);
+function normalizePort(value: string): string {
   const numeric = Number(value);
 
   if (!/^\d+$/.test(value) || numeric < 1 || numeric > 65_535) {
@@ -229,11 +230,11 @@ program
       await client.connect();
       await client.end();
     } catch (e) {
-      const err = e as Error;
+      const message = e instanceof Error ? e.message : String(e);
       console.error(`Error: Cannot connect to PostgreSQL at ${dbHost}:${dbPort}/${dbName}`);
-      console.error(`error:  ${err.message}`);
+      console.error(`error:  ${message}`);
 
-      if (err.message.includes("timeout expired")) {
+      if (message.includes("timeout expired")) {
         console.error(
           `cannot connect to the database server. Please check if the database is running and accessible.`,
         );
@@ -247,7 +248,7 @@ program
     try {
       await import(serverEntry);
     } catch (e) {
-      console.error("Failed to start server:", (e as Error).stack ?? (e as Error).message);
+      console.error("Failed to start server:", e instanceof Error ? (e.stack ?? e.message) : e);
       process.exit(1);
     }
   });

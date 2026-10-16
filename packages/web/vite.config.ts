@@ -7,12 +7,15 @@ import react from "@vitejs/plugin-react";
 import dotenv from "dotenv";
 import Icons from "unplugin-icons/vite";
 import { defineConfig } from "vite";
+import { z } from "zod";
 
 dotenv.config({ path: ".sonamu.env" });
 
-const qgridCliPackageJson = JSON.parse(
-  readFileSync(path.resolve(__dirname, "../cli/package.json"), "utf-8"),
-) as { version: string };
+const QgridCliPackageJson = z.object({ version: z.string() });
+
+const qgridCliPackageJson = QgridCliPackageJson.parse(
+  JSON.parse(readFileSync(path.resolve(__dirname, "../cli/package.json"), "utf-8")),
+);
 
 // https://vitejs.dev/config/
 export default defineConfig(({ command, isSsrBuild }) => ({

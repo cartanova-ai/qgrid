@@ -49,7 +49,8 @@ export function runSelfUpdate(
   try {
     latest = latestVersion(packageName);
   } catch (cause) {
-    warn(`Warning: failed to check for qgrid-cli updates: ${(cause as Error).message}`);
+    const message = cause instanceof Error ? cause.message : String(cause);
+    warn(`Warning: failed to check for qgrid-cli updates: ${message}`);
     warn(`Continuing with qgrid-cli ${currentVersion}.`);
 
     return { kind: "continue" };
@@ -79,7 +80,8 @@ export function runSelfUpdate(
       return { kind: "continue" };
     }
   } catch (cause) {
-    warn(`Warning: failed to update qgrid-cli to ${latest}: ${(cause as Error).message}`);
+    const message = cause instanceof Error ? cause.message : String(cause);
+    warn(`Warning: failed to update qgrid-cli to ${latest}: ${message}`);
     warn(`Continuing with qgrid-cli ${currentVersion}; fix the global ${packageManager} install.`);
 
     return { kind: "continue" };

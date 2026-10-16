@@ -15,6 +15,7 @@ import GaugeIcon from "~icons/lucide/gauge";
 import GripVerticalIcon from "~icons/lucide/grip-vertical";
 
 import { formatUsd } from "@/lib/cost";
+import { type RequestLogListParams } from "@/services/request-log/request-log.types";
 import { QgridService, TokenService } from "@/services/services.generated";
 import { type TokenSubsetMapping } from "@/services/sonamu.generated";
 import { useUpdateTokenMutation } from "@/services/token/use-update-token-mutation";
@@ -65,32 +66,34 @@ type ProviderTheme = {
   cost: string;
 };
 
-const PROVIDER_THEMES: Record<string, ProviderTheme> = {
-  openai: {
-    stripe: "bg-openai-400",
-    bar: "bg-openai-bar",
-    badge: "bg-openai-50 text-openai-600",
-    cost: "text-openai-600",
-  },
-  anthropic: {
-    stripe: "bg-anthropic-400",
-    bar: "bg-anthropic-400",
-    badge: "bg-anthropic-50 text-anthropic-600",
-    cost: "text-anthropic-600",
-  },
-  google: {
-    stripe: "bg-google-400",
-    bar: "bg-google-400",
-    badge: "bg-google-50 text-google-600",
-    cost: "text-google-600",
-  },
-  grok: {
-    stripe: "bg-sand-800",
-    bar: "bg-sand-600",
-    badge: "bg-sand-800 text-sand-50",
-    cost: "text-sand-800",
-  },
-};
+const PROVIDER_THEMES = new Map<string, ProviderTheme>(
+  Object.entries({
+    openai: {
+      stripe: "bg-openai-400",
+      bar: "bg-openai-bar",
+      badge: "bg-openai-50 text-openai-600",
+      cost: "text-openai-600",
+    },
+    anthropic: {
+      stripe: "bg-anthropic-400",
+      bar: "bg-anthropic-400",
+      badge: "bg-anthropic-50 text-anthropic-600",
+      cost: "text-anthropic-600",
+    },
+    google: {
+      stripe: "bg-google-400",
+      bar: "bg-google-400",
+      badge: "bg-google-50 text-google-600",
+      cost: "text-google-600",
+    },
+    grok: {
+      stripe: "bg-sand-800",
+      bar: "bg-sand-600",
+      badge: "bg-sand-800 text-sand-50",
+      cost: "text-sand-800",
+    },
+  }),
+);
 
 const DEFAULT_THEME: ProviderTheme = {
   stripe: "bg-sand-400",
@@ -100,7 +103,7 @@ const DEFAULT_THEME: ProviderTheme = {
 };
 
 function getProviderTheme(provider: string): ProviderTheme {
-  return PROVIDER_THEMES[provider] ?? DEFAULT_THEME;
+  return PROVIDER_THEMES.get(provider) ?? DEFAULT_THEME;
 }
 
 function barColor(pct: number, theme: ProviderTheme): string {
@@ -693,10 +696,13 @@ function SortableTokenCard({ token }: { token: Token }) {
     },
   });
 
-  const { data: costData } = QgridService.useTotalCost(
-    { num: 0, page: 1, ...(token.name ? { token_name: token.name } : {}) },
-    { enabled: !!token.name },
-  );
+  const totalCostParams: RequestLogListParams = { num: 0, page: 1 };
+
+  if (token.name) totalCostParams.token_name = token.name;
+
+  const { data: costData } = QgridService.useTotalCost(totalCostParams, {
+    enabled: !!token.name,
+  });
 
   const theme = getProviderTheme(token.provider);
 

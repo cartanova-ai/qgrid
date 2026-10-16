@@ -51,19 +51,23 @@ type TokenRateProvider = "anthropic" | "openai" | "grok";
 // U0 duration 기준 실측이 끝난 provider만 opt-in한다. 미판정 기본값은 전 provider off.
 const TOKENS_PER_SEC_PROVIDERS = new Set<TokenRateProvider>();
 
-function tryParseJson(text: string): { ok: true; value: unknown } | { ok: false } {
+const JsonValue = z.json();
+
+type JsonValue = z.infer<typeof JsonValue>;
+
+function tryParseJson(text: string): { ok: true; value: JsonValue } | { ok: false } {
   try {
-    return { ok: true, value: JSON.parse(text) };
+    return { ok: true, value: JsonValue.parse(JSON.parse(text)) };
   } catch {
     return { ok: false };
   }
 }
 
-function safeParseJson(text: string | null | undefined): unknown {
+function safeParseJson(text: string | null | undefined): JsonValue {
   if (!text) return {};
 
   try {
-    return JSON.parse(text);
+    return JsonValue.parse(JSON.parse(text));
   } catch {
     return text;
   }
@@ -201,12 +205,10 @@ function FormattedContent({ text, markdown }: { text: string; markdown?: boolean
   const parsed = tryParseJson(text);
   const [mode, setMode] = useState<"pretty" | "plain">("pretty");
 
-  const canRenderJsonView =
-    parsed.ok &&
-    parsed.value !== null &&
-    (Array.isArray(parsed.value) || typeof parsed.value === "object");
+  // JSON arrays and objects are the only parsed values that are Object instances.
+  const jsonContainer = parsed.ok && parsed.value instanceof Object ? parsed.value : null;
 
-  if (!parsed.ok || !canRenderJsonView) {
+  if (!parsed.ok || jsonContainer === null) {
     if (markdown) {
       return <ImageAwareContent text={text} markdown />;
     }
@@ -234,7 +236,7 @@ function FormattedContent({ text, markdown }: { text: string; markdown?: boolean
       </div>
       {mode === "pretty" ? (
         <JsonView
-          value={parsed.value as object}
+          value={jsonContainer}
           style={lightTheme}
           displayDataTypes={false}
           enableClipboard
@@ -303,12 +305,12 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-const STATUS_STYLE: Record<string, string> = {
-  running: "bg-blue-100 text-blue-600",
-  succeeded: "bg-sage-100 text-sage-600",
-  error: "bg-red-100 text-red-600",
-  aborted: "bg-caution-400/15 text-caution-500",
-};
+const STATUS_STYLE = new Map([
+  ["running", "bg-blue-100 text-blue-600"],
+  ["succeeded", "bg-sage-100 text-sage-600"],
+  ["error", "bg-red-100 text-red-600"],
+  ["aborted", "bg-caution-400/15 text-caution-500"],
+]);
 
 function ErrorPanel({ message }: { message: string }) {
   return (
@@ -360,7 +362,7 @@ function HeaderBar({ data }: { data: RequestLog }) {
       )}
       {!isRunning && data.status !== "succeeded" && (
         <span
-          className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium uppercase ${STATUS_STYLE[data.status] ?? "bg-sand-100 text-sand-500"}`}
+          className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium uppercase ${STATUS_STYLE.get(data.status) ?? "bg-sand-100 text-sand-500"}`}
         >
           {data.status}
         </span>
@@ -446,12 +448,31 @@ type ToolCallEntry = {
   error: string | null;
 };
 
-type ToolInputImage = {
-  mediaType?: string;
+const ToolInputImage = z.object({
+  mediaType: z.string().optional(),
+  data: z.string().optional(),
+  url: z.string().optional(),
+  byteSize: z.number().optional(),
+});
+
+type ToolInputImage = z.infer<typeof ToolInputImage>;
+
+const ToolInputArgs = z.looseObject({ inputImages: z.array(JsonValue) });
+
+// Masking must not depend on display-only fields being well formed.
+const MaskableToolInputImage = z.looseObject({
+  mediaType: JsonValue.optional(),
+  byteSize: JsonValue.optional(),
+  url: JsonValue.optional(),
+  data: JsonValue.optional(),
+});
+
+interface MaskedToolInputImage {
+  mediaType?: JsonValue;
+  byteSize?: JsonValue;
+  url?: JsonValue;
   data?: string;
-  url?: string;
-  byteSize?: number;
-};
+}
 
 type GenerateStepEntry = {
   id: number;
@@ -568,51 +589,52 @@ function CompactMetric({ label, value }: { label?: string; value: string }) {
   );
 }
 
-function readToolInputImages(args: unknown): unknown[] | undefined {
-  if (!args || typeof args !== "object" || Array.isArray(args)) return [];
-  const inputImages = (args as { inputImages?: unknown }).inputImages;
+function getToolInputImages(args: JsonValue): ToolInputImage[] {
+  const parsedArgs = ToolInputArgs.safeParse(args);
 
-  return Array.isArray(inputImages) ? inputImages : undefined;
-}
+  if (!parsedArgs.success) return [];
 
-function getToolInputImages(args: unknown): ToolInputImage[] {
-  return (readToolInputImages(args) ?? []).filter((item): item is ToolInputImage => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
-    const image = item as ToolInputImage;
+  return parsedArgs.data.inputImages.flatMap((item) => {
+    const image = ToolInputImage.safeParse(item);
 
-    return (
-      (typeof image.url === "string" && image.url.length > 0) ||
-      (typeof image.data === "string" && image.data.length > 0)
-    );
+    return image.success && (image.data.url || image.data.data) ? [image.data] : [];
   });
 }
 
-function hideToolInputImages(args: unknown): unknown {
-  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
-  const record = args as Record<string, unknown>;
-  const inputImages = readToolInputImages(record);
+function maskToolInputImage(item: JsonValue): JsonValue | MaskedToolInputImage {
+  const parsed = MaskableToolInputImage.safeParse(item);
 
-  if (!inputImages) return args;
+  if (!parsed.success) return item;
+  const image = parsed.data;
+  const masked: MaskedToolInputImage = {};
 
-  return {
-    ...record,
-    inputImages: inputImages.map((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
-      const image = item as ToolInputImage;
+  if (image.mediaType !== undefined) masked.mediaType = image.mediaType;
 
-      const maskedUrl =
-        typeof image.url === "string" && image.url.toLowerCase().startsWith("data:")
-          ? `[data-url ${image.url.length} chars]`
-          : image.url;
+  if (image.byteSize !== undefined) masked.byteSize = image.byteSize;
+  const url = z.string().safeParse(image.url);
 
-      return {
-        mediaType: image.mediaType,
-        byteSize: image.byteSize,
-        ...(maskedUrl ? { url: maskedUrl } : {}),
-        ...(image.data ? { data: `[base64 ${image.data.length} chars]` } : {}),
-      };
-    }),
-  };
+  const maskedUrl =
+    url.success && url.data.toLowerCase().startsWith("data:")
+      ? `[data-url ${url.data.length} chars]`
+      : image.url;
+
+  if (maskedUrl) masked.url = maskedUrl;
+
+  if (image.data) {
+    const data = z.string().safeParse(image.data);
+    masked.data = data.success ? `[base64 ${data.data.length} chars]` : "[base64 data]";
+  }
+
+  return masked;
+}
+
+/** Returns the value passed to JSON.stringify for display; undefined fields are omitted there. */
+function hideToolInputImages(args: JsonValue) {
+  const parsedArgs = ToolInputArgs.safeParse(args);
+
+  if (!parsedArgs.success || !(args instanceof Object) || Array.isArray(args)) return args;
+
+  return { ...args, inputImages: parsedArgs.data.inputImages.map(maskToolInputImage) };
 }
 
 function ToolInputImages({ images }: { images: ToolInputImage[] }) {
@@ -683,13 +705,12 @@ function ToolCallItem({ entry }: { entry: ToolCallEntry }) {
   const args = detail ? safeParseJson(detail.tool_args) : null;
   const displayArgs = hideToolInputImages(args);
   const result = detail ? safeParseJson(detail.tool_result) : null;
+  const resultText = z.string().safeParse(result);
+  const responseText = resultText.success ? resultText.data : JSON.stringify(result);
   const error = detail?.error ?? entry.error;
 
   return (
-    <details
-      className="group/tool"
-      onToggle={(e) => setOpened((e.currentTarget as HTMLDetailsElement).open)}
-    >
+    <details className="group/tool" onToggle={(e) => setOpened(e.currentTarget.open)}>
       <summary className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none list-none hover:bg-sand-50 transition-colors rounded-md">
         <ChevronDownIcon className="size-3 text-sand-400 transition-transform group-open/tool:rotate-0 -rotate-90 shrink-0" />
         <span className="text-[10px] px-1.5 py-0.5 rounded bg-sand-100 text-sand-500 font-mono shrink-0">
@@ -732,16 +753,7 @@ function ToolCallItem({ entry }: { entry: ToolCallEntry }) {
               Response
             </span>
             <div className="mt-1 rounded-md bg-sand-50 p-3 overflow-auto">
-              <FormattedContent
-                text={
-                  detail
-                    ? typeof result === "string"
-                      ? result
-                      : JSON.stringify(result)
-                    : "Loading..."
-                }
-                markdown
-              />
+              <FormattedContent text={detail ? responseText : "Loading..."} markdown />
             </div>
           </div>
         </div>
@@ -760,10 +772,7 @@ function ReasoningBlock({ stepId }: { stepId: number }) {
   const reasoningText = detail?.reasoning_text ?? null;
 
   return (
-    <details
-      className="group/reason mt-3"
-      onToggle={(e) => setOpened((e.currentTarget as HTMLDetailsElement).open)}
-    >
+    <details className="group/reason mt-3" onToggle={(e) => setOpened(e.currentTarget.open)}>
       <summary className="flex items-center gap-2 cursor-pointer select-none list-none">
         <ChevronDownIcon className="size-3 text-sand-400 transition-transform group-open/reason:rotate-0 -rotate-90 shrink-0" />
         <span className="text-[10px] uppercase tracking-wider text-sand-500 font-medium">
@@ -1003,15 +1012,28 @@ function historyItemLabel(item: HistoryItem): string {
   return item.role ?? item.type;
 }
 
-function extractText(content: unknown): string {
-  if (typeof content === "string") return content;
+const HistoryTextPart = z.looseObject({ text: z.string() });
 
-  if (Array.isArray(content)) {
-    return content
-      .map((c) => {
-        if (typeof c === "object" && c !== null && "text" in c) return (c as { text: string }).text;
+const HistoryContent = z.union([
+  z.string(),
+  z.array(z.union([HistoryTextPart, JsonValue])),
+  JsonValue,
+]);
 
-        return JSON.stringify(c);
+type HistoryContent = z.infer<typeof HistoryContent>;
+
+function extractText(content: HistoryContent): string {
+  const text = z.string().safeParse(content);
+
+  if (text.success) return text.data;
+  const parts = z.array(z.union([HistoryTextPart, JsonValue])).safeParse(content);
+
+  if (parts.success) {
+    return parts.data
+      .map((part) => {
+        const textPart = HistoryTextPart.safeParse(part);
+
+        return textPart.success ? textPart.data.text : JSON.stringify(part);
       })
       .join("\n");
   }
@@ -1033,18 +1055,24 @@ function HistorySection({ history }: { history: HistoryItem[] }) {
   return (
     <Section title="History" defaultOpen={false}>
       <div className="space-y-1.5">
-        {history.map((item, i) => (
-          <div key={`hist-${i}`} className={`rounded-md px-3 py-2 ${historyItemBg(item)}`}>
-            <div className="text-[10px] uppercase tracking-wider text-sand-500 font-medium mb-1">
-              {historyItemLabel(item)}
+        {history.map((item, i) => {
+          const content = HistoryContent.safeParse(item.content);
+
+          return (
+            <div key={`hist-${i}`} className={`rounded-md px-3 py-2 ${historyItemBg(item)}`}>
+              <div className="text-[10px] uppercase tracking-wider text-sand-500 font-medium mb-1">
+                {historyItemLabel(item)}
+              </div>
+              {item.content !== null && item.content !== undefined && (
+                <MonoPre>
+                  {content.success ? extractText(content.data) : JSON.stringify(item.content)}
+                </MonoPre>
+              )}
+              {item.arguments && <MonoPre>{item.arguments}</MonoPre>}
+              {item.output && <MonoPre>{item.output}</MonoPre>}
             </div>
-            {item.content !== null && item.content !== undefined && (
-              <MonoPre>{extractText(item.content)}</MonoPre>
-            )}
-            {item.arguments && <MonoPre>{item.arguments}</MonoPre>}
-            {item.output && <MonoPre>{item.output}</MonoPre>}
-          </div>
-        ))}
+          );
+        })}
       </div>
     </Section>
   );
@@ -1054,13 +1082,15 @@ const TOOL_NAME_PREVIEW_CHARACTERS = 60;
 const TOOL_NAME_COMPACT_PREVIEW_CHARACTERS = 30;
 const TOOL_NAME_MOBILE_PREVIEW_CHARACTERS = 18;
 
+interface ToolNamePreview {
+  names: string[];
+  omittedCount: number;
+}
+
 function toolNamePreview(
   tools: ToolDefinitions,
   maxCharacters = TOOL_NAME_PREVIEW_CHARACTERS,
-): {
-  names: string[];
-  omittedCount: number;
-} {
+): ToolNamePreview {
   const names: string[] = [];
 
   for (const tool of tools) {
@@ -1108,7 +1138,7 @@ function ToolInputZod({ code, fullCode }: { code: string; fullCode?: string }) {
 
   return (
     <pre
-      data-zod-parameter-shape
+      data-zod-parameter-schema
       className={`max-h-64 overflow-auto rounded-md bg-sand-900 px-3 py-2.5 font-mono text-[11px] leading-relaxed whitespace-pre text-sand-200 ${fullCode ? "cursor-help outline-none focus-visible:ring-2 focus-visible:ring-sienna-300" : ""}`}
       tabIndex={fullCode ? 0 : undefined}
       title={fullCode}

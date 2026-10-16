@@ -1,6 +1,7 @@
 import {
   type Experimental_VideoModelV3 as VideoModelV3,
   type Experimental_VideoModelV3VideoData as VideoModelV3VideoData,
+  type JSONObject,
   type SharedV3ProviderMetadata,
   type SharedV3Warning,
 } from "@ai-sdk/provider";
@@ -33,12 +34,12 @@ const MAX_REFERENCE_IMAGES = 5;
 const LAST_FRAME_MODEL = "grok/grok-imagine-video-1.5";
 
 // Same mapping as @ai-sdk/xai xai-video-model.ts RESOLUTION_MAP.
-const RESOLUTION_MAP: Record<string, "480p" | "720p" | "1080p"> = {
-  "1920x1080": "1080p",
-  "1280x720": "720p",
-  "854x480": "480p",
-  "640x480": "480p",
-};
+const RESOLUTION_MAP = new Map<string, "480p" | "720p" | "1080p">([
+  ["1920x1080", "1080p"],
+  ["1280x720", "720p"],
+  ["854x480", "480p"],
+  ["640x480", "480p"],
+]);
 
 /**
  * `providerOptions.xai` for Grok video. Field names follow `@ai-sdk/xai` `xaiVideoModelOptions`;
@@ -137,21 +138,21 @@ export type QgridVideoResult = {
   response: { timestamp: Date; modelId: string; headers: Record<string, string> | undefined };
 };
 
-function abortReason(signal: AbortSignal): unknown {
-  return signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
+function abortedError(): DOMException {
+  return new DOMException("The operation was aborted.", "AbortError");
 }
 
 function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(abortReason(signal));
+      reject(signal.reason ?? abortedError());
 
       return;
     }
 
     const onAbort = () => {
       clearTimeout(timer);
-      reject(abortReason(signal!));
+      reject(signal?.reason ?? abortedError());
     };
 
     const timer = setTimeout(() => {
@@ -163,11 +164,11 @@ function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
   });
 }
 
-function isTransientPollError(error: unknown): boolean {
-  if (error instanceof QgridMediaHttpError) return error.status === 429 || error.status >= 500;
+function isTransientPollError(cause: unknown): boolean {
+  if (cause instanceof QgridMediaHttpError) return cause.status === 429 || cause.status >= 500;
 
   // Network failures from postMediaEndpoint; aborts and schema errors are not transient.
-  return error instanceof Error && /transport failed/.test(error.message);
+  return cause instanceof Error && /transport failed/.test(cause.message);
 }
 
 /**
@@ -175,12 +176,16 @@ function isTransientPollError(error: unknown): boolean {
  * `ms` elapse, so a hung status request or sleep cannot outlive the poll budget. Linked by hand
  * rather than with AbortSignal.any, which older runtimes lack.
  */
-function pollDeadline(
-  caller: AbortSignal | undefined,
-  ms: number,
-): { signal: AbortSignal; expired: (error: unknown) => boolean; dispose: () => void } {
+interface PollDeadline {
+  signal: AbortSignal;
+  /** True only when `cause` is this deadline's own abort reason. */
+  expired: (cause: unknown) => boolean;
+  dispose: () => void;
+}
+
+function pollDeadline(caller: AbortSignal | undefined, ms: number): PollDeadline {
   const controller = new AbortController();
-  const onCallerAbort = () => controller.abort(abortReason(caller!));
+  const onCallerAbort = () => controller.abort(caller?.reason ?? abortedError());
 
   if (caller?.aborted) onCallerAbort();
   else caller?.addEventListener("abort", onCallerAbort, { once: true });
@@ -190,7 +195,7 @@ function pollDeadline(
   return {
     signal: controller.signal,
     // Only the deadline's own reason counts; a caller abort keeps the caller's error.
-    expired: (error) => controller.signal.reason === deadlineReason && error === deadlineReason,
+    expired: (cause) => controller.signal.reason === deadlineReason && cause === deadlineReason,
     dispose: () => {
       clearTimeout(timer);
       caller?.removeEventListener("abort", onCallerAbort);
@@ -209,10 +214,10 @@ async function pollVideo(
   const timeout = options.pollTimeoutMs ?? QGRID_VIDEO_DEFAULT_POLL_TIMEOUT_MS;
 
   // The server's owner check compares this projectName with the one sent to videoStart.
-  const body = serializeMediaBody(
-    { jobHandle, ...(config.projectName ? { projectName: config.projectName } : {}) },
-    LABEL,
-  );
+  const statusParams: JSONObject = { jobHandle };
+
+  if (config.projectName) statusParams.projectName = config.projectName;
+  const body = serializeMediaBody(statusParams, LABEL);
 
   const deadline = pollDeadline(options.abortSignal, timeout);
 
@@ -273,24 +278,24 @@ async function pollUntilDone(
         }
 
         const requestLogId = status.requestLogId ?? extraMetadata.requestLogId;
+        const xaiMetadata: JSONObject = { videoUrl: status.url };
+
+        if (status.durationSec !== undefined) xaiMetadata.duration = status.durationSec;
+
+        if (status.costInUsdTicks !== undefined) {
+          xaiMetadata.costInUsdTicks = status.costInUsdTicks;
+        }
+
+        const qgridMetadata: JSONObject = { jobHandle };
+
+        if (requestLogId !== undefined) qgridMetadata.requestLogId = requestLogId;
+
+        if (status.costUsd !== undefined) qgridMetadata.costUsd = status.costUsd;
 
         return {
           // D4: the api.x.ai URL exactly as @ai-sdk/xai returns it; qgrid never proxies the bytes.
           videos: [{ type: "url", url: status.url, mediaType: "video/mp4" }],
-          providerMetadata: {
-            xai: {
-              videoUrl: status.url,
-              ...(status.durationSec === undefined ? {} : { duration: status.durationSec }),
-              ...(status.costInUsdTicks === undefined
-                ? {}
-                : { costInUsdTicks: status.costInUsdTicks }),
-            },
-            qgrid: {
-              jobHandle,
-              ...(requestLogId === undefined ? {} : { requestLogId }),
-              ...(status.costUsd === undefined ? {} : { costUsd: status.costUsd }),
-            },
-          },
+          providerMetadata: { xai: xaiMetadata, qgrid: qgridMetadata },
           response: { timestamp: new Date(), modelId, headers: polled.headers },
         };
       }
@@ -391,7 +396,7 @@ export function createQgridVideo(
       let resolution = xaiOptions?.resolution ?? undefined;
 
       if (resolution === undefined && options.resolution !== undefined) {
-        resolution = RESOLUTION_MAP[options.resolution];
+        resolution = RESOLUTION_MAP.get(options.resolution);
 
         if (resolution === undefined) {
           warnings.push({
@@ -420,22 +425,24 @@ export function createQgridVideo(
       // Every inline image shares the one request body; the server caps them in total.
       assertInlineMediaFits([image, lastFrame, ...referenceImages], LABEL);
 
-      const body = serializeMediaBody(
-        {
-          model: modelId,
-          prompt: options.prompt,
-          ...(options.duration === undefined ? {} : { duration: options.duration }),
-          ...(options.aspectRatio === undefined ? {} : { aspectRatio: options.aspectRatio }),
-          ...(resolution === undefined ? {} : { resolution }),
-          ...(image === undefined ? {} : { image }),
-          ...(lastFrame === undefined ? {} : { lastFrame }),
-          ...(referenceImages.length ? { referenceImages } : {}),
-          ...(xaiOptions?.mode === undefined ? {} : { mode: xaiOptions.mode }),
-          ...(resolved.projectName ? { projectName: resolved.projectName } : {}),
-          ...qgridOptions,
-        },
-        LABEL,
-      );
+      const params: JSONObject = { model: modelId, prompt: options.prompt };
+
+      if (options.duration !== undefined) params.duration = options.duration;
+
+      if (options.aspectRatio !== undefined) params.aspectRatio = options.aspectRatio;
+
+      if (resolution !== undefined) params.resolution = resolution;
+
+      if (image !== undefined) params.image = image;
+
+      if (lastFrame !== undefined) params.lastFrame = lastFrame;
+
+      if (referenceImages.length) params.referenceImages = referenceImages;
+
+      if (xaiOptions?.mode !== undefined) params.mode = xaiOptions.mode;
+
+      if (resolved.projectName) params.projectName = resolved.projectName;
+      const body = serializeMediaBody({ ...params, ...qgridOptions }, LABEL);
 
       const started = await postMediaEndpoint({
         serverUrl: resolved.serverUrl,
@@ -447,16 +454,21 @@ export function createQgridVideo(
         headers: options.headers,
       });
 
+      const pollOptions: QgridVideoPollOptions = {};
+
+      if (xaiOptions?.pollIntervalMs) pollOptions.pollIntervalMs = xaiOptions.pollIntervalMs;
+
+      if (xaiOptions?.pollTimeoutMs) pollOptions.pollTimeoutMs = xaiOptions.pollTimeoutMs;
+
+      if (options.abortSignal) pollOptions.abortSignal = options.abortSignal;
+
+      if (options.headers) pollOptions.headers = options.headers;
+
       const result = await pollVideo(
         started.data.jobHandle,
         started.data.model,
         resolved,
-        {
-          ...(xaiOptions?.pollIntervalMs ? { pollIntervalMs: xaiOptions.pollIntervalMs } : {}),
-          ...(xaiOptions?.pollTimeoutMs ? { pollTimeoutMs: xaiOptions.pollTimeoutMs } : {}),
-          ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
-          ...(options.headers ? { headers: options.headers } : {}),
-        },
+        pollOptions,
         started.data.requestLogId === undefined ? {} : { requestLogId: started.data.requestLogId },
       );
 

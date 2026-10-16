@@ -10,11 +10,11 @@ import { SettingService, TokenService } from "@/services/services.generated";
 import { type SettingItem } from "@/services/setting/setting.types";
 import { useUpdateTokenMutation } from "@/services/token/use-update-token-mutation";
 
-const GROUP_LABELS: Record<string, string> = {
-  qgrid: "Qgrid",
-  slack: "Slack 알림",
-  slackConnection: "Slack 연결",
-};
+const GROUP_LABELS = new Map([
+  ["qgrid", "Qgrid"],
+  ["slack", "Slack 알림"],
+  ["slackConnection", "Slack 연결"],
+]);
 
 function maskValue(value: string): string {
   if (!value) return "";
@@ -184,7 +184,7 @@ function SettingRow({ item, disabled = false }: { item: SettingItem; disabled?: 
       await invalidate();
       setDraft(null);
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -196,7 +196,7 @@ function SettingRow({ item, disabled = false }: { item: SettingItem; disabled?: 
       await invalidate();
       setDraft(null);
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -327,7 +327,7 @@ function KeepaliveTokenSettings({ runnerEnabled }: { runnerEnabled: boolean }) {
       await updateMutation.mutateAsync({ id, keepaliveEnabled });
       await queryClient.invalidateQueries({ queryKey: ["Token", "getTokens"] });
     } catch (cause) {
-      setError((cause as Error).message);
+      setError(cause instanceof Error ? cause.message : String(cause));
     }
   };
 
@@ -393,7 +393,7 @@ function TriggerReminderButton() {
       // 0건과 실패를 구분해준다 — 아무 반응이 없으면 버튼이 고장 난 것으로 읽힌다.
       setResult(sent === 0 ? "재로그인이 필요한 토큰이 없습니다" : `${sent}건 발송`);
     } catch (e) {
-      setResult((e as Error).message);
+      setResult(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -483,7 +483,7 @@ export function SettingsPanel() {
           <div key={group} className="panel overflow-hidden">
             <div className="panel-header flex items-center justify-between px-4 py-2.5 sm:px-5">
               <span className="text-[13px] font-medium text-sand-700">
-                {GROUP_LABELS[group] ?? group}
+                {GROUP_LABELS.get(group) ?? group}
               </span>
               {group === "slack" && <TriggerReminderButton />}
             </div>

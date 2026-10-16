@@ -9,6 +9,7 @@ import {
   type LanguageModelV3Message,
   type LanguageModelV3StreamPart,
   type LanguageModelV3StreamResult,
+  type JSONObject,
   type SharedV3ProviderMetadata,
   type SharedV3Warning,
 } from "@ai-sdk/provider";
@@ -20,9 +21,11 @@ import {
   closeQgridRequestTransport,
   createQgridRequestTransport,
   qgridFetch,
+  type QgridRequestInit,
 } from "./http-transport";
 import { createQgridImage } from "./image-model";
 import {
+  queryOutputSchema,
   type QgridSupportedModel,
   type QueryOutput,
   type QgridAnthropicModel,
@@ -52,6 +55,8 @@ import {
   extractPromptAndHistory,
   extractToolResultsFromHistory,
   parseSSE,
+  type PromptHistoryItem,
+  type QgridToolDefinition,
   toQgridTool,
 } from "./utils";
 import { createQgridVideo } from "./video-model";
@@ -106,23 +111,24 @@ function grokImageUrl(part: LanguageModelV3FilePart): string | undefined {
     return data.protocol === "https:" || data.protocol === "data:" ? data.href : undefined;
   }
 
-  if (typeof data === "string") {
-    if (/^(https:|data:)/i.test(data)) return data;
+  if (data instanceof Uint8Array) {
+    const resolved = mediaType === "image/*" ? sniffImageMediaType(data) : mediaType;
 
-    if (mediaType === "image/*") return undefined;
-
-    return `data:${mediaType};base64,${data}`;
+    return resolved ? `data:${resolved};base64,${bytesToBase64(data)}` : undefined;
   }
 
-  const resolved = mediaType === "image/*" ? sniffImageMediaType(data) : mediaType;
+  if (/^(https:|data:)/i.test(data)) return data;
 
-  return resolved ? `data:${resolved};base64,${bytesToBase64(data)}` : undefined;
+  if (mediaType === "image/*") return undefined;
+
+  return `data:${mediaType};base64,${data}`;
 }
 
 type GrokUserPart = { type: "text"; text: string } | { type: "image"; url: string };
 
-function grokUserParts(content: LanguageModelV3Message["content"]): GrokUserPart[] {
-  if (typeof content === "string") return [{ type: "text", text: content }];
+type UserMessage = Extract<LanguageModelV3Message, { role: "user" }>;
+
+function grokUserParts(content: UserMessage["content"]): GrokUserPart[] {
   const parts: GrokUserPart[] = [];
 
   for (const part of content) {
@@ -141,7 +147,7 @@ function grokUserParts(content: LanguageModelV3Message["content"]): GrokUserPart
 type PreparedPrompt = {
   prompt: string;
   system: string | undefined;
-  history: unknown[];
+  history: PromptHistoryItem[];
   input?: QgridInputPart[];
 };
 
@@ -156,9 +162,13 @@ function preparePrompt(modelId: string, messages: LanguageModelV3Message[]): Pre
     return extracted;
   }
 
-  const userMessages = messages.filter((message) => message.role === "user");
+  const userMessages = messages.filter(
+    (message): message is UserMessage => message.role === "user",
+  );
+
   const nonSystem = messages.filter((message) => message.role !== "system");
-  const promptMessage = nonSystem.at(-1)?.role === "user" ? nonSystem.at(-1) : undefined;
+  const lastMessage = nonSystem.at(-1);
+  const promptMessage = lastMessage?.role === "user" ? lastMessage : undefined;
   const historyUserMessages = promptMessage ? userMessages.slice(0, -1) : userMessages;
 
   let keptImageCount = 0;
@@ -175,7 +185,7 @@ function preparePrompt(modelId: string, messages: LanguageModelV3Message[]): Pre
 
   let historyUserIndex = 0;
 
-  const history = extracted.history.map((item) => {
+  const history = extracted.history.map((item): PromptHistoryItem => {
     if (!isUserHistoryMessage(item)) return item;
     const source = historyUserMessages[historyUserIndex++];
 
@@ -214,23 +224,15 @@ function preparePrompt(modelId: string, messages: LanguageModelV3Message[]): Pre
   assertImageInputFitsJsonTransport(imageUrls);
   warnDroppedImages(extracted.droppedImageCount - keptImageCount);
 
-  return {
-    prompt: extracted.prompt,
-    system: extracted.system,
-    history,
-    ...(input ? { input } : {}),
-  };
+  const prepared: PreparedPrompt = { prompt: extracted.prompt, system: extracted.system, history };
+
+  if (input) prepared.input = input;
+
+  return prepared;
 }
 
-function isUserHistoryMessage(item: unknown): boolean {
-  return (
-    typeof item === "object" &&
-    item !== null &&
-    "type" in item &&
-    item.type === "message" &&
-    "role" in item &&
-    item.role === "user"
-  );
+function isUserHistoryMessage(item: PromptHistoryItem): boolean {
+  return item.type === "message" && item.role === "user";
 }
 
 type ResolvedXaiOptions = {
@@ -238,6 +240,35 @@ type ResolvedXaiOptions = {
   effort?: QgridGrokEffort;
   promptCacheKey?: string;
 };
+
+type ToolResultPayload = { toolCallId: string; output: string; isError?: boolean };
+
+/** `args` of `/api/qgrid/query` and `/api/qgrid/prepareStream`. */
+interface QgridQueryArgs {
+  prompt: string;
+  model: string;
+  system?: string;
+  effort?: string;
+  thinking?: boolean;
+  input?: QgridInputPart[];
+  verbosity?: string;
+  reasoningSummary?: string;
+  serviceTier?: string;
+  timeout?: number;
+  tools?: QgridToolDefinition[];
+  jsonSchema?: string;
+  history?: string;
+  projectName?: string;
+  cacheAffinityKey?: string;
+  logger?: false;
+  tokenName?: string;
+  runContext?: NonNullable<QueryOutput["runContext"]>;
+  toolResults?: ToolResultPayload[];
+}
+
+const prepareStreamOutputSchema = z.object({ streamId: z.string() });
+const streamDeltaSchema = z.object({ text: z.string() });
+const streamErrorSchema = z.object({ message: z.string() });
 
 function resolveXaiOptions(
   modelId: string,
@@ -262,15 +293,19 @@ function resolveXaiOptions(
   const mapped = mapXaiProviderOptions(raw, modelId);
   const { effort, promptCacheKey } = mapped.request;
 
-  return {
+  const resolved: ResolvedXaiOptions = {
     warnings: mapped.warnings.map((warning) => ({
       type: "unsupported",
       feature: `providerOptions.xai.${warning.key}`,
       details: warning.reason,
     })),
-    ...(effort === undefined ? {} : { effort }),
-    ...(promptCacheKey === undefined ? {} : { promptCacheKey }),
   };
+
+  if (effort !== undefined) resolved.effort = effort;
+
+  if (promptCacheKey !== undefined) resolved.promptCacheKey = promptCacheKey;
+
+  return resolved;
 }
 
 const xaiResponseMetadataSchema = z.object({
@@ -289,11 +324,11 @@ function serializeObjectResponseFormat(
 
   if (rawSchema === undefined) return undefined;
 
-  const schemaType = (rawSchema as { type?: string }).type;
+  const schemaType = rawSchema.type;
 
   if (schemaType !== "object") {
     console.warn(
-      `[qgrid] responseFormat.schema top-level type is "${schemaType ?? "unknown"}". ${TOP_LEVEL_SCHEMA_WARNING}`,
+      `[qgrid] responseFormat.schema top-level type is "${Array.isArray(schemaType) ? schemaType.join(",") : (schemaType ?? "unknown")}". ${TOP_LEVEL_SCHEMA_WARNING}`,
     );
 
     return undefined;
@@ -364,46 +399,76 @@ async function deriveCacheAffinityKey(
 
 function qgridProviderMetadata(data: QueryOutput): SharedV3ProviderMetadata {
   const xai = xaiResponseMetadataSchema.safeParse(data);
+  const metadata: SharedV3ProviderMetadata = {};
 
-  const xaiMetadata = xai.success
-    ? {
-        ...(xai.data.providerMetadata.xai.costInUsdTicks === undefined
-          ? {}
-          : { costInUsdTicks: xai.data.providerMetadata.xai.costInUsdTicks }),
-        ...(xai.data.providerMetadata.xai.contextWindow === undefined
-          ? {}
-          : { contextWindow: xai.data.providerMetadata.xai.contextWindow }),
-      }
-    : undefined;
+  if (xai.success) {
+    const { costInUsdTicks, contextWindow } = xai.data.providerMetadata.xai;
+    const xaiMetadata: JSONObject = {};
 
-  return {
-    ...(xaiMetadata && Object.keys(xaiMetadata).length > 0 ? { xai: xaiMetadata } : {}),
-    qgrid: {
-      ...(data.requestLogId === undefined ? {} : { requestLogId: data.requestLogId }),
-      model: data.model,
-      requestedModel: data.requestedModel ?? data.model,
-      modelFallbacks: data.modelFallbacks ?? [],
-      tokenName: data.tokenName ?? null,
-      durationMs: data.durationMs,
-      costUsd: data.costUsd,
-      costSource: data.costSource,
-      cacheCreation5mInputTokens: data.usage.cache_creation_5m_input_tokens ?? null,
-      cacheCreation1hInputTokens: data.usage.cache_creation_1h_input_tokens ?? null,
-    },
-  };
+    if (costInUsdTicks !== undefined) xaiMetadata.costInUsdTicks = costInUsdTicks;
+
+    if (contextWindow !== undefined) xaiMetadata.contextWindow = contextWindow;
+
+    if (Object.keys(xaiMetadata).length > 0) metadata.xai = xaiMetadata;
+  }
+
+  const qgridMetadata: JSONObject = {};
+
+  if (data.requestLogId !== undefined) qgridMetadata.requestLogId = data.requestLogId;
+  qgridMetadata.model = data.model;
+  qgridMetadata.requestedModel = data.requestedModel ?? data.model;
+  qgridMetadata.modelFallbacks = data.modelFallbacks ?? [];
+  qgridMetadata.tokenName = data.tokenName ?? null;
+  qgridMetadata.durationMs = data.durationMs;
+  qgridMetadata.costUsd = data.costUsd;
+  qgridMetadata.costSource = data.costSource;
+  qgridMetadata.cacheCreation5mInputTokens = data.usage.cache_creation_5m_input_tokens ?? null;
+  qgridMetadata.cacheCreation1hInputTokens = data.usage.cache_creation_1h_input_tokens ?? null;
+  metadata.qgrid = qgridMetadata;
+
+  return metadata;
 }
+
+/** JSON callers often pass null for "unset"; these options treated null as absent before. */
+function nullAsUnset<T extends z.ZodType>(schema: T) {
+  return schema.nullish().transform((value) => value ?? undefined);
+}
+
+const qgridProviderOptionsSchema: z.ZodType<QgridResolvedProviderOptions> = z.looseObject({
+  thinking: z.boolean().optional(),
+  tokenName: z.string().optional(),
+  logger: nullAsUnset(z.boolean()),
+  fallbackModels: nullAsUnset(z.array(z.string())),
+  sessionKey: nullAsUnset(z.string()),
+  effort: nullAsUnset(z.string()),
+  verbosity: nullAsUnset(z.enum(["low", "medium", "high"])),
+  reasoningSummary: nullAsUnset(z.enum(["auto", "concise", "detailed", "none"])),
+  serviceTier: nullAsUnset(z.string()),
+  timeoutMs: z.number().optional(),
+});
 
 function getQgridProviderOptions(
   options: LanguageModelV3CallOptions,
 ): QgridResolvedProviderOptions {
-  const qgridOptions =
-    (options.providerOptions?.qgrid as QgridResolvedProviderOptions | undefined) ?? {};
+  const raw = options.providerOptions?.qgrid ?? {};
 
-  if ("imageGeneration" in qgridOptions || "imageGenerationOptions" in qgridOptions) {
+  if ("imageGeneration" in raw || "imageGenerationOptions" in raw) {
     throw new Error(
       "qgrid: imageGeneration and imageGenerationOptions were removed from language-model options. Use generateImage with qgrid.image().",
     );
   }
+
+  const parsed = qgridProviderOptionsSchema.safeParse(raw);
+
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((issue) => `${issue.path.map(String).join(".") || "(root)"}: ${issue.message}`)
+      .join("; ");
+
+    throw new Error(`qgrid: invalid providerOptions.qgrid: ${issues}`);
+  }
+
+  const qgridOptions = parsed.data;
 
   if (qgridOptions.tokenName !== undefined && qgridOptions.tokenName.trim() === "") {
     throw new Error("qgrid: tokenName must not be empty");
@@ -581,50 +646,63 @@ export function qgrid(
 
       const transport = createQgridRequestTransport(modelId, timeoutMs);
 
-      const data = await qgridFetch(
-        `${serverUrl}/api/qgrid/query`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            args: {
-              prompt,
-              ...(input ? { input } : {}),
-              model: modelId,
-              system,
-              effort: effectiveEffort,
-              thinking: qgridOptions.thinking,
-              ...(verbosity ? { verbosity } : {}),
-              ...(reasoningSummary ? { reasoningSummary } : {}),
-              ...(serviceTier ? { serviceTier } : {}),
-              ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
-              ...(hasTools ? { tools: tools.map(toQgridTool) } : {}),
-              ...(jsonSchema ? { jsonSchema } : {}),
-              ...(history.length > 0 ? { history: JSON.stringify(history) } : {}),
-              ...(projectName ? { projectName } : {}),
-              ...(cacheAffinityKey ? { cacheAffinityKey } : {}),
-              ...(logger === false ? { logger: false } : {}),
-              ...(tokenName ? { tokenName } : {}),
-              ...(runContext ? { runContext } : {}),
-              ...(toolResultsPayload ? { toolResults: toolResultsPayload } : {}),
-            },
-          }),
-          signal: options.abortSignal,
-          ...(transport ? { dispatcher: transport.dispatcher } : {}),
-        },
-        {
-          operation: "query",
-          serverUrl,
-          transportTimeoutMs: transport?.timeoutMs,
-        },
-      )
+      const args: QgridQueryArgs = {
+        prompt,
+        model: modelId,
+        system,
+        effort: effectiveEffort,
+        thinking: qgridOptions.thinking,
+      };
+
+      if (input) args.input = input;
+
+      if (verbosity) args.verbosity = verbosity;
+
+      if (reasoningSummary) args.reasoningSummary = reasoningSummary;
+
+      if (serviceTier) args.serviceTier = serviceTier;
+
+      if (timeoutMs !== undefined) args.timeout = timeoutMs;
+
+      if (hasTools) args.tools = tools.map(toQgridTool);
+
+      if (jsonSchema) args.jsonSchema = jsonSchema;
+
+      if (history.length > 0) args.history = JSON.stringify(history);
+
+      if (projectName) args.projectName = projectName;
+
+      if (cacheAffinityKey) args.cacheAffinityKey = cacheAffinityKey;
+
+      if (logger === false) args.logger = false;
+
+      if (tokenName) args.tokenName = tokenName;
+
+      if (runContext) args.runContext = runContext;
+
+      if (toolResultsPayload) args.toolResults = toolResultsPayload;
+
+      const init: QgridRequestInit = {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ args }),
+        signal: options.abortSignal,
+      };
+
+      if (transport) init.dispatcher = transport.dispatcher;
+
+      const data = await qgridFetch(`${serverUrl}/api/qgrid/query`, init, {
+        operation: "query",
+        serverUrl,
+        transportTimeoutMs: transport?.timeoutMs,
+      })
         .then(async (res) => {
           if (!res.ok) {
             const text = await res.text().catch(() => "");
             throw new Error(`qgrid ${res.status}: ${text}`);
           }
 
-          return (await res.json()) as QueryOutput;
+          return queryOutputSchema.parse(await res.json());
         })
         .finally(() => closeQgridRequestTransport(transport));
 
@@ -659,12 +737,7 @@ export function qgrid(
       if (finishReason.unified === "tool-calls") {
         rememberClientRun(
           data.runContext,
-          content
-            .filter(
-              (c): c is Extract<LanguageModelV3Content, { type: "tool-call" }> =>
-                c.type === "tool-call",
-            )
-            .map((c) => c.toolCallId),
+          content.flatMap((c) => (c.type === "tool-call" ? [c.toolCallId] : [])),
         );
       }
 
@@ -737,32 +810,46 @@ export function qgrid(
         ? AbortSignal.any([options.abortSignal, abortController.signal])
         : abortController.signal;
 
+      const args: QgridQueryArgs = {
+        prompt,
+        model: modelId,
+        system,
+        effort: effectiveEffort,
+        thinking: qgridOptions.thinking,
+      };
+
+      if (input) args.input = input;
+
+      if (verbosity) args.verbosity = verbosity;
+
+      if (reasoningSummary) args.reasoningSummary = reasoningSummary;
+
+      if (serviceTier) args.serviceTier = serviceTier;
+
+      if (timeoutMs !== undefined) args.timeout = timeoutMs;
+
+      if (hasTools) args.tools = tools.map(toQgridTool);
+
+      if (jsonSchema) args.jsonSchema = jsonSchema;
+
+      if (history.length > 0) args.history = JSON.stringify(history);
+
+      if (projectName) args.projectName = projectName;
+
+      if (cacheAffinityKey) args.cacheAffinityKey = cacheAffinityKey;
+
+      if (logger === false) args.logger = false;
+
+      if (tokenName) args.tokenName = tokenName;
+
+      if (runContext) args.runContext = runContext;
+
+      if (toolResultsPayload) args.toolResults = toolResultsPayload;
+
       const prepRes = await fetch(`${serverUrl}/api/qgrid/prepareStream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          args: {
-            prompt,
-            ...(input ? { input } : {}),
-            model: modelId,
-            system,
-            effort: effectiveEffort,
-            thinking: qgridOptions.thinking,
-            ...(verbosity ? { verbosity } : {}),
-            ...(reasoningSummary ? { reasoningSummary } : {}),
-            ...(serviceTier ? { serviceTier } : {}),
-            ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
-            ...(hasTools ? { tools: tools.map(toQgridTool) } : {}),
-            ...(jsonSchema ? { jsonSchema } : {}),
-            ...(history.length > 0 ? { history: JSON.stringify(history) } : {}),
-            ...(projectName ? { projectName } : {}),
-            ...(cacheAffinityKey ? { cacheAffinityKey } : {}),
-            ...(logger === false ? { logger: false } : {}),
-            ...(tokenName ? { tokenName } : {}),
-            ...(runContext ? { runContext } : {}),
-            ...(toolResultsPayload ? { toolResults: toolResultsPayload } : {}),
-          },
-        }),
+        body: JSON.stringify({ args }),
         signal,
       });
 
@@ -771,7 +858,7 @@ export function qgrid(
         throw new Error(`qgrid prepareStream ${prepRes.status}: ${text}`);
       }
 
-      const { streamId } = (await prepRes.json()) as { streamId: string };
+      const { streamId } = prepareStreamOutputSchema.parse(await prepRes.json());
 
       const streamRes = await fetch(`${serverUrl}/api/qgrid/queryStream?streamId=${streamId}`, {
         signal,
@@ -822,7 +909,7 @@ export function qgrid(
             signal.throwIfAborted();
 
             if (event.type === "delta") {
-              const raw = (event.data as { text: string }).text;
+              const raw = streamDeltaSchema.parse(event.data).text;
               const text = envelopeParser ? envelopeParser.push(raw) : raw;
 
               if (text !== "") {
@@ -844,7 +931,7 @@ export function qgrid(
                 textStarted = false;
               }
 
-              const done = event.data as QueryOutput;
+              const done = queryOutputSchema.parse(event.data);
 
               // client run state 업데이트
               if (matchedClientRun) clientRuns.delete(matchedClientRun.key);
@@ -922,7 +1009,13 @@ export function qgrid(
               return;
             } else if (event.type === "error") {
               streamCompleted = true;
-              controller.error(new Error((event.data as { message: string }).message));
+              const streamError = streamErrorSchema.safeParse(event.data);
+
+              controller.error(
+                new Error(
+                  streamError.success ? streamError.data.message : JSON.stringify(event.data),
+                ),
+              );
 
               return;
             }

@@ -5,12 +5,16 @@ type RequestModelFields = {
   imageCostMethod: string | null;
 };
 
+export interface RequestModelDisplay {
+  label: string;
+}
+
 export function requestModelDisplay({
   status,
   requestedModel,
   servedModel,
   imageCostMethod,
-}: RequestModelFields): { label: string } {
+}: RequestModelFields): RequestModelDisplay {
   if (status === "running") return { label: "실행 중" };
 
   const loggedImageModel = /^(?:assumed|estimated):(gpt-image-[^:]+):/.exec(

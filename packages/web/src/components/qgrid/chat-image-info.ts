@@ -1,4 +1,9 @@
-export function chatImageInfo(url: string): { extension: string; bytes: number } {
+export interface ChatImageInfo {
+  extension: string;
+  bytes: number;
+}
+
+export function chatImageInfo(url: string): ChatImageInfo {
   const comma = url.indexOf(",");
   const mime = url.slice(0, comma).match(/^data:image\/(png|jpeg|webp);base64$/)?.[1];
 

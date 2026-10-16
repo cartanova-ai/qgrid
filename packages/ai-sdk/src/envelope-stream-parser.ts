@@ -29,16 +29,16 @@ export interface EnvelopeStreamParser {
   push(chunk: string): string;
 }
 
-const ESCAPE_MAP: Record<string, string> = {
-  '"': '"',
-  "\\": "\\",
-  "/": "/",
-  b: "\b",
-  f: "\f",
-  n: "\n",
-  r: "\r",
-  t: "\t",
-};
+const ESCAPE_MAP = new Map([
+  ['"', '"'],
+  ["\\", "\\"],
+  ["/", "/"],
+  ["b", "\b"],
+  ["f", "\f"],
+  ["n", "\n"],
+  ["r", "\r"],
+  ["t", "\t"],
+]);
 
 // 토크나이저가 값 시작 문자로 인정하는 리터럴/숫자 문자.
 const LITERAL_CHARS = /[0-9a-zA-Z+\-.eE]/;
@@ -283,7 +283,7 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
           return;
         }
 
-        const mapped = ESCAPE_MAP[c];
+        const mapped = ESCAPE_MAP.get(c);
 
         if (mapped === undefined) {
           discard = true;

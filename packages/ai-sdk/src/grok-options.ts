@@ -1,3 +1,5 @@
+import { type JSONObject, type JSONValue } from "@ai-sdk/provider";
+
 import { qgridXaiProviderOptionsSchema, type QgridXaiProviderOptions } from "./index.types";
 
 /** Effort values qgrid forwards to the Grok subscription backend (`reasoning.effort`). */
@@ -37,12 +39,12 @@ export const XAI_PROVIDER_OPTION_CLASSIFICATION = {
 export const DEFAULT_GROK_EFFORTS: readonly QgridGrokEffort[] = ["xhigh", "high", "medium", "low"];
 
 /** Per-model overrides of `DEFAULT_GROK_EFFORTS`, keyed by the backend id without the `grok/` prefix. */
-export const GROK_MODEL_EFFORTS: Readonly<Record<string, readonly QgridGrokEffort[]>> = {
-  "grok-4.7": DEFAULT_GROK_EFFORTS,
-  "grok-4.7-build-fast": DEFAULT_GROK_EFFORTS,
-  "grok-4.6": DEFAULT_GROK_EFFORTS,
-  "grok-4.5": DEFAULT_GROK_EFFORTS,
-};
+export const GROK_MODEL_EFFORTS: ReadonlyMap<string, readonly QgridGrokEffort[]> = new Map([
+  ["grok-4.7", DEFAULT_GROK_EFFORTS],
+  ["grok-4.7-build-fast", DEFAULT_GROK_EFFORTS],
+  ["grok-4.6", DEFAULT_GROK_EFFORTS],
+  ["grok-4.5", DEFAULT_GROK_EFFORTS],
+]);
 
 export type XaiOptionsWarning = { key: string; reason: string };
 
@@ -69,12 +71,10 @@ export class QgridXaiOptionsError extends Error {
   }
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-
-  const proto: unknown = Object.getPrototypeOf(value);
+/** Object.getPrototypeOf boxes primitives, so only plain and null-prototype objects pass. */
+function isPlainJsonObject(value: JSONValue): value is JSONObject {
+  if (value === null || Array.isArray(value)) return false;
+  const proto: object | null = Object.getPrototypeOf(value);
 
   return proto === Object.prototype || proto === null;
 }
@@ -90,7 +90,7 @@ function isGrokEffort(value: string): value is QgridGrokEffort {
 export function grokEffortsForModel(modelId: string): readonly QgridGrokEffort[] {
   const backendId = modelId.startsWith("grok/") ? modelId.slice("grok/".length) : modelId;
 
-  return GROK_MODEL_EFFORTS[backendId] ?? DEFAULT_GROK_EFFORTS;
+  return GROK_MODEL_EFFORTS.get(backendId) ?? DEFAULT_GROK_EFFORTS;
 }
 
 /**
@@ -98,14 +98,17 @@ export function grokEffortsForModel(modelId: string): readonly QgridGrokEffort[]
  * onto its request fields. Unsupported keys and values become warnings; malformed values throw
  * `QgridXaiOptionsError`.
  */
-export function mapXaiProviderOptions(options: unknown, modelId: string): MappedXaiProviderOptions {
+export function mapXaiProviderOptions(
+  options: JSONValue | undefined,
+  modelId: string,
+): MappedXaiProviderOptions {
   const result: MappedXaiProviderOptions = { request: {}, warnings: [], rejected: [] };
 
   if (options === undefined || options === null) {
     return result;
   }
 
-  if (!isPlainRecord(options)) {
+  if (!isPlainJsonObject(options)) {
     throw new QgridXaiOptionsError([{ path: "", message: "expected an object" }]);
   }
 

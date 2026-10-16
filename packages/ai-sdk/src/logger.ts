@@ -1,6 +1,7 @@
 import { type TelemetryIntegration, type TelemetrySettings } from "ai";
+import { z } from "zod";
 
-import { type QgridLoggerConfig } from "./index.types";
+import { type FinishRunInput, type QgridLoggerConfig } from "./index.types";
 import { DEFAULT_QGRID_SERVER_URL } from "./qgrid.constant";
 import {
   appendStep,
@@ -9,8 +10,7 @@ import {
   extractUserPrompt,
   finishRun,
   getErrorMessage,
-  getRecord,
-  safeStringify,
+  loggedPayloadText,
   serializeHistory,
 } from "./utils";
 
@@ -49,6 +49,21 @@ const STALE_RUN_GRACE_MS = 5000;
 
 const OVERLAPPING_RUN_ERROR =
   "createQgridLogger received overlapping runs for the same telemetry key. Pass a unique metadata.qgridRunId per AI SDK call or create a fresh logger integration per call.";
+
+const qgridRunIdSchema = z.string().min(1);
+
+type RunResult = {
+  status: "succeeded" | "error" | "aborted";
+  response?: string;
+  errorMessage?: string;
+  totalUsage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number };
+  };
+  modelName?: string;
+  requestedModelName?: string;
+};
 
 function isParseableJson(value: string | undefined): boolean {
   try {
@@ -109,28 +124,14 @@ export function createQgridLogger(config: QgridLoggerConfig = {}): TelemetrySett
   const starting = new Map<string, StartReservation>();
 
   const keyTtl =
-    typeof config.staleRunTimeoutMs === "number" && config.staleRunTimeoutMs > 0
+    config.staleRunTimeoutMs !== undefined && config.staleRunTimeoutMs > 0
       ? config.staleRunTimeoutMs
       : DEFAULT_STALE_RUN_TIMEOUT_MS;
 
   const suppressedRuns = timedKeySet();
   const quarantined = timedKeySet();
 
-  const finalizeRun = async (
-    runKey: string,
-    result: {
-      status: "succeeded" | "error" | "aborted";
-      response?: string;
-      errorMessage?: string;
-      totalUsage?: {
-        inputTokens?: number;
-        outputTokens?: number;
-        inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number };
-      };
-      modelName?: string;
-      requestedModelName?: string;
-    },
-  ) => {
+  const finalizeRun = async (runKey: string, result: RunResult) => {
     const run = runs.get(runKey);
 
     if (!run || run.finishing) return;
@@ -160,7 +161,8 @@ export function createQgridLogger(config: QgridLoggerConfig = {}): TelemetrySett
     run.pendingToolCalls = [];
 
     await Promise.allSettled(run.pendingSteps);
-    await finishRun(serverUrl, {
+
+    const finishInput: FinishRunInput = {
       requestLogId: run.requestLogId,
       status: result.status,
       response: result.response,
@@ -172,25 +174,28 @@ export function createQgridLogger(config: QgridLoggerConfig = {}): TelemetrySett
       totalCacheReadTokens: result.totalUsage?.inputTokenDetails?.cacheReadTokens ?? 0,
       totalCacheCreationTokens: result.totalUsage?.inputTokenDetails?.cacheWriteTokens ?? 0,
       totalDurationMs: Date.now() - run.startTime,
-      ...(run.isStructured && result.status === "succeeded"
-        ? { responseJsonOk: isParseableJson(result.response) }
-        : {}),
-      ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
-    }).catch((e) => onLogError(e instanceof Error ? e : new Error(String(e))));
+    };
+
+    if (run.isStructured && result.status === "succeeded") {
+      finishInput.responseJsonOk = isParseableJson(result.response);
+    }
+
+    if (result.errorMessage) finishInput.errorMessage = result.errorMessage;
+    await finishRun(serverUrl, finishInput).catch((e) =>
+      onLogError(e instanceof Error ? e : new Error(String(e))),
+    );
   };
 
   let autoRunIdCounter = 0;
 
-  const resolveRunKey = (event: {
-    metadata?: Record<string, unknown>;
-    functionId?: string;
-  }): string => {
-    const qgridRunId = event.metadata?.qgridRunId;
+  // metadata.qgridRunId is caller data typed unknown by AI SDK; decode it where it is read.
+  const resolveRunKey = (
+    qgridRunId: string | undefined,
+    functionId: string | undefined,
+  ): string => {
+    if (qgridRunId !== undefined) return `qgridRunId:${qgridRunId}`;
 
-    if (typeof qgridRunId === "string" && qgridRunId.length > 0) return `qgridRunId:${qgridRunId}`;
-
-    if (typeof event.functionId === "string" && event.functionId.length > 0)
-      return `functionId:${event.functionId}`;
+    if (functionId) return `functionId:${functionId}`;
 
     return DEFAULT_RUN_KEY;
   };
@@ -203,7 +208,10 @@ export function createQgridLogger(config: QgridLoggerConfig = {}): TelemetrySett
         event.metadata.qgridRunId = `auto-${++autoRunIdCounter}`;
       }
 
-      const runKey = resolveRunKey(event);
+      const runKey = resolveRunKey(
+        qgridRunIdSchema.safeParse(event.metadata?.qgridRunId).data,
+        event.functionId,
+      );
 
       // qgrid provider requests own their server-side logging lifecycle. Later
       // hooks also expose model.provider, so they do not need shared key state.
@@ -298,17 +306,16 @@ export function createQgridLogger(config: QgridLoggerConfig = {}): TelemetrySett
 
         // watchdog timeout
         let watchdogTimeout = DEFAULT_STALE_RUN_TIMEOUT_MS;
+        const timeout = event.timeout;
 
-        if (typeof config.staleRunTimeoutMs === "number")
-          watchdogTimeout = config.staleRunTimeoutMs;
-        else if (typeof event.timeout === "number" && event.timeout > 0)
-          watchdogTimeout = event.timeout + STALE_RUN_GRACE_MS;
-        else {
-          const rec = getRecord(event.timeout);
-          const totalMs = rec?.totalMs;
+        // TimeoutConfiguration is a number or an object; only the object is an Object instance.
+        if (config.staleRunTimeoutMs !== undefined) watchdogTimeout = config.staleRunTimeoutMs;
+        else if (timeout instanceof Object) {
+          const totalMs = timeout.totalMs;
 
-          if (typeof totalMs === "number" && totalMs > 0)
-            watchdogTimeout = totalMs + STALE_RUN_GRACE_MS;
+          if (totalMs !== undefined && totalMs > 0) watchdogTimeout = totalMs + STALE_RUN_GRACE_MS;
+        } else if (timeout !== undefined && timeout > 0) {
+          watchdogTimeout = timeout + STALE_RUN_GRACE_MS;
         }
 
         let watchdog: ReturnType<typeof setTimeout> | undefined;
@@ -363,7 +370,11 @@ export function createQgridLogger(config: QgridLoggerConfig = {}): TelemetrySett
 
     onToolCallFinish(event) {
       if (event.model?.provider === "qgrid") return;
-      const runKey = resolveRunKey(event);
+
+      const runKey = resolveRunKey(
+        qgridRunIdSchema.safeParse(event.metadata?.qgridRunId).data,
+        event.functionId,
+      );
 
       if (suppressedRuns.has(runKey) || quarantined.has(runKey)) return;
       const run = runs.get(runKey);
@@ -374,7 +385,11 @@ export function createQgridLogger(config: QgridLoggerConfig = {}): TelemetrySett
 
     onStepFinish(event) {
       if (event.model?.provider === "qgrid") return;
-      const runKey = resolveRunKey(event);
+
+      const runKey = resolveRunKey(
+        qgridRunIdSchema.safeParse(event.metadata?.qgridRunId).data,
+        event.functionId,
+      );
 
       if (suppressedRuns.has(runKey) || quarantined.has(runKey)) return;
       const run = runs.get(runKey);
@@ -413,9 +428,9 @@ export function createQgridLogger(config: QgridLoggerConfig = {}): TelemetrySett
               toolArgs: pending.toolArgs,
               modelName: pending.modelName,
               requestedModelName: pending.requestedModelName,
-              toolResult: tr && "output" in tr ? safeStringify(tr.output) : undefined,
+              toolResult: tr && "output" in tr ? loggedPayloadText.parse(tr.output) : undefined,
               toolDurationMs: run.toolDurations.get(pending.toolCallId),
-              error: te && "error" in te ? safeStringify(te.error) : undefined,
+              error: te && "error" in te ? loggedPayloadText.parse(te.error) : undefined,
             }).catch((e) => onLogError(e instanceof Error ? e : new Error(String(e)))),
           );
           run.toolDurations.delete(pending.toolCallId);
@@ -440,9 +455,7 @@ export function createQgridLogger(config: QgridLoggerConfig = {}): TelemetrySett
           cacheCreationTokens: usage.inputTokenDetails?.cacheWriteTokens ?? 0,
           finishReason,
           reasoningText:
-            typeof reasoningText === "string" && reasoningText.length > 0
-              ? reasoningText
-              : undefined,
+            reasoningText !== undefined && reasoningText.length > 0 ? reasoningText : undefined,
           reasoningTokens: usage.outputTokenDetails?.reasoningTokens,
         }).catch((e) => onLogError(e instanceof Error ? e : new Error(String(e)))),
       );
@@ -466,12 +479,12 @@ export function createQgridLogger(config: QgridLoggerConfig = {}): TelemetrySett
               toolCallIndex: i,
               toolCallId: tc.toolCallId,
               toolName: tc.toolName,
-              toolArgs: safeStringify(tc.input),
+              toolArgs: loggedPayloadText.parse(tc.input),
               modelName,
               requestedModelName,
-              toolResult: tr && "output" in tr ? safeStringify(tr.output) : undefined,
+              toolResult: tr && "output" in tr ? loggedPayloadText.parse(tr.output) : undefined,
               toolDurationMs: run.toolDurations.get(tc.toolCallId),
-              error: te && "error" in te ? safeStringify(te.error) : undefined,
+              error: te && "error" in te ? loggedPayloadText.parse(te.error) : undefined,
             }).catch((e) => onLogError(e instanceof Error ? e : new Error(String(e)))),
           );
           run.toolDurations.delete(tc.toolCallId);
@@ -481,7 +494,7 @@ export function createQgridLogger(config: QgridLoggerConfig = {}): TelemetrySett
             toolCallIndex: i,
             toolCallId: tc.toolCallId,
             toolName: tc.toolName,
-            toolArgs: safeStringify(tc.input),
+            toolArgs: loggedPayloadText.parse(tc.input),
             modelName,
             requestedModelName,
           });
@@ -491,7 +504,11 @@ export function createQgridLogger(config: QgridLoggerConfig = {}): TelemetrySett
 
     async onFinish(event) {
       if (event.model?.provider === "qgrid") return;
-      const runKey = resolveRunKey(event);
+
+      const runKey = resolveRunKey(
+        qgridRunIdSchema.safeParse(event.metadata?.qgridRunId).data,
+        event.functionId,
+      );
 
       if (suppressedRuns.has(runKey)) {
         suppressedRuns.remove(runKey);
@@ -512,16 +529,17 @@ export function createQgridLogger(config: QgridLoggerConfig = {}): TelemetrySett
 
       const modelName = fullModelName(event.model?.provider, event.response?.modelId);
 
-      await finalizeRun(runKey, {
+      const result: RunResult = {
         status,
         response: event.text,
         totalUsage: event.totalUsage,
         modelName,
         requestedModelName,
-        ...(status === "error" && "error" in event
-          ? { errorMessage: getErrorMessage(event.error) }
-          : {}),
-      });
+      };
+
+      if (status === "error" && "error" in event)
+        result.errorMessage = getErrorMessage(event.error);
+      await finalizeRun(runKey, result);
     },
   };
 

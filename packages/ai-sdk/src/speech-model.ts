@@ -1,4 +1,4 @@
-import { type SharedV3Warning, type SpeechModelV3 } from "@ai-sdk/provider";
+import { type JSONObject, type SharedV3Warning, type SpeechModelV3 } from "@ai-sdk/provider";
 import { z } from "zod";
 
 import {
@@ -22,7 +22,7 @@ const SPEECH_FORMATS = ["mp3", "wav", "pcm", "mulaw", "alaw"] as const;
 type SpeechFormat = (typeof SPEECH_FORMATS)[number];
 
 function isSpeechFormat(value: string): value is SpeechFormat {
-  return (SPEECH_FORMATS as readonly string[]).includes(value);
+  return SPEECH_FORMATS.some((format) => format === value);
 }
 
 /**
@@ -129,15 +129,16 @@ export function createQgridSpeech(
       if (options.speed !== undefined) warnings.push({ type: "unsupported", feature: "speed" });
       warnings.push(...xai.warnings);
 
-      const params = {
-        model: modelId,
-        text: options.text,
-        ...(options.voice === undefined ? {} : { voice: options.voice }),
-        ...(options.language === undefined ? {} : { language: options.language }),
-        ...(format === undefined ? {} : { format }),
-        ...(projectName ? { projectName } : {}),
-        ...qgridOptions,
-      };
+      const requestParams: JSONObject = { model: modelId, text: options.text };
+
+      if (options.voice !== undefined) requestParams.voice = options.voice;
+
+      if (options.language !== undefined) requestParams.language = options.language;
+
+      if (format !== undefined) requestParams.format = format;
+
+      if (projectName) requestParams.projectName = projectName;
+      const params: JSONObject = { ...requestParams, ...qgridOptions };
 
       const body = serializeMediaBody(params, LABEL);
       const timestamp = new Date();
@@ -152,18 +153,16 @@ export function createQgridSpeech(
         headers: options.headers,
       });
 
+      const qgridMetadata: JSONObject = { mediaType: data.mimeType, tokenName: data.tokenName };
+
+      if (data.requestLogId !== undefined) qgridMetadata.requestLogId = data.requestLogId;
+
       return {
         audio: base64ToBytes(data.audio),
         warnings,
         request: { body: params },
         response: { timestamp, modelId, headers },
-        providerMetadata: {
-          qgrid: {
-            mediaType: data.mimeType,
-            tokenName: data.tokenName,
-            ...(data.requestLogId === undefined ? {} : { requestLogId: data.requestLogId }),
-          },
-        },
+        providerMetadata: { qgrid: qgridMetadata },
       };
     },
   };

@@ -36,9 +36,9 @@ export type GrokDeviceFlow =
   | { status: "expired" }
   | { status: "error"; message: string };
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : "Grok login failed";
-}
+type GrokDeviceWaiting = Extract<GrokDeviceFlow, { status: "waiting" }>;
+
+const GROK_LOGIN_FAILED_MESSAGE = "Grok login failed";
 
 /** Server-provided login URLs are only opened or linked when they are https. */
 export function safeHttpsUrl(value: string | undefined): string | undefined {
@@ -240,7 +240,10 @@ export function useOAuthLoginFlow() {
     } catch (e) {
       if (attempt !== attemptRef.current) return;
       console.error("Grok device login start failed:", e);
-      setDeviceFlow({ status: "error", message: errorMessage(e) });
+      setDeviceFlow({
+        status: "error",
+        message: e instanceof Error && e.message ? e.message : GROK_LOGIN_FAILED_MESSAGE,
+      });
 
       return;
     }
@@ -260,14 +263,17 @@ export function useOAuthLoginFlow() {
     const expiresAt = Date.now() + device.expiresIn * 1000;
     let intervalSec = Math.max(device.interval, 1);
     let failures = 0;
-    setDeviceFlow({
+
+    const waiting: GrokDeviceWaiting = {
       status: "waiting",
       userCode: device.userCode,
       verificationUri,
-      ...(verificationUriComplete ? { verificationUriComplete } : {}),
       expiresAt,
       slowDown: false,
-    });
+    };
+
+    if (verificationUriComplete) waiting.verificationUriComplete = verificationUriComplete;
+    setDeviceFlow(waiting);
 
     const schedule = () => {
       // 만료 시각을 넘겨 기다리지 않도록 남은 시간으로 자른다.
@@ -294,7 +300,10 @@ export function useOAuthLoginFlow() {
 
         if (failures >= DEVICE_MAX_CONSECUTIVE_POLL_FAILURES) {
           console.error("Grok device login poll failed:", e);
-          setDeviceFlow({ status: "error", message: errorMessage(e) });
+          setDeviceFlow({
+            status: "error",
+            message: e instanceof Error && e.message ? e.message : GROK_LOGIN_FAILED_MESSAGE,
+          });
 
           return;
         }

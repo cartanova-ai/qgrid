@@ -7,6 +7,7 @@ import ZapIcon from "~icons/lucide/zap";
 import { cacheHitRate, formatRequestCost, formatUsd } from "@/lib/cost";
 import { requestModelDisplay } from "@/lib/request-model";
 import { type LogsSearch } from "@/routes/logs";
+import { type RequestLogListParams } from "@/services/request-log/request-log.types";
 import { QgridService, RequestLogService, TokenService } from "@/services/services.generated";
 import { RequestLogOrderBy } from "@/services/sonamu.generated";
 
@@ -15,8 +16,8 @@ import { unpricedRequestLabel, unpricedRequestTitle } from "./total-cost";
 const PAGE_SIZE = 50;
 const UNASSIGNED = "__unassigned__";
 
-function formatDateTime(iso: string): string {
-  const d = new Date(iso);
+function formatDateTime(value: Date): string {
+  const d = new Date(value);
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   const hh = String(d.getHours()).padStart(2, "0");
@@ -144,11 +145,12 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
   })();
 
   // 목록과 비용이 같은 필터를 보도록 한 객체를 공유한다.
-  const listFilters = {
-    ...(tokenFilter ? { token_name: tokenFilter } : {}),
-    ...projectFilterParam,
-    ...(modelFilter ? { model_name: modelFilter } : {}),
-  };
+  const listFilters: Partial<RequestLogListParams> = {};
+
+  if (tokenFilter) listFilters.token_name = tokenFilter;
+  Object.assign(listFilters, projectFilterParam);
+
+  if (modelFilter) listFilters.model_name = modelFilter;
 
   const sort = search.sort ?? "id-desc";
   const separator = sort.lastIndexOf("-");
@@ -351,7 +353,7 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                     </td>
                     <td className="px-4 py-1.5 whitespace-nowrap">
                       <span className="text-xs text-sand-400 tabular-nums">
-                        {formatDateTime(row.created_at as unknown as string)}
+                        {formatDateTime(row.created_at)}
                       </span>
                     </td>
                     <td className="px-4 py-1.5 whitespace-nowrap">
