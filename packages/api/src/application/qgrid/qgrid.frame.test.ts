@@ -405,6 +405,7 @@ describe("QgridFrame.query request logging", () => {
     });
     const args = {
       prompt: "draw", model: "openai/gpt-6-luna", imageGeneration: "auto" as const,
+      serviceTier: "fast" as const,
       ...(mode === "logger-disabled" ? { logger: false } : {}),
     };
     await expect(QgridFrame.query(args)).rejects.toBe(error);
@@ -417,7 +418,7 @@ describe("QgridFrame.query request logging", () => {
       const completedStep = expect.objectContaining({
         stepIndex: 0,
         result: expect.objectContaining({
-          model: "gpt-6-luna", tokenName: "one", costUsd: 0.00002,
+          model: "gpt-6-luna", tokenName: "one", costUsd: 0.00004,
           usage: expect.objectContaining({ input_tokens: 100, output_tokens: 20 }),
         }),
       });

@@ -38,6 +38,29 @@ function deeplyNestedOutputSchema(depth: number): string {
 }
 
 describe("QgridDispatcherClass", () => {
+  it.each([false, true])("applies Fast pricing to OpenAI query (stream=%s)", async (stream) => {
+    const dispatcher = new QgridDispatcherClass();
+    const result = providerResult({
+      model: "gpt-6.1-sol",
+      usage: { totalTokens: 2000, inputTokens: 1000, cachedInputTokens: 500, outputTokens: 1000, reasoningOutputTokens: 0 },
+    });
+    dispatcher.openaiDispatcher = {
+      generate: vi.fn(async () => result),
+      generateStream: vi.fn(async (_req, cb) => cb.onComplete(result)),
+    } as never;
+    const input = { prompt: "hi", model: "openai/gpt-6.1-sol", serviceTier: "fast" as const };
+    let output: QueryOutput | undefined;
+    if (stream) {
+      await dispatcher.queryStream(input, {
+        onDelta: () => {}, onComplete: (value) => { output = value; }, onError: (error) => { throw error; },
+      });
+    } else {
+      output = await dispatcher.query(input);
+    }
+    expect(output?.costUsd).toBeCloseTo(0.0221, 10);
+    expect(output?.costSource).toBe("pricing_table");
+  });
+
   it("prices only the completed chat driver from an image failure", () => {
     const error = new ImageGenerationError("incomplete", "images unavailable");
     error.completedDriver = providerResult({
@@ -52,6 +75,7 @@ describe("QgridDispatcherClass", () => {
       content: [{ type: "text", text: "ok" }],
     });
     expect(result.costUsd).toBeCloseTo(0.0000191, 10);
+    expect(completedDriverFromImageFailure(error, "fast")?.costUsd).toBeCloseTo(0.0000382, 10);
     expect(estimateImageGenerationCostMicroUsd(result, undefined)).toBeNull();
     expect(result.runContext).toBeUndefined();
     expect(completedDriverFromImageFailure(new Error("failed"))).toBeUndefined();

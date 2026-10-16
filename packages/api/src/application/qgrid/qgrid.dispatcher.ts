@@ -127,7 +127,7 @@ export class QgridDispatcherClass {
         ? undefined
         : issueConvContext(result.threadCoord, decision, result.threadCoord.workerId);
 
-      return applyToolCallEmulation(toEmulationResult(result), input.tools, {
+      return applyToolCallEmulation(toEmulationResult(result, input.serviceTier), input.tools, {
         threadCoord: coord,
         images: result.images,
         answerKind,
@@ -206,14 +206,18 @@ export class QgridDispatcherClass {
           onComplete: (turnResult) => {
             this.recordCompleted("openai", turnResult.tokenName);
             cb.onComplete(
-              applyToolCallEmulation(toEmulationResult(turnResult), input.tools, {
-                threadCoord: issueConvContext(
-                  turnResult.threadCoord,
-                  decision,
-                  turnResult.threadCoord.workerId,
-                ),
-                answerKind,
-              }),
+              applyToolCallEmulation(
+                toEmulationResult(turnResult, input.serviceTier),
+                input.tools,
+                {
+                  threadCoord: issueConvContext(
+                    turnResult.threadCoord,
+                    decision,
+                    turnResult.threadCoord.workerId,
+                  ),
+                  answerKind,
+                },
+              ),
             );
           },
           onError: cb.onError,
@@ -328,9 +332,12 @@ function buildRawOutputSchema(
     : callerOutputSchema;
 }
 
-export function completedDriverFromImageFailure(error: unknown): QueryOutput | undefined {
+export function completedDriverFromImageFailure(
+  error: unknown,
+  serviceTier?: string,
+): QueryOutput | undefined {
   if (!(error instanceof ImageGenerationError) || !error.completedDriver) return undefined;
-  return applyToolCallEmulation(toEmulationResult(error.completedDriver), undefined, {
+  return applyToolCallEmulation(toEmulationResult(error.completedDriver, serviceTier), undefined, {
     answerKind: "text",
   });
 }
@@ -338,6 +345,7 @@ export function completedDriverFromImageFailure(error: unknown): QueryOutput | u
 // Anthropic adapter 는 cache creation 을 inputTokens 에 포함해 표준화하고, 별도 필드에도 보존한다.
 function toEmulationResult(
   result: GenerateResult,
+  serviceTier?: string,
 ): Omit<QueryOutput, "content" | "finishReason" | "runContext"> {
   const hasProviderCost = result.costUsd !== undefined && result.costUsd > 0;
   return {
@@ -359,14 +367,18 @@ function toEmulationResult(
     ttftMs: result.ttftMs ?? 0,
     costUsd: hasProviderCost
       ? result.costUsd!
-      : calculateCostUsd(result.model, {
-          inputTokens: result.usage.inputTokens,
-          outputTokens: result.usage.outputTokens,
-          cachedInputTokens: result.usage.cachedInputTokens,
-          cacheCreationInputTokens: result.usage.cacheCreationInputTokens ?? 0,
-          cacheCreationInputTokens5m: result.usage.cacheCreationInputTokens5m,
-          cacheCreationInputTokens1h: result.usage.cacheCreationInputTokens1h,
-        }),
+      : calculateCostUsd(
+          result.model,
+          {
+            inputTokens: result.usage.inputTokens,
+            outputTokens: result.usage.outputTokens,
+            cachedInputTokens: result.usage.cachedInputTokens,
+            cacheCreationInputTokens: result.usage.cacheCreationInputTokens ?? 0,
+            cacheCreationInputTokens5m: result.usage.cacheCreationInputTokens5m,
+            cacheCreationInputTokens1h: result.usage.cacheCreationInputTokens1h,
+          },
+          serviceTier,
+        ),
     costSource: hasProviderCost ? "provider" : "pricing_table",
   };
 }

@@ -231,6 +231,7 @@ const entityLabels = {
   "entity.RequestLog.cost_source": "비용 출처(provider/pricing_table/mixed)",
   "entity.RequestLog.image_cost_usd": "이미지 생성 비용",
   "entity.RequestLog.image_cost_method": "이미지 비용 계산 방식",
+  "entity.RequestLog.service_tier": "Requested OpenAI service tier",
   "entity.RequestLog.effort": "effort level",
   "entity.RequestLog.history": "inject_items 히스토리",
   "entity.RequestLog.tools": "요청에 장착된 tool 정의 목록",

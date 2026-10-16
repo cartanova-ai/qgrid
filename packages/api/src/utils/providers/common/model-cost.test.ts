@@ -4,6 +4,34 @@ import { calculateCostUsd, getModelCosts } from "./model-cost";
 
 describe("calculateCostUsd", () => {
   it.each([
+    ["gpt-6-astra", 2.6],
+    ["gpt-6.1-sol", 0.5],
+    ["gpt-6-sol", 0.52],
+    ["gpt-6-luna", 0.026],
+    ["gpt-5.6-sol", 1.04],
+    ["gpt-5.6-terra", 0.56],
+    ["gpt-5.6-luna", 0.056],
+  ])("prices %s fast input, cached input, cache writes and output", (model, expected) => {
+    expect(calculateCostUsd(`openai/${model}`, {
+      inputTokens: 160_000, cachedInputTokens: 100_000,
+      cacheCreationInputTokens: 40_000, outputTokens: 10_000,
+    }, "fast")).toBeCloseTo(expected, 10);
+  });
+
+  it("combines Fast API rates with long-context rates, not subscription usage multipliers", () => {
+    expect(calculateCostUsd("openai/gpt-6.1-sol", {
+      inputTokens: 300_000, cachedInputTokens: 200_000, outputTokens: 10_000,
+    }, "fast")).toBeCloseTo(1.18, 10);
+  });
+
+  it("keeps standard pricing for omitted/flex tiers and Anthropic", () => {
+    const usage = { inputTokens: 1_000, outputTokens: 1_000 };
+    expect(calculateCostUsd("gpt-6.1-sol", usage)).toBeCloseTo(0.012, 10);
+    expect(calculateCostUsd("gpt-6.1-sol", usage, "flex")).toBeCloseTo(0.012, 10);
+    expect(calculateCostUsd("claude-sonnet-5-5", usage, "fast")).toBeCloseTo(0.012, 10);
+  });
+
+  it.each([
     [272_000, 2.77],
     [272_001, 5.51502],
   ])("Astra applies the long-context rate only above 272K (%i input)", (inputTokens, expected) => {

@@ -237,6 +237,19 @@ export function getModelCosts(model: string): ModelCosts {
   return OPENAI_COSTS[normalizedModel] ?? ANTHROPIC_COSTS[normalizedModel] ?? DEFAULT_COSTS;
 }
 
+// Verified Fast API rates for the currently served Codex models (2026-10-16).
+// Applies to all token categories and long context; not the 2.5x subscription quota multiplier.
+// https://developers.openai.com/api/docs/pricing
+const OPENAI_FAST_MULTIPLIERS: Record<string, number> = {
+  "gpt-6-astra": 2,
+  "gpt-6.1-sol": 2,
+  "gpt-6-sol": 2,
+  "gpt-6-luna": 2,
+  "gpt-5.6-sol": 2,
+  "gpt-5.6-terra": 2,
+  "gpt-5.6-luna": 2,
+};
+
 export function calculateCostUsd(
   model: string,
   usage: {
@@ -247,6 +260,7 @@ export function calculateCostUsd(
     cacheCreationInputTokens5m?: number;
     cacheCreationInputTokens1h?: number;
   },
+  serviceTier?: string,
 ): number {
   const costs = getModelCosts(model);
   const cachedInput = usage.cachedInputTokens ?? 0;
@@ -281,12 +295,15 @@ export function calculateCostUsd(
     (isLongContext ? lc.inputMultiplier : 1);
   const outputRate = costs.outputTokens * (isLongContext ? lc.outputMultiplier : 1);
 
-  return (
+  const standardCost =
     (nonCachedInput / 1_000_000) * inputRate +
     (usage.outputTokens / 1_000_000) * outputRate +
     (cachedInput / 1_000_000) * cachedRate +
     (unclassifiedCacheCreationInput / 1_000_000) * cacheCreationFallbackRate +
     (classifiedCacheCreationInput5m / 1_000_000) * cacheCreation5mRate +
-    (classifiedCacheCreationInput1h / 1_000_000) * cacheCreation1hRate
+    (classifiedCacheCreationInput1h / 1_000_000) * cacheCreation1hRate;
+  const normalizedModel = model.split("/").pop() ?? model;
+  return (
+    standardCost * (serviceTier === "fast" ? (OPENAI_FAST_MULTIPLIERS[normalizedModel] ?? 1) : 1)
   );
 }

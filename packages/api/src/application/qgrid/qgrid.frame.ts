@@ -286,7 +286,7 @@ class QgridFrameClass extends BaseFrameClass {
       try {
         result = await QgridDispatcher.query(resolvedArgs, disconnect.signal);
       } catch (e) {
-        const completedDriver = completedDriverFromImageFailure(e);
+        const completedDriver = completedDriverFromImageFailure(e, resolvedArgs.serviceTier);
         const completedStep = completedDriver
           ? ([{ stepIndex, result: completedDriver }] as const)
           : ([] as const);

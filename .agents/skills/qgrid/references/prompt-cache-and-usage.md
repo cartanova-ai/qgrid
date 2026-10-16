@@ -64,6 +64,9 @@ Cache-hit rate uses `input_tokens` as its denominator. Do not add cache subfield
 `packages/api/src/utils/providers/common/model-cost.ts` contains model-price fallback.
 
 - OpenAI cost normally uses qgrid's price table.
+- Since 2.10.7, native OpenAI `serviceTier: "fast"` calls apply the verified Fast API multiplier for the actual serving model: 2x for GPT-6 Astra, 6.1 Sol, 6 Sol, 6 Luna, and GPT-5.6 Sol/Terra/Luna (verified 2026-10-16 at https://developers.openai.com/api/docs/pricing). Apply it to input, cached input, cache writes, and output after the existing long-context calculation. Keep the explicit model allowlist; do not extrapolate to unverified or retired models.
+- This is an API-equivalent estimate based on the requested tier, not confirmed upstream billing or subscription quota consumption. Do not use the subscription quota multiplier for dollar costs. Omitted/flex tiers, models without verified Fast rates, and external telemetry keep their existing pricing behavior; positive provider-reported costs remain authoritative.
+- Query, stream, tool turns, and completed chat drivers preserved after image failures share the tier-aware calculation. Image costs stay separate and receive no Fast multiplier. Persist step costs and sum them once; do not reprice existing logs or infer their missing tiers.
 - OpenAI image generation stores a separate `image_cost_usd` estimate because the direct private route does not expose exact image-tool billing.
 - Anthropic prefers a positive Claude Code `total_cost_usd`; otherwise qgrid uses its price table.
 - Preserve Anthropic's five-minute and one-hour cache-creation token split and price each TTL separately.

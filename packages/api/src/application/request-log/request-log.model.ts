@@ -481,6 +481,7 @@ class RequestLogModelClass extends BaseModelClass<
     system_prompt?: string | null;
     requested_model_name?: string | null;
     effort?: string | null;
+    service_tier?: string | null;
     project_name?: string | null;
     history?: unknown;
     tools?: ToolDefinitions;
@@ -496,6 +497,7 @@ class RequestLogModelClass extends BaseModelClass<
       requested_model_name: params.requested_model_name ?? null,
       model_name: null,
       effort: params.effort ?? null,
+      service_tier: params.service_tier ?? null,
       project_name: params.project_name ?? null,
       status: "running",
       response: "",
@@ -546,6 +548,7 @@ class RequestLogModelClass extends BaseModelClass<
       duration_ms?: number;
       requested_model_name?: string | null;
       model_name?: string | null;
+      service_tier?: string | null;
       fallback_count?: number | null;
       cost_usd?: number | null;
       cost_source?: string | null;
@@ -574,6 +577,7 @@ class RequestLogModelClass extends BaseModelClass<
       "duration_ms",
       "requested_model_name",
       "model_name",
+      "service_tier",
       "fallback_count",
       "cost_usd",
       "cost_source",

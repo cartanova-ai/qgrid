@@ -104,11 +104,22 @@ describe("qgrid run lifecycle start", () => {
       system_prompt: "system",
       requested_model_name: "openai/gpt-5-codex",
       effort: undefined,
+      service_tier: undefined,
       project_name: "project",
       history: [{ type: "message", role: "user", content: "earlier" }],
       is_image_generation: undefined,
       json_schema: null,
     });
+  });
+
+  it.each([
+    ["openai/gpt-6-sol", "fast", "fast"],
+    ["openai/gpt-6-sol", "flex", "flex"],
+    ["openai/gpt-6-sol", undefined, undefined],
+    ["anthropic/claude-sonnet-5-5", "fast", undefined],
+  ] as const)("logs service tier for %s with %s", async (model, serviceTier, expected) => {
+    await beforeQuery({ prompt: "hi", model, serviceTier });
+    expect(createRunMock).toHaveBeenCalledWith(expect.objectContaining({ service_tier: expected }));
   });
 
   it.each([false, true, undefined])("does not log ignored effort when thinking is %s", async (thinking) => {
@@ -268,6 +279,13 @@ describe("qgrid run lifecycle TTFT", () => {
         ttftMs: expect.anything(),
       }),
     );
+  });
+
+  it.each(["fast", "flex", undefined] as const)("records the final turn service tier: %s", async (serviceTier) => {
+    await afterQuery(10, 2, { prompt: "hi", model: "openai/gpt-6-sol", serviceTier }, queryOutput());
+    expect(finishRunMock).toHaveBeenCalledWith(10, expect.objectContaining({
+      service_tier: serviceTier ?? null,
+    }));
   });
 
   it("persists an immediate structured final answer as JSON text", async () => {

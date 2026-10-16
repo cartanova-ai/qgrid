@@ -144,6 +144,13 @@
       "desc": "이미지 비용 계산 방식"
     },
     {
+      "name": "service_tier",
+      "type": "string",
+      "length": 20,
+      "nullable": true,
+      "desc": "Requested OpenAI service tier"
+    },
+    {
       "name": "effort",
       "type": "string",
       "length": 10,
@@ -288,6 +295,7 @@
       "image_cost_usd",
       "image_cost_method",
       "effort",
+      "service_tier",
       "history",
       "tools",
       "status",
@@ -318,6 +326,7 @@
       "image_cost_usd",
       "image_cost_method",
       "effort",
+      "service_tier",
       "status",
       "response_json_ok",
       "tool_call_count",

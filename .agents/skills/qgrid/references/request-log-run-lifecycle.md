@@ -61,6 +61,16 @@ This is a forward-only storage normalization. Do not backfill legacy prefixless 
 
 Provider-qualified ids widen `model_name` and `requested_model_name` from 50 to 255 characters on both request-log entities. Generate and apply the normal Sonamu schema migration before running the new server. Do not hand-edit generated types, hand-author a derivable migration, or rewrite existing model values as part of that width migration.
 
+## Requested service tier (2.10.7+)
+
+Native OpenAI query/stream logs store the requested `serviceTier` in nullable `request_logs.service_tier`: `fast`, `flex`, or `NULL` when omitted. Other providers and external telemetry logger calls leave it `NULL`. Creation records the initial turn's tier; successful completion replaces it with the final turn's tier alongside the final model. Pending tool runs and error/aborted runs retain the initial tier; this is not a per-step tier history.
+
+The list and detail subsets expose this field. Show a filled lightning icon in `#1877F2` after the model display only when the stored value is `fast`, with the accessible label and tooltip `Fast 모드`. Do not mark `flex` or `NULL` as fast.
+
+This records caller intent, not the service tier confirmed by the upstream response. The OpenAI transport sends `fast` as `service_tier: "priority"`. Existing rows remain `NULL`; this means unrecorded, not proof of default mode. Do not infer historical tiers from model names, latency, or cost. Apply the generated service-tier migration before using the updated log queries.
+
+Each new generate step stores its tier-aware API-equivalent cost; the parent sums those step costs, including runs whose tier changes between turns. Do not multiply the parent total again based on its final `service_tier`. See `prompt-cache-and-usage.md` for pricing scope.
+
 ## Usage fields
 
 The dashboard total includes driver `cost_usd` and `image_cost_usd` once each. Both the stored sum and legacy driver-price adjustment apply the same normalized Sonamu filters as the list. The `/api/qgrid/stats` `requests` field is an in-memory count of completed provider generations since process start, separated by provider and token name; tool follow-up generations count separately. It is not a persisted lifetime count or a count of failed attempts.

@@ -2,6 +2,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import ChevronLeftIcon from "~icons/lucide/chevron-left";
 import ChevronRightIcon from "~icons/lucide/chevron-right";
 import RefreshIcon from "~icons/lucide/refresh-cw";
+import ZapIcon from "~icons/lucide/zap";
 
 import { cacheHitRate, formatRequestCost, formatUsd } from "@/lib/cost";
 import { requestModelDisplay } from "@/lib/request-model";
@@ -345,6 +346,14 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                         imageCostMethod={row.image_cost_method}
                         fallbackCount={row.fallback_count}
                       />
+                      {row.service_tier === "fast" && (
+                        <span title="Fast 모드" className="ml-1 inline-flex align-middle">
+                          <ZapIcon
+                            aria-label="Fast 모드"
+                            className="size-3 text-[#1877F2] [&_path]:fill-current"
+                          />
+                        </span>
+                      )}
                       {row.response_json_ok === false && (
                         <span
                           title="structured 요청의 응답이 JSON 파싱에 실패했습니다"

@@ -9,7 +9,7 @@
   },
   {
     "path": "api/src/application/qgrid/qgrid.frame.ts",
-    "checksum": "4ff88368a191730ca97bd8e6c5d9629719454a07"
+    "checksum": "32889850b94545b5fb4cf03ae82512b0cc962312"
   },
   {
     "path": "api/src/application/qgrid/qgrid.types.ts",
@@ -33,11 +33,11 @@
   },
   {
     "path": "api/src/application/request-log/request-log.entity.json",
-    "checksum": "75fcf89d75d47d4c1f26a84d5a2371c0d6417d9f"
+    "checksum": "2457b9f795ea4cf7d4e84c82d201d090be89b4dc"
   },
   {
     "path": "api/src/application/request-log/request-log.model.ts",
-    "checksum": "9d26ef4556fe1c3e7f5876f4daddbf1786fa5691"
+    "checksum": "daa74fa28758b335d90af8c1b7bc0a7a51900a22"
   },
   {
     "path": "api/src/application/request-log/request-log.types.ts",
@@ -61,11 +61,11 @@
   },
   {
     "path": "api/src/application/sonamu.generated.sso.ts",
-    "checksum": "b91b4cca6a950d8a91be84ba27bf506ccd61e3c7"
+    "checksum": "c8a076512a98cafea5141fdb5f14c2a62775ea64"
   },
   {
     "path": "api/src/application/sonamu.generated.ts",
-    "checksum": "2173c7a475c7ce7aeb7285e7251634221d5aec7e"
+    "checksum": "45e8375453c460212654f9369acb2310e2303c98"
   },
   {
     "path": "api/src/application/token/token.entity.json",
@@ -89,7 +89,7 @@
   },
   {
     "path": "api/src/i18n/sd.generated.ts",
-    "checksum": "a21928a3605e60517ae6c4579c21f93e80d3cb40"
+    "checksum": "e0f68ca01831472f6765c74e5b8647ca6ff6a130"
   },
   {
     "path": "api/src/sonamu.config.ts",
@@ -105,7 +105,7 @@
   },
   {
     "path": "web/src/i18n/sd.generated.ts",
-    "checksum": "48196242126864c9b44f2ba0b95db57aeb78a269"
+    "checksum": "e318a91d5c27ab9e96a8c12cd5c7f7e7c477a657"
   },
   {
     "path": "web/src/services/monit/monit.types.ts",
@@ -133,7 +133,7 @@
   },
   {
     "path": "web/src/services/sonamu.generated.ts",
-    "checksum": "86ccff527b0f3eb4ae22ba7759bd11893b54d41d"
+    "checksum": "6ab5e5ec243ee8ca2bae50a6d5cd92fe43068d88"
   },
   {
     "path": "web/src/services/token/token.types.ts",

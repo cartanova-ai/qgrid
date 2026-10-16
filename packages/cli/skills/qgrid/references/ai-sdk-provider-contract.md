@@ -146,9 +146,10 @@ Fast mode contract:
 - It is OpenAI/Codex-only. Do not send it to `anthropic/*` models.
 - It works on both `generateText` and `streamText`; it is not an image-model option.
 - Omit `serviceTier` for normal/default routing. qgrid's current API accepts `"fast"` and `"flex"`; callers should not send Codex's normalized `"priority"` value directly.
-- qgrid is a pass-through for this selection. Codex applies the tier only when its Fast mode feature is enabled and the selected model advertises support; otherwise Codex can omit the unsupported tier.
+- qgrid forwards this selection to the subscription backend; sending it does not by itself prove the upstream serving tier. Do not assume that public API Flex discounts or availability apply to the subscription route. Omitting `serviceTier` does not select `flex`.
 - Fast mode changes upstream service-tier routing only. It does not change token weights or client concurrency.
 - Do not promise a fixed latency improvement. Verify TTFT, duration, throughput, and quota consumption with a workload-specific A/B test.
+- Since 2.10.7, native request logs retain the requested tier and show fast requests with a filled blue lightning icon. New OpenAI query/stream costs use the verified Fast API rates for supported current models. See `request-log-run-lifecycle.md` and `prompt-cache-and-usage.md` for storage and pricing semantics.
 
 ## Request construction
 

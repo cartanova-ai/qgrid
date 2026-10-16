@@ -11,6 +11,7 @@ import CheckIcon from "~icons/lucide/check";
 import ChevronDownIcon from "~icons/lucide/chevron-down";
 import CopyIcon from "~icons/lucide/copy";
 import XIcon from "~icons/lucide/x";
+import ZapIcon from "~icons/lucide/zap";
 
 import { cacheHitRate, formatMicroUsd } from "@/lib/cost";
 import { requestModelDisplay } from "@/lib/request-model";
@@ -330,6 +331,14 @@ function HeaderBar({ data }: { data: RequestLog }) {
         {modelDisplay.label === "—" ? "Unknown model" : modelDisplay.label}
       </span>
       {hasRequestedOnly && <span className="text-[10px] text-sand-400">요청</span>}
+      {data.service_tier === "fast" && (
+        <span title="Fast 모드" className="inline-flex shrink-0">
+          <ZapIcon
+            aria-label="Fast 모드"
+            className="size-3.5 text-[#1877F2] [&_path]:fill-current"
+          />
+        </span>
+      )}
       {!isRunning && (data.fallback_count ?? 0) > 0 && (
         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-caution-400/15 text-caution-500 font-medium uppercase">
           fallback ×{data.fallback_count}
