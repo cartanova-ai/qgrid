@@ -86,9 +86,9 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Pro
         signal.removeEventListener("abort", onAbort);
         resolve(value);
       },
-      (error: unknown) => {
+      (cause: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(error);
+        reject(cause);
       },
     );
   });
@@ -275,10 +275,12 @@ export class GrokRefreshCoordinator implements GrokRefresher {
     const rotated = Boolean(tokens.data.refresh_token);
     const exp = decodeGrokJwt(tokens.data.access_token)?.payload.exp;
 
+    const expiresIn = tokens.data.expires_in;
+
     const expiresAtMs =
-      typeof tokens.data.expires_in === "number"
-        ? this.now() + tokens.data.expires_in * 1000
-        : typeof exp === "number"
+      expiresIn !== undefined && expiresIn !== null
+        ? this.now() + expiresIn * 1000
+        : exp !== undefined
           ? exp * 1000
           : undefined;
 

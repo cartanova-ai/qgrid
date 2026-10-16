@@ -1,9 +1,11 @@
-export function createTtftTracker(now: () => number = Date.now): {
+export interface TtftTracker {
   markStart: () => void;
   recordFirstDelta: () => void;
   value: () => number | null;
   wrapDelta: (onDelta: (text: string) => void) => (text: string) => void;
-} {
+}
+
+export function createTtftTracker(now: () => number = Date.now): TtftTracker {
   let startedAt: number | null = null;
   let ttftMs: number | null = null;
 

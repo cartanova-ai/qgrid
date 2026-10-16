@@ -57,12 +57,13 @@ export function tokenIdentityKey(provider: string): TokenIdentityKey {
 
 function applyCreateDefaults(sp: TokenSaveParams): TokenSaveParams {
   if (sp.id !== undefined) return sp;
+  const withDefaults: TokenSaveParams = { ...sp };
 
-  return {
-    ...sp,
-    ...(sp.quota_threshold === undefined ? { quota_threshold: DEFAULT_QUOTA_THRESHOLD } : {}),
-    ...(sp.weight === undefined ? { weight: DEFAULT_WEIGHT } : {}),
-  };
+  if (sp.quota_threshold === undefined) withDefaults.quota_threshold = DEFAULT_QUOTA_THRESHOLD;
+
+  if (sp.weight === undefined) withDefaults.weight = DEFAULT_WEIGHT;
+
+  return withDefaults;
 }
 
 class TokenModelClass extends BaseModelClass<

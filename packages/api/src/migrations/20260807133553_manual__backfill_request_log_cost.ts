@@ -59,18 +59,22 @@ function backfilledCostMicroUsd(row: LegacyRow): number {
 
   const model = row.model_name.includes("/") ? row.model_name.split("/").pop()! : row.model_name;
 
-  const usd = calculateCostUsd(model, {
+  const usage: Parameters<typeof calculateCostUsd>[1] = {
     inputTokens,
     outputTokens: row.output_tokens,
     cachedInputTokens: row.cache_read_tokens,
     cacheCreationInputTokens: row.cache_creation_tokens,
-    ...(row.cache_creation_5m_tokens !== null
-      ? { cacheCreationInputTokens5m: row.cache_creation_5m_tokens }
-      : {}),
-    ...(row.cache_creation_1h_tokens !== null
-      ? { cacheCreationInputTokens1h: row.cache_creation_1h_tokens }
-      : {}),
-  });
+  };
+
+  if (row.cache_creation_5m_tokens !== null) {
+    usage.cacheCreationInputTokens5m = row.cache_creation_5m_tokens;
+  }
+
+  if (row.cache_creation_1h_tokens !== null) {
+    usage.cacheCreationInputTokens1h = row.cache_creation_1h_tokens;
+  }
+
+  const usd = calculateCostUsd(model, usage);
 
   return Math.max(Math.round(usd * MICRO_USD), 0);
 }

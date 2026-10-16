@@ -288,8 +288,8 @@ export interface GrokCallbackInput {
 
 const OAUTH_ERROR_CODE = /^[a-z_]{1,80}$/;
 
-function safeOAuthErrorCode(value: unknown): string | undefined {
-  return typeof value === "string" && OAUTH_ERROR_CODE.test(value) ? value : undefined;
+function safeOAuthErrorCode(value: string): string | undefined {
+  return OAUTH_ERROR_CODE.test(value) ? value : undefined;
 }
 
 /** Accepts the full callback URL or a bare authorization code (oidc/login.rs:30-60). */
@@ -367,7 +367,7 @@ export async function readGrokOAuthErrorCode(response: Response): Promise<string
   }
 }
 
-function formHeaders(extra: Record<string, string> = {}): Record<string, string> {
+function formHeaders(extra: Record<string, string> = {}) {
   return {
     "user-agent": grokShellUserAgent(),
     ...extra,
@@ -393,8 +393,8 @@ async function parseTokenResponse(response: Response): Promise<GrokTokenResponse
   return parsed.data;
 }
 
-function networkError(code: GrokOAuthErrorCode, what: string, error: unknown): GrokOAuthError {
-  const reason = error instanceof Error ? error.name : "unknown";
+function networkError(code: GrokOAuthErrorCode, what: string, cause: unknown): GrokOAuthError {
+  const reason = cause instanceof Error ? cause.name : "unknown";
 
   return new GrokOAuthError(code, `${what} request failed (${reason})`, { retryable: true });
 }
@@ -462,12 +462,14 @@ export async function finishGrokLogin(input: FinishGrokLoginInput): Promise<Grok
     throw new GrokOAuthError("user_id_unresolved", "user lookup did not return a valid userId");
 
   const issuedAt = now();
+  const expiresIn = tokens.expires_in;
+  const jwtExpiry = decoded?.payload.exp;
 
   const expiresAtMs =
-    typeof tokens.expires_in === "number"
-      ? issuedAt + tokens.expires_in * 1000
-      : typeof decoded?.payload.exp === "number"
-        ? decoded.payload.exp * 1000
+    expiresIn !== undefined && expiresIn !== null
+      ? issuedAt + expiresIn * 1000
+      : jwtExpiry !== undefined
+        ? jwtExpiry * 1000
         : undefined;
 
   if (expiresAtMs === undefined || !Number.isFinite(expiresAtMs))
@@ -475,7 +477,7 @@ export async function finishGrokLogin(input: FinishGrokLoginInput): Promise<Grok
 
   const grantedScopes = tokens.scope?.split(" ").filter(Boolean);
 
-  const candidate = {
+  const candidate: GrokCredentials = {
     authMode: "oauth" as const,
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token,
@@ -489,8 +491,9 @@ export async function finishGrokLogin(input: FinishGrokLoginInput): Promise<Grok
     userId: user.data.userId,
     sessionId: randomUUID(),
     agentId: randomUUID(),
-    ...(user.data.subscriptionTier ? { subscriptionTier: user.data.subscriptionTier } : {}),
   };
+
+  if (user.data.subscriptionTier) candidate.subscriptionTier = user.data.subscriptionTier;
 
   const credentials = GrokCredentials.safeParse(candidate);
 
@@ -539,14 +542,14 @@ export async function completeGrokOAuth(input: CompleteGrokOAuthInput): Promise<
 
   if (!response.ok) {
     const oauthError = await readGrokOAuthErrorCode(response);
+    const errorOptions: GrokOAuthError["options"] = { status: response.status };
+
+    if (oauthError !== undefined) errorOptions.oauthError = oauthError;
+    errorOptions.retryable = response.status >= 500;
     throw new GrokOAuthError(
       "token_exchange_failed",
       `token exchange failed: HTTP ${response.status} ${oauthError ?? "unknown"}`,
-      {
-        status: response.status,
-        ...(oauthError === undefined ? {} : { oauthError }),
-        retryable: response.status >= 500,
-      },
+      errorOptions,
     );
   }
 
@@ -571,8 +574,13 @@ const DEVICE_CLIENT_SURFACE = "ui";
 
 function isAllowedVerificationUri(value: string): boolean {
   // device_code.rs:475-488: reject control characters, require https (http only on loopback).
-  if ([...value].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f))
-    return false;
+  // Control characters are single UTF-16 code units, so scanning code units is exact.
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+
+    if (code < 0x20 || code === 0x7f) return false;
+  }
+
   let url: URL;
 
   try {
@@ -663,16 +671,19 @@ export async function startGrokDeviceCode(io: GrokOAuthIo = {}): Promise<GrokDev
     );
   const data = parsed.data;
 
-  return {
+  const deviceCode: GrokDeviceCode = {
     deviceCode: data.device_code,
     userCode: data.user_code,
     verificationUri: data.verification_uri,
-    ...(data.verification_uri_complete
-      ? { verificationUriComplete: data.verification_uri_complete }
-      : {}),
     expiresIn: data.expires_in,
     interval: data.interval ?? GROK_DEVICE_DEFAULT_INTERVAL_S,
   };
+
+  if (data.verification_uri_complete) {
+    deviceCode.verificationUriComplete = data.verification_uri_complete;
+  }
+
+  return deviceCode;
 }
 
 export type GrokDevicePollResult =
@@ -742,11 +753,19 @@ export async function pollGrokDeviceCode(
       throw new GrokOAuthError(
         "device_token_failed",
         `device token request failed: HTTP ${response.status} ${oauthError ?? "unknown"}`,
-        {
-          status: response.status,
-          ...(oauthError === undefined ? {} : { oauthError }),
-          retryable: oauthError === undefined && response.status >= 500,
-        },
+        deviceTokenErrorOptions(response.status, oauthError),
       );
   }
+}
+
+function deviceTokenErrorOptions(
+  status: number,
+  oauthError: string | undefined,
+): GrokOAuthError["options"] {
+  const errorOptions: GrokOAuthError["options"] = { status };
+
+  if (oauthError !== undefined) errorOptions.oauthError = oauthError;
+  errorOptions.retryable = oauthError === undefined && status >= 500;
+
+  return errorOptions;
 }

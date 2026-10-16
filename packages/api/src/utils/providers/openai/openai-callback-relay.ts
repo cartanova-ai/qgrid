@@ -1,6 +1,7 @@
 import http from "node:http";
 
 import { getLogger } from "@logtape/logtape";
+import { z } from "zod";
 
 const logger = getLogger(["qgrid", "oauth"]);
 
@@ -91,7 +92,8 @@ export async function startOpenAICallbackRelay(
     const expiryTimer = setTimeout(() => stopOpenAICallbackRelay(), ttlMs);
     expiryTimer.unref();
     const address = server.address();
-    const boundPort = typeof address === "object" && address ? address.port : port;
+    // server.address() is an AddressInfo for TCP listeners, a string for pipes, or null.
+    const boundPort = z.looseObject({ port: z.number() }).safeParse(address).data?.port ?? port;
     relay = {
       server,
       redirectUri: openAICallbackRedirectUri(boundPort),

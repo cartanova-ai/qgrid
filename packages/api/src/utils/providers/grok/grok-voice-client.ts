@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { classifyGrokHttpError, readGrokResponseHeaders } from "./grok-backend-protocol";
 import { GROK_PUBLIC_API_URL, GROK_STT_DEFAULT_MODEL } from "./grok-constants";
 import { GrokHttpError, grokHttpErrorFromResponse } from "./grok-direct-client";
@@ -32,21 +34,21 @@ const CONNECT_FAILURE_CODES = new Set([
 ]);
 
 // Same subtype mapping as @ai-sdk/provider-utils mediaTypeToExtension.
-const EXTENSION_BY_SUBTYPE: Readonly<Record<string, string>> = {
-  mpeg: "mp3",
-  "x-wav": "wav",
-  opus: "ogg",
-  mp4: "m4a",
-  "x-m4a": "m4a",
-};
+const EXTENSION_BY_SUBTYPE: ReadonlyMap<string, string> = new Map([
+  ["mpeg", "mp3"],
+  ["x-wav", "wav"],
+  ["opus", "ogg"],
+  ["mp4", "m4a"],
+  ["x-m4a", "m4a"],
+]);
 
-const MEDIA_TYPE_BY_FORMAT: Readonly<Record<string, string>> = {
-  mp3: "audio/mpeg",
-  wav: "audio/wav",
-  pcm: "audio/pcm",
-  mulaw: "audio/basic",
-  alaw: "audio/x-alaw-basic",
-};
+const MEDIA_TYPE_BY_FORMAT: ReadonlyMap<string, string> = new Map([
+  ["mp3", "audio/mpeg"],
+  ["wav", "audio/wav"],
+  ["pcm", "audio/pcm"],
+  ["mulaw", "audio/basic"],
+  ["alaw", "audio/x-alaw-basic"],
+]);
 
 export interface GrokVoiceClientOptions {
   fetch?: typeof fetch;
@@ -59,27 +61,41 @@ export interface GrokVoiceClientOptions {
 export type GrokSpeakInput = Pick<GrokTtsRequest, "text"> &
   Partial<Omit<GrokTtsRequest, "text">> & { signal?: AbortSignal };
 
-function errorCodes(error: unknown): string[] {
+// One link of a thrown value's cause chain; any non-null object qualifies.
+const errorChainLink = z.looseObject({
+  code: z.unknown().optional(),
+  errors: z.unknown().optional(),
+  cause: z.unknown().optional(),
+});
+
+const coded = z.looseObject({ code: z.string() });
+
+function errorCodes(cause: unknown): string[] {
   const codes: string[] = [];
-  let current: unknown = error;
+  let link = errorChainLink.safeParse(cause);
 
-  for (let depth = 0; depth < 5 && typeof current === "object" && current !== null; depth++) {
-    if ("code" in current && typeof current.code === "string") codes.push(current.code);
+  for (let depth = 0; depth < 5 && link.success; depth++) {
+    const code = z.string().safeParse(link.data.code);
 
-    if ("errors" in current && Array.isArray(current.errors)) {
-      for (const inner of current.errors)
-        if (typeof inner === "object" && inner !== null && "code" in inner)
-          if (typeof inner.code === "string") codes.push(inner.code);
+    if (code.success) codes.push(code.data);
+    const nested = z.array(z.unknown()).safeParse(link.data.errors);
+
+    if (nested.success) {
+      for (const inner of nested.data) {
+        const innerCode = coded.safeParse(inner);
+
+        if (innerCode.success) codes.push(innerCode.data.code);
+      }
     }
 
-    current = "cause" in current ? current.cause : undefined;
+    link = errorChainLink.safeParse(link.data.cause);
   }
 
   return codes;
 }
 
-function isConnectFailure(error: unknown): boolean {
-  const codes = errorCodes(error);
+function isConnectFailure(cause: unknown): boolean {
+  const codes = errorCodes(cause);
 
   return codes.length > 0 && codes.every((code) => CONNECT_FAILURE_CODES.has(code));
 }
@@ -95,16 +111,11 @@ function abortReason(signal: AbortSignal): Error {
  * POST whose body may have been executed upstream.
  */
 function transportError(message: string, afterSend: boolean, cause: unknown): GrokHttpError {
-  return new GrokHttpError(
-    {
-      ...classifyGrokHttpError(0, "", {}),
-      message,
-      ...(afterSend ? { shouldRetry: false } : {}),
-    },
-    "",
-    {},
-    { cause },
-  );
+  const classification = { ...classifyGrokHttpError(0, "", {}), message };
+
+  if (afterSend) classification.shouldRetry = false;
+
+  return new GrokHttpError(classification, "", {}, { cause });
 }
 
 function invalidBodyError(response: Response, message: string, cause?: unknown): GrokHttpError {
@@ -119,7 +130,7 @@ function invalidBodyError(response: Response, message: string, cause?: unknown):
 function audioExtension(mediaType: string): string {
   const subtype = mediaType.toLowerCase().split(";")[0]?.split("/")[1]?.trim() ?? "";
 
-  return EXTENSION_BY_SUBTYPE[subtype] ?? (/^[a-z0-9.+-]+$/.test(subtype) ? subtype : "bin");
+  return EXTENSION_BY_SUBTYPE.get(subtype) ?? (/^[a-z0-9.+-]+$/.test(subtype) ? subtype : "bin");
 }
 
 function contentMediaType(response: Response): string | undefined {
@@ -170,10 +181,11 @@ export class GrokVoiceClient implements GrokVoicePort {
       }
 
       // The SDK schema allows null language/duration; treat null as absent.
-      const normalized =
-        typeof json === "object" && json !== null
-          ? Object.fromEntries(Object.entries(json).filter(([, value]) => value !== null))
-          : json;
+      const record = z.looseObject({}).safeParse(json);
+
+      const normalized = record.success
+        ? Object.fromEntries(Object.entries(record.data).filter(([, value]) => value !== null))
+        : json;
 
       const parsed = GrokSttResponse.safeParse(normalized);
 
@@ -215,7 +227,7 @@ export class GrokVoiceClient implements GrokVoicePort {
 
       return {
         audio,
-        mediaType: mediaType ?? MEDIA_TYPE_BY_FORMAT[body.format] ?? "application/octet-stream",
+        mediaType: mediaType ?? MEDIA_TYPE_BY_FORMAT.get(body.format) ?? "application/octet-stream",
       };
     });
   }
@@ -235,11 +247,11 @@ export class GrokVoiceClient implements GrokVoicePort {
     const timeout = AbortSignal.timeout(this.timeoutMs);
     const signal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
 
-    const interrupted = (error: unknown): Error | undefined => {
+    const interrupted = (cause: unknown): Error | undefined => {
       if (callerSignal?.aborted) return abortReason(callerSignal);
 
       if (timeout.aborted)
-        return transportError(`timed out after ${this.timeoutMs} ms`, true, error);
+        return transportError(`timed out after ${this.timeoutMs} ms`, true, cause);
 
       return undefined;
     };

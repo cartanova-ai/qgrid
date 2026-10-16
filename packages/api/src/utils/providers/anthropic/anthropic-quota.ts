@@ -28,11 +28,11 @@ export async function readAnthropicQuotaUsage(
 
     const utilization = Math.max(
       ...utilizations.filter(
-        (value): value is number => typeof value === "number" && Number.isFinite(value),
+        (value): value is number => value !== null && value !== undefined && Number.isFinite(value),
       ),
     );
 
-    if (typeof utilization !== "number" || !Number.isFinite(utilization)) {
+    if (!Number.isFinite(utilization)) {
       return { kind: "lookup_failed", reason: "five_hour utilization unavailable" };
     }
 
@@ -42,6 +42,6 @@ export async function readAnthropicQuotaUsage(
       cacheAgeMs: Math.max(Date.now() - cachedAt, 0),
     };
   } catch (e) {
-    return { kind: "lookup_failed", reason: (e as Error).message };
+    return { kind: "lookup_failed", reason: e instanceof Error ? e.message : String(e) };
   }
 }

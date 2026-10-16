@@ -3,6 +3,8 @@ import { Buffer } from "node:buffer";
 import { getLogger } from "@logtape/logtape";
 import { z } from "zod";
 
+import { type JsonValue } from "../../utils/providers/common/provider-types";
+
 // 응답(모델 출력) envelope 의 자원 한도. caller 스키마 전처리 한도(CALLER_SCHEMA_LIMITS)와 값이
 // 같아 보여도 서로 다른 자원을 지키는 독립 상수다 — 스키마 깊이는 인스턴스 깊이를 bound 하지
 // 않으므로(재귀 $ref 허용) 캘러 한도를 조정해도 응답 수용 기준이 따라 움직여선 안 된다.
@@ -109,11 +111,15 @@ export function applyToolCallEmulation(
 
   return answerOutput(
     result,
-    answerKind === "text" ? (parsed.answer as string) : JSON.stringify(parsed.answer),
+    answerKind === "text" ? z.string().parse(parsed.answer) : JSON.stringify(parsed.answer),
     images,
     runContext,
   );
 }
+
+const commentaryToolCallControl = z.looseObject({
+  result: z.looseObject({ action: z.literal("tool_call") }),
+});
 
 export function isToolCallEnvelope(
   text: string,
@@ -124,7 +130,7 @@ export function isToolCallEnvelope(
   if (phase === "commentary") {
     // Commentary is not the structured answer. Only an explicit tool control
     // object is eligible, and that object must still pass the strict parser.
-    let value: unknown;
+    let value: JsonValue;
 
     try {
       value = JSON.parse(text);
@@ -132,16 +138,7 @@ export function isToolCallEnvelope(
       return false;
     }
 
-    if (
-      !value ||
-      typeof value !== "object" ||
-      !("result" in value) ||
-      !value.result ||
-      typeof value.result !== "object" ||
-      !("action" in value.result) ||
-      value.result.action !== "tool_call"
-    )
-      return false;
+    if (!commentaryToolCallControl.safeParse(value).success) return false;
   }
 
   return parseEnvelope(text, tools, answerKind).action === "tool_call";
@@ -154,7 +151,8 @@ function parseEnvelope(text: string, tools: QgridTool[], answerKind: AnswerKind)
     );
   }
 
-  let value: unknown;
+  // JSON.parse without a reviver yields only JSON values.
+  let value: JsonValue;
 
   try {
     value = JSON.parse(text);
@@ -167,9 +165,11 @@ function parseEnvelope(text: string, tools: QgridTool[], answerKind: AnswerKind)
     // 진단에는 위반 원문의 머리가 필요하다(SON-495 전례) — parse 에러 위치만으로는
     // "프로즈로 답했는지 / 펜스가 남았는지 / JSON 이 잘렸는지"를 구분할 수 없다.
     const head = JSON.stringify(text.slice(0, 200));
-    logger.warn(`tool envelope parse failed: ${(error as Error).message}; head=${head}`);
+    logger.warn(
+      `tool envelope parse failed: ${error instanceof Error ? error.message : String(error)}; head=${head}`,
+    );
     throw new ToolCallEmulationError(
-      `invalid tool envelope (response is not JSON — the model ignored the envelope contract; retry is the caller's decision): ${(error as Error).message}; response head: ${head}`,
+      `invalid tool envelope (response is not JSON — the model ignored the envelope contract; retry is the caller's decision): ${error instanceof Error ? error.message : String(error)}; response head: ${head}`,
     );
   }
 
@@ -190,8 +190,9 @@ function parseEnvelope(text: string, tools: QgridTool[], answerKind: AnswerKind)
     );
   }
 
-  // Zod clones JSON objects and drops own "__proto__" keys. The parsed JSON is safe to return
-  // after validation and preserves the caller's exact structured value.
+  // SAFETY: schema.safeParse(value) succeeded above, so value matches { result: EnvelopeResponse }.
+  // Zod clones JSON objects and drops own "__proto__" keys, so the validated raw value is returned
+  // to preserve the caller's exact structured answer.
   const response = (value as { result: EnvelopeResponse }).result;
 
   if (response.action === "tool_call") {
@@ -253,21 +254,25 @@ function appendImages(content: QgridContent[], images?: EmulationImage[]): Qgrid
 
   return [
     ...content,
-    ...images.map(
-      (image): QgridContent => ({
+    ...images.map((image): QgridContent => {
+      const part: Extract<QgridContent, { type: "image" }> = {
         type: "image",
         data: image.data,
-        ...(image.mediaType ? { mediaType: image.mediaType } : {}),
         revisedPrompt: image.revisedPrompt ?? null,
-        ...(image.generation ? { generation: image.generation } : {}),
-      }),
-    ),
+      };
+
+      if (image.mediaType) part.mediaType = image.mediaType;
+
+      if (image.generation) part.generation = image.generation;
+
+      return part;
+    }),
   ];
 }
 
-function assertStructuredEnvelopeComplexity(root: unknown): void {
+function assertStructuredEnvelopeComplexity(root: JsonValue): void {
   const maxDepth = STRUCTURED_ENVELOPE_LIMITS.maxDepth;
-  const stack = [{ value: root, depth: 0 }];
+  const stack: Array<{ value: JsonValue | undefined; depth: number }> = [{ value: root, depth: 0 }];
   let nodes = 0;
 
   while (stack.length > 0) {
@@ -286,11 +291,13 @@ function assertStructuredEnvelopeComplexity(root: unknown): void {
       );
     }
 
-    if (typeof current.value === "number" && !Number.isFinite(current.value)) {
+    // JSON.parse turns out-of-range literals such as 1e999 into ±Infinity; it never yields NaN.
+    if (current.value === Infinity || current.value === -Infinity) {
       throw new ToolCallEmulationError("answer must be valid JSON");
     }
 
-    if (current.value === null || typeof current.value !== "object") continue;
+    // Only JSON arrays and objects are Object instances; primitives and null are leaves.
+    if (!(current.value instanceof Object)) continue;
 
     for (const value of Object.values(current.value)) {
       stack.push({ value, depth: current.depth + 1 });

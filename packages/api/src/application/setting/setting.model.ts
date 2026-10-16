@@ -8,7 +8,7 @@ import {
   exhaustive,
 } from "sonamu";
 
-import { SD, type LocalizedString } from "../../i18n/sd.generated";
+import { SD } from "../../i18n/sd.generated";
 import { SlackNotificationError } from "../../utils/slack-notify";
 import { type SettingSubsetKey, type SettingSubsetMapping } from "../sonamu.generated";
 import { settingSubsetQueries, settingLoaderQueries } from "../sonamu.generated.sso";
@@ -278,7 +278,7 @@ class SettingModelClass extends BaseModelClass<
       return { sent: await sendExpiredTokenReminderNow() };
     } catch (error) {
       if (error instanceof SlackNotificationError) {
-        throw new BadRequestException(error.message as LocalizedString);
+        throw new BadRequestException(SD("error.detail")(error.message));
       }
 
       throw error;

@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 
 import { getLogger } from "@logtape/logtape";
 import { type Knex } from "knex";
+import { z } from "zod";
 
 import { TokenModel } from "./application/token/token.model";
 
@@ -30,10 +31,13 @@ export function resolveStartupMigrationDirs(
 // Sonamu 가 만드는 파일명 규칙: `YYYYMMDDHHmmss_<title>.ts`. 타입 선언이나 README 는 제외한다.
 const MIGRATION_FILE_RE = /^\d{14}_.+\.ts$/;
 
-type MigrationModule = {
-  up?: (knex: Knex) => Promise<unknown>;
-  down?: (knex: Knex) => Promise<unknown>;
-};
+// z.function() checks callability; getMigration wraps the calls in knex's migration contract.
+const migrationFunctionSchema = z.function({ input: [z.unknown()], output: z.unknown() });
+
+const migrationModuleSchema = z.object({
+  up: migrationFunctionSchema,
+  down: migrationFunctionSchema.optional(),
+});
 
 /**
  * 패키지된 CLI 는 `bundle/dist` 에서 실행되는데, knex 기본 FsMigrations 에 `../src/migrations` 를
@@ -60,13 +64,18 @@ export function createStartupMigrationSource(
       const compiled = path.join(dirs.compiledDir, name.replace(/\.ts$/, ".js"));
       const source = path.join(dirs.sourceDir, name);
       const target = existsSync(compiled) ? compiled : source;
-      const module = (await import(pathToFileURL(target).href)) as MigrationModule;
+      const module = migrationModuleSchema.safeParse(await import(pathToFileURL(target).href));
 
-      if (typeof module.up !== "function") {
+      if (!module.success) {
         throw new Error(`migration ${name} has no up() export (${target})`);
       }
 
-      return { up: module.up, down: module.down ?? (async () => undefined) };
+      const { up, down } = module.data;
+
+      return {
+        up: async (knex: Knex) => up(knex),
+        down: async (knex: Knex) => down?.(knex),
+      };
     },
   };
 }
@@ -80,7 +89,10 @@ export type StartupMigrationDeps = {
 // 실제 process.exit(1) 이 worker 를 죽여 남은 테스트가 조용히 pending 으로 빠진다.
 export async function runRequiredMigrations(
   dirs: StartupMigrationDirs = resolveStartupMigrationDirs(),
-  deps: StartupMigrationDeps = { getKnex: () => TokenModel.getDB("w"), exit: process.exit },
+  deps: StartupMigrationDeps = {
+    getKnex: () => TokenModel.getDB("w"),
+    exit: (code) => process.exit(code),
+  },
 ): Promise<void> {
   const log = getLogger(["qgrid", "startup"]);
 
@@ -95,7 +107,7 @@ export async function runRequiredMigrations(
       log.info(`migration: ${migrations.length} applied (batch ${batch})`);
     }
   } catch (error) {
-    log.error(`migration failed: ${(error as Error).message}`);
+    log.error(`migration failed: ${error instanceof Error ? error.message : String(error)}`);
     deps.exit(1);
   }
 }

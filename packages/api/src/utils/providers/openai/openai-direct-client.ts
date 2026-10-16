@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
+import { type ClientRequest } from "node:http";
 
 import WsClient, { type ClientOptions, type RawData } from "ws";
+import { z } from "zod";
 
 import {
   buildCodexIdentityHeaders,
@@ -49,7 +51,7 @@ export interface OpenAIWebSocketLike {
   on(event: "error", listener: (error: Error) => void): this;
   on(
     event: "unexpected-response",
-    listener: (request: unknown, response: { statusCode?: number }) => void,
+    listener: (request: ClientRequest, response: { statusCode?: number }) => void,
   ): this;
   off(event: string, listener: (...args: never[]) => void): this;
   send(data: string, callback?: (error?: Error) => void): void;
@@ -133,7 +135,7 @@ function socketEvents(socket: OpenAIWebSocketLike, signal?: AbortSignal) {
 
   const onError = (error: Error) => push({ kind: "error", error });
 
-  const onUnexpectedResponse = (_request: unknown, response: { statusCode?: number }) =>
+  const onUnexpectedResponse = (_request: ClientRequest, response: { statusCode?: number }) =>
     push({ kind: "rejected", status: response.statusCode });
 
   socket.on("open", onOpen);
@@ -416,24 +418,44 @@ export class OpenAIWebSocketTransport implements OpenAIResponsesTransport {
   }
 }
 
+// OpenAI error bodies carry `error` as a string or as { message, code }; mistyped fields are ignored.
+const openAIErrorBodySchema = z.looseObject({
+  error: z.unknown().optional(),
+  message: z.string().optional().catch(undefined),
+  code: z.string().optional().catch(undefined),
+});
+
+const openAIErrorDetailSchema = z.looseObject({
+  message: z.string().optional().catch(undefined),
+  code: z.string().optional().catch(undefined),
+});
+
+function requestsTransparentImage(
+  imageGeneration: OpenAIResponsesOptions["imageGeneration"],
+): boolean {
+  return (
+    imageGeneration !== undefined &&
+    imageGeneration !== true &&
+    imageGeneration !== false &&
+    imageGeneration.background === "transparent"
+  );
+}
+
 async function responseError(response: Response): Promise<OpenAIProtocolError> {
   const text = await response.text().catch(() => "");
   let message = text || response.statusText || `HTTP ${response.status}`;
   let code: string | undefined;
 
   try {
-    const parsed = JSON.parse(text) as {
-      error?: { message?: string; code?: string } | string;
-      message?: string;
-      code?: string;
-    };
+    const parsed = openAIErrorBodySchema.safeParse(JSON.parse(text));
 
-    const error = parsed.error;
-    message =
-      (typeof error === "object" ? error.message : undefined) ??
-      parsed.message ??
-      (typeof error === "string" ? error : message);
-    code = (typeof error === "object" ? error.code : undefined) ?? parsed.code;
+    if (parsed.success) {
+      const error = parsed.data.error;
+      const errorDetail = openAIErrorDetailSchema.safeParse(error).data;
+      message =
+        errorDetail?.message ?? parsed.data.message ?? z.string().safeParse(error).data ?? message;
+      code = errorDetail?.code ?? parsed.data.code;
+    }
   } catch {
     code = undefined;
   }
@@ -511,11 +533,7 @@ export class OpenAIDirectClient {
   }
 
   responses(options: OpenAIResponsesOptions, signal?: AbortSignal): OpenAIEventStream {
-    if (
-      options.model === "gpt-image-2" ||
-      (typeof options.imageGeneration === "object" &&
-        options.imageGeneration.background === "transparent")
-    ) {
+    if (options.model === "gpt-image-2" || requestsTransparentImage(options.imageGeneration)) {
       return this.standaloneImages(options, signal);
     }
 
@@ -571,8 +589,7 @@ export class OpenAIDirectClient {
 
       const images = await readStandaloneImageResponse(
         response,
-        typeof options.imageGeneration === "object" &&
-          options.imageGeneration.background === "transparent",
+        requestsTransparentImage(options.imageGeneration),
       );
 
       signal?.throwIfAborted();

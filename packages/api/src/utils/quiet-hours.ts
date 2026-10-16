@@ -35,7 +35,12 @@ const SEOUL_FORMATTER = new Intl.DateTimeFormat("en-US", {
   weekday: "short",
 });
 
-function seoulParts(at: Date): { hour: number; weekday: string } {
+interface SeoulTimeParts {
+  hour: number;
+  weekday: string;
+}
+
+function seoulParts(at: Date): SeoulTimeParts {
   const parts = SEOUL_FORMATTER.formatToParts(at);
   const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
   const weekday = parts.find((p) => p.type === "weekday")?.value ?? "";

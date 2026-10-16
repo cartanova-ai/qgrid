@@ -22,7 +22,7 @@ function openaiToken(active = true) {
     provider: "openai",
     active,
     name: "tok-A",
-    credentials: { accessToken: "access", accountId: "account" },
+    credentials: { accessToken: "access", refreshToken: "refresh", accessTokenExpiresAt: 0, accountId: "account" },
     quota_threshold: 80,
     weight: 4,
   };
@@ -70,7 +70,7 @@ describe("TokenSubscriber OpenAI notifications", () => {
     expect(openaiDispatcher.onTokenUpdated).toHaveBeenCalledWith(
       1,
       "tok-A",
-      { accessToken: "access", accountId: "account" },
+      { accessToken: "access", refreshToken: "refresh", accessTokenExpiresAt: 0, accountId: "account" },
       80,
       4,
     );
@@ -90,7 +90,7 @@ describe("TokenSubscriber OpenAI notifications", () => {
     findOneMock.mockResolvedValueOnce({
       ...openaiToken(true),
       provider: "anthropic",
-      credentials: { accessToken: "access", refreshToken: "refresh" },
+      credentials: { accessToken: "access", refreshToken: "refresh", expiresAt: 0, accountUuid: "account" },
     });
 
     await subscriber.handleNotification(JSON.stringify({ op: "UPDATE", id: 1 }));
@@ -98,7 +98,7 @@ describe("TokenSubscriber OpenAI notifications", () => {
     expect(anthropicDispatcher.onTokenUpdated).toHaveBeenCalledWith(
       1,
       "tok-A",
-      { accessToken: "access", refreshToken: "refresh" },
+      { accessToken: "access", refreshToken: "refresh", expiresAt: 0, accountUuid: "account" },
       80,
       4,
     );
@@ -120,7 +120,7 @@ describe("TokenSubscriber OpenAI notifications", () => {
     findOneMock.mockResolvedValueOnce({
       ...openaiToken(true),
       provider: "anthropic",
-      credentials: { accessToken: "access", refreshToken: "refresh" },
+      credentials: { accessToken: "access", refreshToken: "refresh", expiresAt: 0, accountUuid: "account" },
     });
 
     await subscriber.handleNotification(JSON.stringify({ op: "INSERT", id: 1 }));
@@ -132,7 +132,7 @@ describe("TokenSubscriber OpenAI notifications", () => {
     const previous = {
       ...openaiToken(true),
       provider: "anthropic",
-      credentials: { accessToken: "old", refreshToken: "refresh" },
+      credentials: { accessToken: "old", refreshToken: "refresh", expiresAt: 0, accountUuid: "account" },
     };
     const anthropicDispatcher = { onTokenUpdated: vi.fn() };
     const subscriber = new TokenSubscriber(
@@ -148,7 +148,7 @@ describe("TokenSubscriber OpenAI notifications", () => {
     subscriber.tokenChangeHandler = onTokensChanged;
     findOneMock.mockResolvedValueOnce({
       ...previous,
-      credentials: { accessToken: "new", refreshToken: "refresh" },
+      credentials: { accessToken: "new", refreshToken: "refresh", expiresAt: 0, accountUuid: "account" },
     });
 
     await subscriber.handleNotification(JSON.stringify({ op: "UPDATE", id: previous.id }));
@@ -161,7 +161,7 @@ describe("TokenSubscriber OpenAI notifications", () => {
     const previous = {
       ...openaiToken(true),
       provider: "anthropic",
-      credentials: { accessToken: "access", refreshToken: "refresh" },
+      credentials: { accessToken: "access", refreshToken: "refresh", expiresAt: 0, accountUuid: "account" },
     };
     const subscriber = new TokenSubscriber(
       {} as never,
@@ -182,8 +182,14 @@ describe("TokenSubscriber OpenAI notifications", () => {
   });
 
   it("serializes token reloads so rapid weight updates cannot apply backward", async () => {
-    let resolveFirst!: (value: ReturnType<typeof openaiToken>) => void;
-    const firstRow = new Promise<ReturnType<typeof openaiToken>>((resolve) => {
+    const anthropicToken = (weight: number) => ({
+      ...openaiToken(true),
+      provider: "anthropic",
+      credentials: { accessToken: "access", refreshToken: "refresh", expiresAt: 0, accountUuid: "a" },
+      weight,
+    });
+    let resolveFirst!: (value: ReturnType<typeof anthropicToken>) => void;
+    const firstRow = new Promise<ReturnType<typeof anthropicToken>>((resolve) => {
       resolveFirst = resolve;
     });
     const anthropicDispatcher = { onTokenUpdated: vi.fn() };
@@ -196,11 +202,7 @@ describe("TokenSubscriber OpenAI notifications", () => {
         anthropicDispatcher,
       } as never,
     );
-    findOneMock.mockReturnValueOnce(firstRow).mockResolvedValueOnce({
-      ...openaiToken(true),
-      provider: "anthropic",
-      weight: 5,
-    });
+    findOneMock.mockReturnValueOnce(firstRow).mockResolvedValueOnce(anthropicToken(5));
 
     const first = subscriber.handleNotification(JSON.stringify({ op: "UPDATE", id: 1 }));
     const second = subscriber.handleNotification(JSON.stringify({ op: "UPDATE", id: 1 }));
@@ -208,7 +210,7 @@ describe("TokenSubscriber OpenAI notifications", () => {
     await flushPromises();
     expect(findOneMock).toHaveBeenCalledTimes(1);
 
-    resolveFirst({ ...openaiToken(true), provider: "anthropic", weight: 2 });
+    resolveFirst(anthropicToken(2));
     await Promise.all([first, second]);
 
     expect(anthropicDispatcher.onTokenUpdated.mock.calls.map((call) => call[4])).toEqual([2, 5]);
@@ -244,13 +246,13 @@ describe("TokenSubscriber OpenAI notifications", () => {
       {
         ...openaiToken(true),
         provider: "anthropic",
-        credentials: { accessToken: "access-a", refreshToken: "refresh-a" },
+        credentials: { accessToken: "access-a", refreshToken: "refresh-a", expiresAt: 0, accountUuid: "account" },
       },
       {
         ...openaiToken(true),
         id: 2,
         name: "tok-B",
-        credentials: { accessToken: "access-b", accountId: "account-b" },
+        credentials: { accessToken: "access-b", refreshToken: "refresh", accessTokenExpiresAt: 0, accountId: "account-b" },
       },
     ]);
 
@@ -270,7 +272,7 @@ describe("TokenSubscriber OpenAI notifications", () => {
     const currentAnthropic = {
       ...openaiToken(true),
       provider: "anthropic",
-      credentials: { accessToken: "access-a", refreshToken: "refresh-a" },
+      credentials: { accessToken: "access-a", refreshToken: "refresh-a", expiresAt: 0, accountUuid: "account" },
     };
     const dispatcher = {
       tokens: new Map([[currentAnthropic.id, currentAnthropic]]),

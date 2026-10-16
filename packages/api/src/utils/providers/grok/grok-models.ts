@@ -93,15 +93,19 @@ export class GrokModelCatalog {
     options: { fetch?: typeof fetch; signal?: AbortSignal; baseUrl?: string; now?: number },
   ): Promise<GrokModelRefreshResult> {
     try {
-      const { json, headers } = await grokProxyGet("/models", {
+      const getOptions: Parameters<typeof grokProxyGet>[1] = {
         headers: buildGrokProxyGetHeaders({
           bearer: credentials.accessToken,
           userId: credentials.userId,
         }),
-        ...(options.fetch ? { fetch: options.fetch } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}),
-      });
+      };
+
+      if (options.fetch) getOptions.fetch = options.fetch;
+
+      if (options.signal) getOptions.signal = options.signal;
+
+      if (options.baseUrl) getOptions.baseUrl = options.baseUrl;
+      const { json, headers } = await grokProxyGet("/models", getOptions);
 
       const parsed = GrokModelsResponse.safeParse(json);
 

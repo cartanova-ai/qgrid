@@ -171,6 +171,6 @@ export async function readOpenAIQuotaUsage(
       ...(direct ? { raw: data } : {}),
     };
   } catch (e) {
-    return { kind: "lookup_failed", reason: (e as Error).message };
+    return { kind: "lookup_failed", reason: e instanceof Error ? e.message : String(e) };
   }
 }

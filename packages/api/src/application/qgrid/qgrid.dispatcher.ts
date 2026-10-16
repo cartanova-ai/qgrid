@@ -29,6 +29,7 @@ import {
   type OpenAIDispatcher,
 } from "../../utils/providers/openai/openai-dispatcher";
 import { type TokenSubsetA } from "../sonamu.generated";
+import { type TokenCredentials } from "../token/token.types";
 import { decideConvRouting, issueConvContext } from "./conv-routing";
 import {
   maskToken,
@@ -59,7 +60,7 @@ export type StreamingProviderDispatcher = ProviderDispatcher & {
 export type GrokTokenRow = {
   id: number;
   name: string;
-  credentials: unknown;
+  credentials: TokenCredentials;
   quotaThreshold: number | null;
   weight: number;
 };
@@ -68,14 +69,14 @@ export interface GrokTokenSink {
   onTokenAdded(
     id: number,
     name: string,
-    credentials: unknown,
+    credentials: TokenCredentials,
     quotaThreshold: number | null,
     weight: number,
   ): void | Promise<void>;
   onTokenUpdated(
     id: number,
     name: string,
-    credentials: unknown,
+    credentials: TokenCredentials,
     quotaThreshold: number | null,
     weight: number,
   ): void | Promise<void>;
@@ -164,10 +165,7 @@ export class QgridDispatcherClass {
   }
 
   // prefix 없는/미지원 prefix 는 기존대로 ProcessError, 지원 provider 의 미등록은 not-ready.
-  resolveDispatcher(
-    input: QueryInput,
-    provider: string | undefined,
-  ): { provider: ProviderId; dispatcher: StreamingProviderDispatcher } {
+  resolveDispatcher(input: QueryInput, provider: string | undefined): ResolvedDispatcher {
     if (!isProviderId(provider)) throw directLlmApiFallbackNotImplemented(input);
     const dispatcher = this.dispatchers.get(provider);
 
@@ -361,7 +359,10 @@ function buildDirectRequest(
   answerKind: "json" | "text",
   abortSignal: AbortSignal | undefined,
 ): Omit<GenerateRequest, "coldInput" | "coldHistory" | "promptCacheKey" | "preferredTokenId"> {
-  return {
+  const request: Omit<
+    GenerateRequest,
+    "coldInput" | "coldHistory" | "promptCacheKey" | "preferredTokenId"
+  > = {
     model,
     systemPrompt: input.system,
     outputSchema,
@@ -378,14 +379,22 @@ function buildDirectRequest(
     abortSignal,
     imageGeneration: input.imageGeneration,
     imageGenerationOptions: input.imageGenerationOptions,
-    // Opaque namespaces; the Grok dispatcher reads `xai`, OpenAI ignores it.
-    ...(input.providerOptions?.xai
-      ? { providerOptions: { xai: { ...input.providerOptions.xai } } }
-      : {}),
   };
+
+  // Opaque namespaces; the Grok dispatcher reads `xai`, OpenAI ignores it.
+  if (input.providerOptions?.xai) {
+    request.providerOptions = { xai: { ...input.providerOptions.xai } };
+  }
+
+  return request;
 }
 
-function parseProviderRoute(model: string | undefined): { provider?: string; model: string } {
+interface ProviderRoute {
+  provider?: string;
+  model: string;
+}
+
+function parseProviderRoute(model: string | undefined): ProviderRoute {
   if (!model?.includes("/")) {
     return { model: model ?? "" };
   }
@@ -443,12 +452,12 @@ function buildRawOutputSchema(
 }
 
 export function completedDriverFromImageFailure(
-  error: unknown,
+  cause: unknown,
   serviceTier?: string,
 ): QueryOutput | undefined {
-  if (!(error instanceof ImageGenerationError) || !error.completedDriver) return undefined;
+  if (!(cause instanceof ImageGenerationError) || !cause.completedDriver) return undefined;
 
-  return applyToolCallEmulation(toEmulationResult(error.completedDriver, serviceTier), undefined, {
+  return applyToolCallEmulation(toEmulationResult(cause.completedDriver, serviceTier), undefined, {
     answerKind: "text",
   });
 }
@@ -463,7 +472,7 @@ function toEmulationResult(
   const hasProviderCost =
     result.costUsd !== undefined && (result.costSource === "provider" || result.costUsd > 0);
 
-  return {
+  const emulationResult: Omit<QueryOutput, "content" | "finishReason" | "runContext"> = {
     text: result.text,
     tokenName: result.tokenName,
     model: result.model,
@@ -495,10 +504,18 @@ function toEmulationResult(
           serviceTier,
         ),
     costSource: hasProviderCost ? (result.costSource ?? "provider") : "pricing_table",
-    ...(result.providerMetadata?.xai
-      ? { providerMetadata: { xai: result.providerMetadata.xai } }
-      : {}),
   };
+
+  if (result.providerMetadata?.xai) {
+    emulationResult.providerMetadata = { xai: result.providerMetadata.xai };
+  }
+
+  return emulationResult;
 }
 
 export const QgridDispatcher = new QgridDispatcherClass();
+
+interface ResolvedDispatcher {
+  provider: ProviderId;
+  dispatcher: StreamingProviderDispatcher;
+}

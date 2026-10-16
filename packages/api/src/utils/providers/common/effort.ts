@@ -33,7 +33,7 @@ function resolveWithin<T extends string>(
   target: string,
 ): T | undefined {
   if (effort === undefined) return undefined;
-  const rank = levels.indexOf(effort as T);
+  const rank = levels.findIndex((level) => level === effort);
 
   if (rank < 0) {
     logger.debug(`ignoring effort "${effort}" for ${target}: not in ${levels.join("/")}`);
@@ -47,7 +47,7 @@ function resolveWithin<T extends string>(
     return undefined;
   }
 
-  return effort as T;
+  return levels[rank];
 }
 
 /** canonical OpenAI model(`openai/` prefix 제거 후) 기준으로 effort 를 판정한다. */

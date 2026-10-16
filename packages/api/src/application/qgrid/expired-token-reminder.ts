@@ -117,7 +117,7 @@ function scheduleExpiredTokenReminder(runNow: boolean, deps: ExpiredTokenReminde
 
   const run = () =>
     sendReminder(deps, "scheduled").catch((e) =>
-      logger.warn(`reminder failed: ${(e as Error).message}`),
+      logger.warn(`reminder failed: ${e instanceof Error ? e.message : String(e)}`),
     );
 
   if (runNow) void run();

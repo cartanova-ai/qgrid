@@ -41,8 +41,8 @@ export type GrokQuotaUsageResult =
     }
   | { kind: "lookup_failed"; reason: string };
 
-function reasonOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function reasonOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function proxyHeaders(credentials: ProxyCredentials): Record<string, string> {
@@ -51,7 +51,8 @@ function proxyHeaders(credentials: ProxyCredentials): Record<string, string> {
 
 function numberOrNull(value: number | string | undefined): number | null {
   if (value === undefined) return null;
-  const parsed = typeof value === "number" ? value : Number(value);
+  // Number() returns a number argument unchanged and parses a numeric string.
+  const parsed = Number(value);
 
   return Number.isFinite(parsed) ? parsed : null;
 }

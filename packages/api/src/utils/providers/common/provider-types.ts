@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 // qgrid provider route prefix (`<provider>/<model>`). 새 provider 는 여기에만 추가한다.
 export const PROVIDER_IDS = ["openai", "anthropic", "grok"] as const;
 
@@ -14,6 +16,9 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue | undefined }
   | null;
+
+/** Decodes parsed JSON text (for example `JSON.parse` output) into `JsonValue`. */
+export const jsonValueSchema: z.ZodType<JsonValue> = z.json();
 
 export type UserInput =
   | { type: "text"; text: string; text_elements: TextElement[] }

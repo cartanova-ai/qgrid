@@ -7,7 +7,7 @@ import { getLogger } from "@logtape/logtape";
 
 import { QuotaThresholdExceededError } from "../../../application/qgrid/qgrid.types";
 import { TokenModel } from "../../../application/token/token.model";
-import { type AnthropicCredentials } from "../../../application/token/token.types";
+import { AnthropicCredentials } from "../../../application/token/token.types";
 import { getExpiresAt, getRefreshToken } from "../common/credentials";
 import {
   type GenerateRequest,
@@ -45,10 +45,18 @@ export class AnthropicDispatcher implements ProviderDispatcher {
     // NOTIFY는 기존 토큰을 재전송하지 않으므로 시작 시 DB에서 읽는다.
     const tokens = await TokenModel.findActiveByProvider("A", "anthropic");
     tokens.forEach((t) => {
+      const credentials = AnthropicCredentials.safeParse(t.credentials);
+
+      if (!credentials.success) {
+        logger.warn(`skipping token ${t.name}: credentials are not Anthropic OAuth credentials`);
+
+        return;
+      }
+
       this.tokenPool.set(t.id, {
         id: t.id,
         name: t.name,
-        credentials: t.credentials as AnthropicCredentials,
+        credentials: credentials.data,
         quotaThreshold: t.quota_threshold,
         weight: t.weight,
       });
@@ -172,7 +180,7 @@ export class AnthropicDispatcher implements ProviderDispatcher {
     if (thresholded.length === 0) return { eligible: rows, overThresholdTokens: [] };
 
     const eligibleIds = new Set(
-      rows.filter((token) => !this.hasQuotaThreshold(token)).map((token) => token.id),
+      rows.flatMap((token) => (this.hasQuotaThreshold(token) ? [] : [token.id])),
     );
 
     const overThresholdTokens: Array<{ tokenName: string; threshold: number }> = [];
@@ -243,7 +251,7 @@ export class AnthropicDispatcher implements ProviderDispatcher {
       cb.onThreadId?.(result.threadCoord.threadId);
       cb.onComplete(result);
     } catch (e) {
-      cb.onError(e as Error);
+      cb.onError(e instanceof Error ? e : new Error(String(e)));
     }
   }
 
@@ -286,9 +294,11 @@ export class AnthropicDispatcher implements ProviderDispatcher {
             provider: "anthropic",
             name: token.name,
             credentials: token.credentials,
-          } as Parameters<typeof QgridFrame.refreshToken>[0]);
+          });
         } catch (e) {
-          logger.warn(`refresh failed for ${token.name}: ${(e as Error).message}`);
+          logger.warn(
+            `refresh failed for ${token.name}: ${e instanceof Error ? e.message : String(e)}`,
+          );
         }
       }
 

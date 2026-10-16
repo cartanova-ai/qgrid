@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { type JsonValue } from "../common/provider-types";
 import { GROK_AUTH_ISSUER } from "./grok-constants";
 
 // External data (stored credentials, proxy and api.x.ai JSON) is validated with these schemas,
@@ -25,11 +26,14 @@ export interface DecodedGrokJwt {
 
 const BASE64URL_SEGMENT = /^[A-Za-z0-9_-]+$/;
 
-function decodeSegment(segment: string): unknown {
+function decodeSegment(segment: string): JsonValue | undefined {
   if (!BASE64URL_SEGMENT.test(segment)) return undefined;
 
   try {
-    return JSON.parse(Buffer.from(segment, "base64url").toString("utf8"));
+    // JSON.parse without a reviver yields only JSON values.
+    const decoded: JsonValue = JSON.parse(Buffer.from(segment, "base64url").toString("utf8"));
+
+    return decoded;
   } catch {
     return undefined;
   }

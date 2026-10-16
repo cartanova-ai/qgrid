@@ -53,105 +53,107 @@ const LONG_CONTEXT_272K: NonNullable<ModelCosts["longContext"]> = {
 // 미기재 모델은 xhigh 까지만 받는다.
 type OpenAIModelSpec = ModelCosts & { maxEffort?: OpenAIEffort };
 
-const OPENAI_COSTS: Record<string, OpenAIModelSpec> = {
-  // GPT-6 Astra: Standard API-equivalent pricing, verified 2026-09-07.
-  // Codex subscription catalog supports ultra; the public API lists only through max.
-  // @see https://developers.openai.com/api/docs/models/gpt-6-astra
-  // @see https://developers.openai.com/api/docs/pricing
-  "gpt-6-astra": {
-    maxEffort: "ultra",
-    inputTokens: 10,
-    outputTokens: 50,
-    cachedInputTokens: 1,
-    cacheCreationInputTokens: 12.5,
-    longContext: LONG_CONTEXT_272K,
-  },
-  // GPT-6.1 Sol (2026-09-29 DevDay 출시): Standard API pricing verified 2026-09-30. GPT-6 Sol 과 같고 cached input 만 절반.
-  // Codex 카탈로그(2026-09-30)는 ultra 까지 허용하고 기본 effort 는 low 다(GPT-6 Sol 은 medium).
-  // qgrid 의 요청 형태 + codex_cli_rs/0.147.0 헤더로 2026-09-30 구독 경로 라이브 생성 성공.
-  // @see https://developers.openai.com/api/docs/models/gpt-6.1-sol
-  "gpt-6.1-sol": {
-    maxEffort: "ultra",
-    inputTokens: 2,
-    outputTokens: 10,
-    cachedInputTokens: 0.1,
-    cacheCreationInputTokens: 2.5,
-    longContext: LONG_CONTEXT_272K,
-  },
-  // GPT-6 Sol, Luna (2026-09-22 출시): Standard API pricing verified 2026-09-23. GPT-5.6 Sol/Luna 의 절반 단가.
-  // Codex 카탈로그(2026-09-23)는 Sol 에 ultra, Luna 에 max 까지 허용하고 기본 effort 는 둘 다 medium 이다.
-  // @see https://developers.openai.com/api/docs/models/gpt-6-sol
-  // @see https://developers.openai.com/api/docs/models/gpt-6-luna
-  "gpt-6-sol": {
-    maxEffort: "ultra",
-    inputTokens: 2,
-    outputTokens: 10,
-    cachedInputTokens: 0.2,
-    cacheCreationInputTokens: 2.5,
-    longContext: LONG_CONTEXT_272K,
-  },
-  "gpt-6-luna": {
-    maxEffort: "max",
-    inputTokens: 0.1,
-    outputTokens: 0.5,
-    cachedInputTokens: 0.01,
-    cacheCreationInputTokens: 0.125,
-    longContext: LONG_CONTEXT_272K,
-  },
-  // GPT-5.6 Sol, Terra, Luna. cache write 단가는 외부 logger/manual usage 입력을 위해
-  // 유지한다. 현재 OpenAI 응답 usage 에 cache write 토큰 필드가 없으면 비용은 0으로 계산된다.
-  // @see https://developers.openai.com/api/docs/models/gpt-5.6-sol
-  // @see https://developers.openai.com/api/docs/models/gpt-5.6-terra
-  // @see https://developers.openai.com/api/docs/models/gpt-5.6-luna
-  // Sol promotional rates are available at least through 2026-11-21.
-  // No confirmed end date/replacement rate: recheck official pricing instead of auto-reverting.
-  "gpt-5.6-sol": {
-    maxEffort: "ultra",
-    inputTokens: 4,
-    outputTokens: 20,
-    cachedInputTokens: 0.4,
-    cacheCreationInputTokens: 5,
-    longContext: LONG_CONTEXT_272K,
-  },
-  "gpt-5.6-terra": {
-    maxEffort: "ultra",
-    inputTokens: 2,
-    outputTokens: 12,
-    cachedInputTokens: 0.2,
-    cacheCreationInputTokens: 2.5,
-    longContext: LONG_CONTEXT_272K,
-  },
-  "gpt-5.6-luna": {
-    maxEffort: "max",
-    inputTokens: 0.2,
-    outputTokens: 1.2,
-    cachedInputTokens: 0.02,
-    cacheCreationInputTokens: 0.25,
-    longContext: LONG_CONTEXT_272K,
-  },
-  // https://openai.com/index/introducing-gpt-5-5/ (2026-04 출시)
-  "gpt-5.5": {
-    inputTokens: 5,
-    outputTokens: 30,
-    cachedInputTokens: 0.5,
-    longContext: LONG_CONTEXT_272K,
-  },
-  // 아래 gpt-5.4 / gpt-5.4-mini / gpt-5.3-codex / gpt-5.2 는 qgrid 가 쓰는 ChatGPT 구독 Codex 경로에서
-  // 더 이상 제공되지 않는다(5.4 계열은 2026-08-31 retired, 대체 gpt-5.6-terra / gpt-5.6-luna).
-  // 과거 request log 재산정(cost_source 없는 legacy 행)에 필요하므로 단가 행은 유지한다.
-  // https://openai.com/index/introducing-gpt-5-4/ (2026-03 출시)
-  "gpt-5.4": {
-    inputTokens: 2.5,
-    outputTokens: 15,
-    cachedInputTokens: 0.25,
-    longContext: LONG_CONTEXT_272K,
-  },
-  "gpt-5.4-mini": { inputTokens: 0.75, outputTokens: 4.5, cachedInputTokens: 0.075 },
-  // gpt-5.2와 동일 단가 (cached = input의 10%)
-  "gpt-5.3-codex": { inputTokens: 1.75, outputTokens: 14, cachedInputTokens: 0.175 },
-  // https://openai.com/index/introducing-gpt-5-2/ (cached input 90% 할인 명시)
-  "gpt-5.2": { inputTokens: 1.75, outputTokens: 14, cachedInputTokens: 0.175 },
-};
+const OPENAI_COSTS = new Map<string, OpenAIModelSpec>(
+  Object.entries({
+    // GPT-6 Astra: Standard API-equivalent pricing, verified 2026-09-07.
+    // Codex subscription catalog supports ultra; the public API lists only through max.
+    // @see https://developers.openai.com/api/docs/models/gpt-6-astra
+    // @see https://developers.openai.com/api/docs/pricing
+    "gpt-6-astra": {
+      maxEffort: "ultra",
+      inputTokens: 10,
+      outputTokens: 50,
+      cachedInputTokens: 1,
+      cacheCreationInputTokens: 12.5,
+      longContext: LONG_CONTEXT_272K,
+    },
+    // GPT-6.1 Sol (2026-09-29 DevDay 출시): Standard API pricing verified 2026-09-30. GPT-6 Sol 과 같고 cached input 만 절반.
+    // Codex 카탈로그(2026-09-30)는 ultra 까지 허용하고 기본 effort 는 low 다(GPT-6 Sol 은 medium).
+    // qgrid 의 요청 형태 + codex_cli_rs/0.147.0 헤더로 2026-09-30 구독 경로 라이브 생성 성공.
+    // @see https://developers.openai.com/api/docs/models/gpt-6.1-sol
+    "gpt-6.1-sol": {
+      maxEffort: "ultra",
+      inputTokens: 2,
+      outputTokens: 10,
+      cachedInputTokens: 0.1,
+      cacheCreationInputTokens: 2.5,
+      longContext: LONG_CONTEXT_272K,
+    },
+    // GPT-6 Sol, Luna (2026-09-22 출시): Standard API pricing verified 2026-09-23. GPT-5.6 Sol/Luna 의 절반 단가.
+    // Codex 카탈로그(2026-09-23)는 Sol 에 ultra, Luna 에 max 까지 허용하고 기본 effort 는 둘 다 medium 이다.
+    // @see https://developers.openai.com/api/docs/models/gpt-6-sol
+    // @see https://developers.openai.com/api/docs/models/gpt-6-luna
+    "gpt-6-sol": {
+      maxEffort: "ultra",
+      inputTokens: 2,
+      outputTokens: 10,
+      cachedInputTokens: 0.2,
+      cacheCreationInputTokens: 2.5,
+      longContext: LONG_CONTEXT_272K,
+    },
+    "gpt-6-luna": {
+      maxEffort: "max",
+      inputTokens: 0.1,
+      outputTokens: 0.5,
+      cachedInputTokens: 0.01,
+      cacheCreationInputTokens: 0.125,
+      longContext: LONG_CONTEXT_272K,
+    },
+    // GPT-5.6 Sol, Terra, Luna. cache write 단가는 외부 logger/manual usage 입력을 위해
+    // 유지한다. 현재 OpenAI 응답 usage 에 cache write 토큰 필드가 없으면 비용은 0으로 계산된다.
+    // @see https://developers.openai.com/api/docs/models/gpt-5.6-sol
+    // @see https://developers.openai.com/api/docs/models/gpt-5.6-terra
+    // @see https://developers.openai.com/api/docs/models/gpt-5.6-luna
+    // Sol promotional rates are available at least through 2026-11-21.
+    // No confirmed end date/replacement rate: recheck official pricing instead of auto-reverting.
+    "gpt-5.6-sol": {
+      maxEffort: "ultra",
+      inputTokens: 4,
+      outputTokens: 20,
+      cachedInputTokens: 0.4,
+      cacheCreationInputTokens: 5,
+      longContext: LONG_CONTEXT_272K,
+    },
+    "gpt-5.6-terra": {
+      maxEffort: "ultra",
+      inputTokens: 2,
+      outputTokens: 12,
+      cachedInputTokens: 0.2,
+      cacheCreationInputTokens: 2.5,
+      longContext: LONG_CONTEXT_272K,
+    },
+    "gpt-5.6-luna": {
+      maxEffort: "max",
+      inputTokens: 0.2,
+      outputTokens: 1.2,
+      cachedInputTokens: 0.02,
+      cacheCreationInputTokens: 0.25,
+      longContext: LONG_CONTEXT_272K,
+    },
+    // https://openai.com/index/introducing-gpt-5-5/ (2026-04 출시)
+    "gpt-5.5": {
+      inputTokens: 5,
+      outputTokens: 30,
+      cachedInputTokens: 0.5,
+      longContext: LONG_CONTEXT_272K,
+    },
+    // 아래 gpt-5.4 / gpt-5.4-mini / gpt-5.3-codex / gpt-5.2 는 qgrid 가 쓰는 ChatGPT 구독 Codex 경로에서
+    // 더 이상 제공되지 않는다(5.4 계열은 2026-08-31 retired, 대체 gpt-5.6-terra / gpt-5.6-luna).
+    // 과거 request log 재산정(cost_source 없는 legacy 행)에 필요하므로 단가 행은 유지한다.
+    // https://openai.com/index/introducing-gpt-5-4/ (2026-03 출시)
+    "gpt-5.4": {
+      inputTokens: 2.5,
+      outputTokens: 15,
+      cachedInputTokens: 0.25,
+      longContext: LONG_CONTEXT_272K,
+    },
+    "gpt-5.4-mini": { inputTokens: 0.75, outputTokens: 4.5, cachedInputTokens: 0.075 },
+    // gpt-5.2와 동일 단가 (cached = input의 10%)
+    "gpt-5.3-codex": { inputTokens: 1.75, outputTokens: 14, cachedInputTokens: 0.175 },
+    // https://openai.com/index/introducing-gpt-5-2/ (cached input 90% 할인 명시)
+    "gpt-5.2": { inputTokens: 1.75, outputTokens: 14, cachedInputTokens: 0.175 },
+  }),
+);
 
 // ── Anthropic ───────────────────────────────────────────────────────
 
@@ -160,7 +162,7 @@ function anthropicCosts(
   outputTokens: number,
   overrides: Pick<Partial<ModelCosts>, "cachedInputTokens" | "longContext"> = {},
 ): ModelCosts {
-  return {
+  const costs: ModelCosts = {
     inputTokens,
     outputTokens,
     // 표준 cache read 는 base input 의 0.1x. Fable 5.1 처럼 공식 특례 단가가 있으면 override 한다.
@@ -170,58 +172,63 @@ function anthropicCosts(
     cacheCreationInputTokens: inputTokens * 2,
     cacheCreationInputTokens5m: inputTokens * 1.25,
     cacheCreationInputTokens1h: inputTokens * 2,
-    // Haiku 5.5 처럼 프롬프트 길이 티어가 있는 모델만 long-context 배율을 가진다.
-    ...(overrides.longContext ? { longContext: overrides.longContext } : {}),
   };
+
+  // Haiku 5.5 처럼 프롬프트 길이 티어가 있는 모델만 long-context 배율을 가진다.
+  if (overrides.longContext) costs.longContext = overrides.longContext;
+
+  return costs;
 }
 
 // 가격 출처: https://platform.claude.com/docs/en/about-claude/pricing (2026-10-08 확인. 2026-10-07 에 Sonnet 5.5
 // cache read 가 $0.20→$0.10(0.05x)으로 인하됐고, 그 외 기존 모델 단가는 변동 없음)
-const ANTHROPIC_COSTS: Record<string, ModelCosts> = {
-  // Fable 5.1 (2026-09-01 출시): input/output 은 Fable 5 와 같고 cache read 만 0.025x($0.25) 특례.
-  // @see https://platform.claude.com/docs/en/models/fable-5-1/overview
-  "claude-fable-5-1": anthropicCosts(10, 50, { cachedInputTokens: 0.25 }),
-  "claude-fable-5": anthropicCosts(10, 50),
-  sonnet: anthropicCosts(3, 15),
-  "claude-3-5-haiku": anthropicCosts(0.8, 4),
-  "claude-haiku-4-5": anthropicCosts(1, 5),
-  "claude-3-5-sonnet": anthropicCosts(3, 15),
-  "claude-3-7-sonnet": anthropicCosts(3, 15),
-  "claude-sonnet-4": anthropicCosts(3, 15),
-  "claude-sonnet-4-5": anthropicCosts(3, 15),
-  "claude-sonnet-4-6": anthropicCosts(3, 15),
-  "claude-sonnet-4-7": anthropicCosts(3, 15),
-  "claude-opus-4": anthropicCosts(15, 75),
-  "claude-opus-4-1": anthropicCosts(15, 75),
-  "claude-opus-4-5": anthropicCosts(5, 25),
-  "claude-opus-4-6": anthropicCosts(5, 25),
-  "claude-opus-4-7": anthropicCosts(5, 25),
-  "claude-opus-4-8": anthropicCosts(5, 25),
-  "claude-opus-5": anthropicCosts(5, 25),
-  // Opus 5.5 (2026-09-22 출시): $4/$20. cache read 는 0.05x($0.20) 특례, cache write 는 표준 배율($5/$8).
-  // @see https://platform.claude.com/docs/en/models/opus-5-5/overview
-  "claude-opus-5-5": anthropicCosts(4, 20, { cachedInputTokens: 0.2 }),
-  // Sonnet 5 의 introductory $2/$10 이 정식 단가로 확정됐다. 2026-09-01 에 예정됐던 $3/$15 인상은
-  // 취소됐으므로 날짜 분기 없이 고정 단가로 계산한다.
-  "claude-sonnet-5": anthropicCosts(2, 10),
-  // Sonnet 5.5 (2026-09-28 출시): Sonnet 5 와 같은 $2/$10. cache read 는 출시 시 표준 0.1x($0.20)였다가
-  // 2026-10-07 Haiku 5.5 출시와 함께 Opus 5.5 와 같은 0.05x($0.10)로 인하됐다(API 릴리스 노트). 비용은 요청 시점
-  // 단가로 기록되므로 날짜 분기 없이 현행 단가만 둔다. cache write 는 표준 배율($2.50/$4).
-  // @see https://platform.claude.com/docs/en/release-notes/overview (2026-10-07)
-  "claude-sonnet-5-5": anthropicCosts(2, 10, { cachedInputTokens: 0.1 }),
-  // Haiku 5.5 (2026-10-07 출시): 프롬프트 길이 티어 단가. 100K 이하 $0.10/$0.50, cache read 0.1x($0.01),
-  // cache write 5m $0.125 / 1h $0.20. 입력이 100K 를 넘으면 input/cache read/cache write/output 모두 5x
-  // ($0.50/$0.05/$0.625·$1/$2.50)가 요청 전체에 적용된다. 1M 컨텍스트 모델 중 유일하게 길이별 단가를 쓴다.
-  // @see https://platform.claude.com/docs/en/models/haiku-5-5/overview
-  "claude-haiku-5-5": anthropicCosts(0.1, 0.5, {
-    longContext: {
-      threshold: 100_000,
-      inputMultiplier: 5,
-      cachedInputMultiplier: 5,
-      outputMultiplier: 5,
-    },
+const ANTHROPIC_COSTS = new Map<string, ModelCosts>(
+  Object.entries({
+    // Fable 5.1 (2026-09-01 출시): input/output 은 Fable 5 와 같고 cache read 만 0.025x($0.25) 특례.
+    // @see https://platform.claude.com/docs/en/models/fable-5-1/overview
+    "claude-fable-5-1": anthropicCosts(10, 50, { cachedInputTokens: 0.25 }),
+    "claude-fable-5": anthropicCosts(10, 50),
+    sonnet: anthropicCosts(3, 15),
+    "claude-3-5-haiku": anthropicCosts(0.8, 4),
+    "claude-haiku-4-5": anthropicCosts(1, 5),
+    "claude-3-5-sonnet": anthropicCosts(3, 15),
+    "claude-3-7-sonnet": anthropicCosts(3, 15),
+    "claude-sonnet-4": anthropicCosts(3, 15),
+    "claude-sonnet-4-5": anthropicCosts(3, 15),
+    "claude-sonnet-4-6": anthropicCosts(3, 15),
+    "claude-sonnet-4-7": anthropicCosts(3, 15),
+    "claude-opus-4": anthropicCosts(15, 75),
+    "claude-opus-4-1": anthropicCosts(15, 75),
+    "claude-opus-4-5": anthropicCosts(5, 25),
+    "claude-opus-4-6": anthropicCosts(5, 25),
+    "claude-opus-4-7": anthropicCosts(5, 25),
+    "claude-opus-4-8": anthropicCosts(5, 25),
+    "claude-opus-5": anthropicCosts(5, 25),
+    // Opus 5.5 (2026-09-22 출시): $4/$20. cache read 는 0.05x($0.20) 특례, cache write 는 표준 배율($5/$8).
+    // @see https://platform.claude.com/docs/en/models/opus-5-5/overview
+    "claude-opus-5-5": anthropicCosts(4, 20, { cachedInputTokens: 0.2 }),
+    // Sonnet 5 의 introductory $2/$10 이 정식 단가로 확정됐다. 2026-09-01 에 예정됐던 $3/$15 인상은
+    // 취소됐으므로 날짜 분기 없이 고정 단가로 계산한다.
+    "claude-sonnet-5": anthropicCosts(2, 10),
+    // Sonnet 5.5 (2026-09-28 출시): Sonnet 5 와 같은 $2/$10. cache read 는 출시 시 표준 0.1x($0.20)였다가
+    // 2026-10-07 Haiku 5.5 출시와 함께 Opus 5.5 와 같은 0.05x($0.10)로 인하됐다(API 릴리스 노트). 비용은 요청 시점
+    // 단가로 기록되므로 날짜 분기 없이 현행 단가만 둔다. cache write 는 표준 배율($2.50/$4).
+    // @see https://platform.claude.com/docs/en/release-notes/overview (2026-10-07)
+    "claude-sonnet-5-5": anthropicCosts(2, 10, { cachedInputTokens: 0.1 }),
+    // Haiku 5.5 (2026-10-07 출시): 프롬프트 길이 티어 단가. 100K 이하 $0.10/$0.50, cache read 0.1x($0.01),
+    // cache write 5m $0.125 / 1h $0.20. 입력이 100K 를 넘으면 input/cache read/cache write/output 모두 5x
+    // ($0.50/$0.05/$0.625·$1/$2.50)가 요청 전체에 적용된다. 1M 컨텍스트 모델 중 유일하게 길이별 단가를 쓴다.
+    // @see https://platform.claude.com/docs/en/models/haiku-5-5/overview
+    "claude-haiku-5-5": anthropicCosts(0.1, 0.5, {
+      longContext: {
+        threshold: 100_000,
+        inputMultiplier: 5,
+        cachedInputMultiplier: 5,
+        outputMultiplier: 5,
+      },
+    }),
   }),
-};
+);
 
 // gpt-5.3-codex-spark 는 research preview 로 공식 token 단가가 아직 final 이 아니다.
 // 지원 타입은 유지하되, 공식 단가가 공개될 때까지 아래 generic estimate 로 계산한다.
@@ -253,17 +260,21 @@ function grokTokenCosts(input: number, cached: number, output: number): ModelCos
   };
 }
 
-const GROK_COSTS: Record<string, ModelCosts> = {
-  "grok-4.7": grokTokenCosts(20_000, 5_000, 60_000),
-  "grok-4.6": grokTokenCosts(20_000, 5_000, 60_000),
-  "grok-4.5": grokTokenCosts(20_000, 5_000, 60_000),
-};
+const GROK_COSTS = new Map<string, ModelCosts>(
+  Object.entries({
+    "grok-4.7": grokTokenCosts(20_000, 5_000, 60_000),
+    "grok-4.6": grokTokenCosts(20_000, 5_000, 60_000),
+    "grok-4.5": grokTokenCosts(20_000, 5_000, 60_000),
+  }),
+);
 
 // Ticks per generated image at the default 1k resolution (the probe's quality 1k image cost exactly
 // this amount). Unlisted image models have no estimate.
-const GROK_IMAGE_PRICE_TICKS: Record<string, number> = {
-  "grok-imagine-image-quality": 500_000_000,
-};
+const GROK_IMAGE_PRICE_TICKS = new Map<string, number>(
+  Object.entries({
+    "grok-imagine-image-quality": 500_000_000,
+  }),
+);
 
 export interface GrokMediaCost {
   costUsd: number;
@@ -282,7 +293,7 @@ export function grokImageCost(
   reportedTicks?: number,
 ): GrokMediaCost | undefined {
   if (reportedTicks !== undefined) return grokReportedCost(reportedTicks);
-  const perImage = GROK_IMAGE_PRICE_TICKS[model.split("/").pop() ?? model];
+  const perImage = GROK_IMAGE_PRICE_TICKS.get(model.split("/").pop() ?? model);
 
   if (perImage === undefined) return undefined;
   const ticks = perImage * imageCount;
@@ -299,16 +310,16 @@ export function grokReportedCost(reportedTicks: number | undefined): GrokMediaCo
 
 /** Codex 백엔드가 이 모델에 허용하는 최대 effort. 카탈로그에 없는 모델은 xhigh 까지다. */
 export function openaiModelMaxEffort(model: string): OpenAIEffort {
-  return OPENAI_COSTS[model]?.maxEffort ?? "xhigh";
+  return OPENAI_COSTS.get(model)?.maxEffort ?? "xhigh";
 }
 
 export function getModelCosts(model: string): ModelCosts {
   const normalizedModel = (model.split("/").pop() ?? model).replace(/\[1m\]$/i, "");
 
   return (
-    OPENAI_COSTS[normalizedModel] ??
-    ANTHROPIC_COSTS[normalizedModel] ??
-    GROK_COSTS[normalizedModel] ??
+    OPENAI_COSTS.get(normalizedModel) ??
+    ANTHROPIC_COSTS.get(normalizedModel) ??
+    GROK_COSTS.get(normalizedModel) ??
     DEFAULT_COSTS
   );
 }
@@ -316,15 +327,17 @@ export function getModelCosts(model: string): ModelCosts {
 // Verified Fast API rates for the currently served Codex models (2026-10-16).
 // Applies to all token categories and long context; not the 2.5x subscription quota multiplier.
 // https://developers.openai.com/api/docs/pricing
-const OPENAI_FAST_MULTIPLIERS: Record<string, number> = {
-  "gpt-6-astra": 2,
-  "gpt-6.1-sol": 2,
-  "gpt-6-sol": 2,
-  "gpt-6-luna": 2,
-  "gpt-5.6-sol": 2,
-  "gpt-5.6-terra": 2,
-  "gpt-5.6-luna": 2,
-};
+const OPENAI_FAST_MULTIPLIERS = new Map<string, number>(
+  Object.entries({
+    "gpt-6-astra": 2,
+    "gpt-6.1-sol": 2,
+    "gpt-6-sol": 2,
+    "gpt-6-luna": 2,
+    "gpt-5.6-sol": 2,
+    "gpt-5.6-terra": 2,
+    "gpt-5.6-luna": 2,
+  }),
+);
 
 export function calculateCostUsd(
   model: string,
@@ -391,6 +404,7 @@ export function calculateCostUsd(
   const normalizedModel = model.split("/").pop() ?? model;
 
   return (
-    standardCost * (serviceTier === "fast" ? (OPENAI_FAST_MULTIPLIERS[normalizedModel] ?? 1) : 1)
+    standardCost *
+    (serviceTier === "fast" ? (OPENAI_FAST_MULTIPLIERS.get(normalizedModel) ?? 1) : 1)
   );
 }

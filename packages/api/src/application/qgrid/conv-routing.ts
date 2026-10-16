@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 /**
  * conv-routing — 대화 연속성(cache affinity) 좌표 검증/구성.
  *
@@ -5,10 +7,11 @@
  * Direct provider(OpenAI, Grok)의 epoch=-1 좌표는 system/model hash와 opaque affinity를 검증한 뒤
  * token 선택과 prompt-cache 힌트로만 사용한다.
  */
-import { createHash } from "node:crypto";
+import { z } from "zod";
 
 import { type ReuseThreadCoord } from "../../utils/providers/common/provider-dispatcher";
 import {
+  jsonValueSchema,
   type JsonValue,
   type ProviderId,
   type UserInput,
@@ -70,7 +73,7 @@ export function decideConvRouting(
   );
 
   const history: Array<JsonValue> | undefined = input.history
-    ? (JSON.parse(input.history) as Array<JsonValue>)
+    ? z.array(jsonValueSchema).parse(JSON.parse(input.history))
     : undefined;
 
   const coord = input.runContext?.threadCoord;

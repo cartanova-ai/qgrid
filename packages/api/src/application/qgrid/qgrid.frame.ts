@@ -77,6 +77,10 @@ import {
 import { MICRO_USD, RequestLogModel } from "../request-log/request-log.model";
 import { type RequestLogListParams } from "../request-log/request-log.types";
 import { type TokenSubsetA } from "../sonamu.generated";
+
+/** Fields token refresh reads; dispatchers pass their pooled view of a token. */
+type RefreshableToken = Pick<TokenSubsetA, "id" | "name" | "provider" | "credentials">;
+
 import { TokenModel, type TokenUpdateFields } from "../token/token.model";
 import { GrokCredentials as StoredGrokCredentials, TokenCredentials } from "../token/token.types";
 import {
@@ -318,7 +322,9 @@ function parsePastedOAuthResult(input: string): { code: string; state: string } 
 function rejectImageGenerationStream(args: QueryInput): void {
   if (!args.imageGeneration && args.model !== `openai/${CODEX_IMAGE_GENERATION_MODEL}`) return;
   throw new BadRequestException(
-    "qgrid: imageGeneration is not supported with streaming; use query or generateImage with qgrid.image() instead." as LocalizedString,
+    SD("error.detail")(
+      "qgrid: imageGeneration is not supported with streaming; use query or generateImage with qgrid.image() instead.",
+    ),
   );
 }
 
@@ -329,13 +335,17 @@ function rejectInvalidImageQuery(args: QueryInput): void {
 
   if (standalone && args.imageGeneration !== true) {
     throw new BadRequestException(
-      "qgrid: the image model requires imageGeneration: true; use qgrid.image() with generateImage." as LocalizedString,
+      SD("error.detail")(
+        "qgrid: the image model requires imageGeneration: true; use qgrid.image() with generateImage.",
+      ),
     );
   }
 
   if (args.tools?.length || args.jsonSchema !== undefined) {
     throw new BadRequestException(
-      "qgrid: automatic and standalone image generation do not support caller tools or structured output." as LocalizedString,
+      SD("error.detail")(
+        "qgrid: automatic and standalone image generation do not support caller tools or structured output.",
+      ),
     );
   }
 
@@ -344,7 +354,9 @@ function rejectInvalidImageQuery(args: QueryInput): void {
     args.imageGenerationOptions.outputFormat !== "png"
   ) {
     throw new BadRequestException(
-      "qgrid: automatic and standalone image generation only support PNG output." as LocalizedString,
+      SD("error.detail")(
+        "qgrid: automatic and standalone image generation only support PNG output.",
+      ),
     );
   }
 }
@@ -361,14 +373,14 @@ function rejectInvalidCallerSchemas(args: QueryInput): void {
       error instanceof CallerSchemaValidationError ||
       error instanceof ToolSchemaCompositionError
     ) {
-      throw new BadRequestException(error.message as LocalizedString);
+      throw new BadRequestException(SD("error.detail")(error.message));
     }
 
     // 잘못된 keyword 형태(anyOf 를 객체로 보내는 등)는 파이프라인에서 untyped 오류로 나오므로,
     // 타입 좁히기 대신 Error 전체를 caller-fault 400 으로 매핑한다(계약 테스트로 고정됨).
     if (error instanceof Error) {
       throw new BadRequestException(
-        `qgrid: caller schema cannot be normalized: ${error.message}` as LocalizedString,
+        SD("error.detail")(`qgrid: caller schema cannot be normalized: ${error.message}`),
       );
     }
 
@@ -383,19 +395,19 @@ async function resolveTokenName(args: QueryInput): Promise<InternalQueryInput> {
   const modelProvider = args.model?.split("/", 1)[0];
 
   if (!isProviderId(tokenProvider)) {
-    throw new BadRequestException(`Invalid token name: ${args.tokenName}` as LocalizedString);
+    throw new BadRequestException(SD("error.detail")(`Invalid token name: ${args.tokenName}`));
   }
 
   if (modelProvider !== tokenProvider) {
     throw new BadRequestException(
-      "Token provider does not match model provider" as LocalizedString,
+      SD("error.detail")("Token provider does not match model provider"),
     );
   }
 
   const token = await TokenModel.findActiveByProviderAndName("A", tokenProvider, args.tokenName);
 
   if (!token) {
-    throw new BadRequestException(`Active token not found: ${args.tokenName}` as LocalizedString);
+    throw new BadRequestException(SD("error.detail")(`Active token not found: ${args.tokenName}`));
   }
 
   return { ...args, preferredTokenId: token.id, requirePreferredToken: true };
@@ -624,14 +636,14 @@ async function resolveGrokTokenSelection(
 
   if (!tokenName.startsWith("grok/")) {
     throw new BadRequestException(
-      "Token provider does not match model provider" as LocalizedString,
+      SD("error.detail")("Token provider does not match model provider"),
     );
   }
 
   const token = await TokenModel.findActiveByProviderAndName("A", "grok", tokenName);
 
   if (!token) {
-    throw new BadRequestException(`Active token not found: ${tokenName}` as LocalizedString);
+    throw new BadRequestException(SD("error.detail")(`Active token not found: ${tokenName}`));
   }
 
   return { preferredTokenId: token.id, requirePreferredToken: true };
@@ -757,7 +769,9 @@ async function finishMediaRun(
 
     await RequestLogModel.finishRun(requestLogId, mediaFinishFields(success));
   } catch (e) {
-    mediaLogger.error(`${success.kind} request log failed: ${(e as Error).message}`);
+    mediaLogger.error(
+      `${success.kind} request log failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
 }
 
@@ -774,7 +788,7 @@ async function failMediaRun(
       error_message: aborted ? "client disconnected" : String((error as Error)?.message ?? error),
     });
   } catch (e) {
-    mediaLogger.error(`media request log failed: ${(e as Error).message}`);
+    mediaLogger.error(`media request log failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
@@ -898,7 +912,7 @@ async function finishVideoRun(
         : { ...fields, status: "error", error_message: final.error ?? "video generation failed" },
     );
   } catch (e) {
-    mediaLogger.error(`video request log failed: ${(e as Error).message}`);
+    mediaLogger.error(`video request log failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
@@ -942,7 +956,7 @@ class QgridFrameClass extends BaseFrameClass {
         } else {
           await finishRunWithError(
             requestLogId,
-            (e as Error).message,
+            e instanceof Error ? e.message : String(e),
             resolvedArgs,
             ...completedStep,
           );
@@ -968,12 +982,16 @@ class QgridFrameClass extends BaseFrameClass {
 
         return { ...result, requestLogId, runContext };
       } catch (e) {
-        logger.error(`query afterQuery failed: ${(e as Error).message}`);
+        logger.error(`query afterQuery failed: ${e instanceof Error ? e.message : String(e)}`);
 
         if (disconnect.signal.aborted) {
           await finishRunAborted(requestLogId, resolvedArgs);
         } else {
-          await finishRunWithError(requestLogId, (e as Error).message, resolvedArgs);
+          await finishRunWithError(
+            requestLogId,
+            e instanceof Error ? e.message : String(e),
+            resolvedArgs,
+          );
         }
 
         // provider 응답은 성공했으므로 로깅 장애가 생성 결과를 덮어쓰지 않는다.
@@ -1091,8 +1109,12 @@ class QgridFrameClass extends BaseFrameClass {
             return;
           }
         } catch (e) {
-          logger.error(`stream afterQuery failed: ${(e as Error).message}`);
-          await finishRunWithError(runInfo.requestLogId, (e as Error).message, args);
+          logger.error(`stream afterQuery failed: ${e instanceof Error ? e.message : String(e)}`);
+          await finishRunWithError(
+            runInfo.requestLogId,
+            e instanceof Error ? e.message : String(e),
+            args,
+          );
 
           if (clientClosed) {
             await finishRunAborted(runInfo.requestLogId, args);
@@ -1251,13 +1273,13 @@ class QgridFrameClass extends BaseFrameClass {
       (!Number.isInteger(quotaThreshold) || quotaThreshold < 1 || quotaThreshold > 100)
     ) {
       throw new BadRequestException(
-        "quotaThreshold must be an integer between 1 and 100, or null" as LocalizedString,
+        SD("error.detail")("quotaThreshold must be an integer between 1 and 100, or null"),
       );
     }
 
     if (weight !== undefined && (!Number.isInteger(weight) || weight < 1 || weight > 100)) {
       throw new BadRequestException(
-        "weight must be an integer between 1 and 100" as LocalizedString,
+        SD("error.detail")("weight must be an integer between 1 and 100"),
       );
     }
 
@@ -1298,7 +1320,7 @@ class QgridFrameClass extends BaseFrameClass {
     if (!result) return { active: false };
 
     if (result.reauthRequired) {
-      throw new BadRequestException("Re-login required" as LocalizedString);
+      throw new BadRequestException(SD("error.detail")("Re-login required"));
     }
 
     return { active: result.active };
@@ -1334,7 +1356,9 @@ class QgridFrameClass extends BaseFrameClass {
       }
 
       throw new BadRequestException(
-        "expected the callback URL or code shown after login, in code#state form" as LocalizedString,
+        SD("error.detail")(
+          "expected the callback URL or code shown after login, in code#state form",
+        ),
       );
     }
 
@@ -1344,7 +1368,7 @@ class QgridFrameClass extends BaseFrameClass {
 
     if (!pending) {
       throw new BadRequestException(
-        "login session not found or expired — start the login again" as LocalizedString,
+        SD("error.detail")("login session not found or expired — start the login again"),
       );
     }
 
@@ -1476,7 +1500,9 @@ class QgridFrameClass extends BaseFrameClass {
         redirectUri = await startOpenAICallbackRelay(trustedLoopbackBase(), OAUTH_STATE_TTL_MS);
       } catch {
         throw new BadRequestException(
-          `OpenAI login needs local port ${OPENAI_CALLBACK_PORTS.join(" or ")} — close any running \`codex login\` and retry` as LocalizedString,
+          SD("error.detail")(
+            `OpenAI login needs local port ${OPENAI_CALLBACK_PORTS.join(" or ")} — close any running \`codex login\` and retry`,
+          ),
         );
       }
     }
@@ -1537,7 +1563,7 @@ class QgridFrameClass extends BaseFrameClass {
 
     if (!pending) {
       throw new BadRequestException(
-        "login session not found or expired — start the login again" as LocalizedString,
+        SD("error.detail")("login session not found or expired — start the login again"),
       );
     }
 
@@ -1739,7 +1765,9 @@ class QgridFrameClass extends BaseFrameClass {
       try {
         await RequestLogModel.appendStep(requestLogId, step!);
       } catch (e) {
-        mediaLogger.error(`video request log failed: ${(e as Error).message}`);
+        mediaLogger.error(
+          `video request log failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
       }
     }
 
@@ -1961,7 +1989,7 @@ class QgridFrameClass extends BaseFrameClass {
             : null,
         };
       } catch (e) {
-        return { error: `OpenAI usage failed: ${(e as Error).message}` };
+        return { error: `OpenAI usage failed: ${e instanceof Error ? e.message : String(e)}` };
       }
     }
 
@@ -1996,7 +2024,9 @@ class QgridFrameClass extends BaseFrameClass {
       try {
         accessToken = await this.refreshToken(entry);
       } catch (e) {
-        oauthLogger.warn(`refresh failed for ${entry.name}: ${(e as Error).message}`);
+        oauthLogger.warn(
+          `refresh failed for ${entry.name}: ${e instanceof Error ? e.message : String(e)}`,
+        );
 
         return { error: "Token refresh failed; usage is unavailable" };
       }
@@ -2013,7 +2043,9 @@ class QgridFrameClass extends BaseFrameClass {
 
         return convertAnthropicUsage(retried);
       } catch (e) {
-        oauthLogger.warn(`refresh failed for ${entry.name}: ${(e as Error).message}`);
+        oauthLogger.warn(
+          `refresh failed for ${entry.name}: ${e instanceof Error ? e.message : String(e)}`,
+        );
 
         return { error: "Token refresh failed; usage is unavailable" };
       }
@@ -2026,7 +2058,7 @@ class QgridFrameClass extends BaseFrameClass {
 
   // 동시 refresh 가 회전을 겹치면 뒤늦은 호출이 이미 폐기된 refresh token 을 쓰게 되어
   // 멀쩡한 토큰이 사망으로 오판된다. openai-refresh.ts 와 같은 per-token dedup 을 둔다.
-  async refreshToken(token: TokenSubsetA): Promise<string> {
+  async refreshToken(token: RefreshableToken): Promise<string> {
     if (token.provider === "grok") return this.refreshGrokToken(token);
     const inflight = inflightAnthropicRefresh.get(token.id);
 
@@ -2045,7 +2077,7 @@ class QgridFrameClass extends BaseFrameClass {
   // Set by bootstrap; the same coordinator the GrokDispatcher uses, so refreshes are single-flight.
   grokRefresher: GrokRefreshCoordinator | null = null;
 
-  async refreshGrokToken(token: TokenSubsetA): Promise<string> {
+  async refreshGrokToken(token: RefreshableToken): Promise<string> {
     if (!this.grokRefresher) throw new Error("Grok refresher not initialized");
     const current = StrictGrokCredentials.parse(token.credentials);
 
@@ -2056,7 +2088,7 @@ class QgridFrameClass extends BaseFrameClass {
     return next.accessToken;
   }
 
-  async doRefreshToken(token: TokenSubsetA): Promise<string> {
+  async doRefreshToken(token: RefreshableToken): Promise<string> {
     const creds = token.credentials;
     const rt = getRefreshToken(creds);
 

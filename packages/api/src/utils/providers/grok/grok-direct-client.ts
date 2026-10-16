@@ -68,17 +68,10 @@ function abortReason(signal: AbortSignal): Error {
   return reason instanceof Error ? reason : new DOMException("Aborted", "AbortError");
 }
 
-function connectError(error: unknown): GrokHttpError {
-  const message = error instanceof Error ? error.message : String(error);
+function connectError(cause: unknown): GrokHttpError {
+  const message = cause instanceof Error ? cause.message : String(cause);
 
-  return new GrokHttpError(
-    { ...classifyGrokHttpError(0, "", {}), message },
-    "",
-    {},
-    {
-      cause: error,
-    },
-  );
+  return new GrokHttpError({ ...classifyGrokHttpError(0, "", {}), message }, "", {}, { cause });
 }
 
 async function readErrorBody(response: Response): Promise<string> {

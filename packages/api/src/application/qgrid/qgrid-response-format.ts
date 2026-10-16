@@ -1,3 +1,4 @@
+import { type JsonValue } from "../../utils/providers/common/provider-types";
 import {
   CODEX_IMAGE_GENERATION_MODEL,
   resolveImageGenerationOptions,
@@ -54,27 +55,34 @@ export function imageGenerationToolArgs(
   const inputImages =
     options.includeInputImages === false ? [] : extractInputImagesForToolArgs(args);
 
-  return JSON.stringify({
-    prompt: args.prompt,
-    ...(inputImages.length > 0 ? { inputImages } : {}),
-    driverModel: args.model ?? null,
-    tool: {
-      ...CODEX_IMAGE_GENERATION_TOOL_CONFIG,
-      ...(args.imageGenerationOptions?.outputFormat
-        ? { outputFormat: args.imageGenerationOptions.outputFormat }
-        : {}),
-    },
-    ...(args.imageGenerationOptions ? { requestedOptions: args.imageGenerationOptions } : {}),
-    ...(options.generation
-      ? { observedGeneration: options.generation }
-      : {
-          pricingAssumption: {
-            model: CODEX_IMAGE_GENERATION_MODEL,
-            quality: resolved.quality,
-            size: resolved.size,
-          },
-        }),
-  });
+  // Keys are assigned in their serialized order; request logs store this JSON text.
+  const toolArgs: Record<string, JsonValue> = {};
+  toolArgs.prompt = args.prompt;
+
+  if (inputImages.length > 0) toolArgs.inputImages = inputImages;
+  toolArgs.driverModel = args.model ?? null;
+  const tool: Record<string, JsonValue> = {};
+  Object.assign(tool, CODEX_IMAGE_GENERATION_TOOL_CONFIG);
+
+  if (args.imageGenerationOptions?.outputFormat) {
+    tool.outputFormat = args.imageGenerationOptions.outputFormat;
+  }
+
+  toolArgs.tool = tool;
+
+  if (args.imageGenerationOptions) toolArgs.requestedOptions = args.imageGenerationOptions;
+
+  if (options.generation) {
+    toolArgs.observedGeneration = options.generation;
+  } else {
+    toolArgs.pricingAssumption = {
+      model: CODEX_IMAGE_GENERATION_MODEL,
+      quality: resolved.quality,
+      size: resolved.size,
+    };
+  }
+
+  return JSON.stringify(toolArgs);
 }
 
 export function buildImageGenerationToolSteps(
@@ -106,12 +114,14 @@ export function buildImageGenerationToolSteps(
   }));
 }
 
-function extractInputImagesForToolArgs(args: QueryInput): Array<{
+type LoggedInputImage = {
   mediaType?: string;
   data?: string;
   url?: string;
   byteSize?: number;
-}> {
+};
+
+function extractInputImagesForToolArgs(args: QueryInput): LoggedInputImage[] {
   const images = args.input?.filter((item) => item.type === "image") ?? [];
 
   return images.map((image) => {
@@ -127,11 +137,14 @@ function extractInputImagesForToolArgs(args: QueryInput): Array<{
       };
     }
 
-    return {
+    const logged: LoggedInputImage = {
       mediaType: dataUrl.mediaType,
       url: `[data-url ${image.url.length} chars]`,
-      ...(dataUrl.isBase64 ? { byteSize: base64ByteSize(dataUrl.data) } : {}),
     };
+
+    if (dataUrl.isBase64) logged.byteSize = base64ByteSize(dataUrl.data);
+
+    return logged;
   });
 }
 

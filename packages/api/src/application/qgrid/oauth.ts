@@ -4,6 +4,7 @@
 import { createHash, randomBytes } from "node:crypto";
 
 import { getLogger } from "@logtape/logtape";
+import { z } from "zod";
 
 export type AnthropicUsageRaw = {
   error?: string;
@@ -11,6 +12,34 @@ export type AnthropicUsageRaw = {
   seven_day?: { utilization: number | null; resets_at: string | null } | null;
   seven_day_overage_included?: { utilization: number | null; resets_at: string | null } | null;
 };
+
+const usageWindowSchema = z
+  .object({ utilization: z.number().nullable(), resets_at: z.string().nullable() })
+  .nullable()
+  .optional();
+
+const anthropicUsageRawSchema: z.ZodType<AnthropicUsageRaw> = z.looseObject({
+  error: z.string().optional(),
+  five_hour: usageWindowSchema,
+  seven_day: usageWindowSchema,
+  seven_day_overage_included: usageWindowSchema,
+});
+
+const tokenExchangeResponseSchema = z.object({
+  access_token: z.string(),
+  refresh_token: z.string(),
+  expires_in: z.number(),
+  scope: z.string(),
+  account: z.object({ uuid: z.string(), email_address: z.string() }).optional(),
+});
+
+// A refresh response may omit refresh_token; the caller then keeps the current one.
+const tokenRefreshResponseSchema = z.object({
+  access_token: z.string(),
+  refresh_token: z.string().optional(),
+  expires_in: z.number(),
+  scope: z.string(),
+});
 
 export type AnthropicUsageWithMeta = {
   data: AnthropicUsageRaw;
@@ -50,7 +79,13 @@ function base64URLEncode(buffer: Buffer): string {
   return buffer.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
-export function generatePKCE(): { codeVerifier: string; codeChallenge: string; state: string } {
+export interface PKCEChallenge {
+  codeVerifier: string;
+  codeChallenge: string;
+  state: string;
+}
+
+export function generatePKCE(): PKCEChallenge {
   const codeVerifier = base64URLEncode(randomBytes(32));
   const codeChallenge = base64URLEncode(createHash("sha256").update(codeVerifier).digest());
   const state = base64URLEncode(randomBytes(32));
@@ -105,13 +140,7 @@ export async function exchangeCodeForTokens(
     throw new Error(`Token exchange failed (${res.status}): ${text}`);
   }
 
-  const data = (await res.json()) as {
-    access_token: string;
-    refresh_token: string;
-    expires_in: number;
-    scope: string;
-    account?: { uuid: string; email_address: string };
-  };
+  const data = tokenExchangeResponseSchema.parse(await res.json());
 
   return {
     accessToken: data.access_token,
@@ -159,12 +188,7 @@ export async function refreshAccessToken(refreshToken: string): Promise<OAuthTok
     throw new RefreshFailedError(res.status, text);
   }
 
-  const data = (await res.json()) as {
-    access_token: string;
-    refresh_token: string;
-    expires_in: number;
-    scope: string;
-  };
+  const data = tokenRefreshResponseSchema.parse(await res.json());
 
   return {
     accessToken: data.access_token,
@@ -228,7 +252,7 @@ export async function fetchUsageWithMeta(accessToken: string): Promise<Anthropic
     return entry;
   }
 
-  const data = (await res.json()) as AnthropicUsageRaw;
+  const data = anthropicUsageRawSchema.parse(await res.json());
   // cache invalidate
   const entry = { data, cachedAt: Date.now() };
   usageCache[cacheKey] = entry;

@@ -33,7 +33,7 @@ type TimerHandle = ReturnType<typeof setTimeout>;
 export type TokenWindowKeepaliveDeps = {
   findTokens: () => Promise<KeepaliveToken[]>;
   readUsage: (tokenId: number) => Promise<UsageResponse>;
-  dispatch: (input: InternalQueryInput) => Promise<unknown>;
+  dispatch: (input: InternalQueryInput) => Promise<void>;
   readSetting: typeof getSetting;
   isRunnerEnabled: () => boolean;
   now: () => number;
@@ -44,7 +44,9 @@ export type TokenWindowKeepaliveDeps = {
 const defaultDeps: TokenWindowKeepaliveDeps = {
   findTokens: () => TokenModel.findActiveByProvider("A", "anthropic"),
   readUsage: (tokenId) => QgridFrame.usage(tokenId),
-  dispatch: (input) => QgridFrame.query(input),
+  dispatch: async (input) => {
+    await QgridFrame.query(input);
+  },
   readSetting: getSetting,
   isRunnerEnabled: () => process.env[KEEPALIVE_ENV_KEY] === "true",
   now: () => Date.now(),
@@ -80,7 +82,9 @@ function scheduleToken(
 
       if (generation !== expectedGeneration) return;
       void inspectToken(token, deps, expectedGeneration, allowFire).catch((error) => {
-        logger.warn(`keepalive cycle failed for ${token.name}: ${(error as Error).message}`);
+        logger.warn(
+          `keepalive cycle failed for ${token.name}: ${error instanceof Error ? error.message : String(error)}`,
+        );
         scheduleFallback(token, deps, expectedGeneration);
       });
     },
@@ -132,7 +136,9 @@ async function inspectToken(
   try {
     usage = await deps.readUsage(token.id);
   } catch (error) {
-    logger.warn(`usage lookup failed for ${token.name}: ${(error as Error).message}`);
+    logger.warn(
+      `usage lookup failed for ${token.name}: ${error instanceof Error ? error.message : String(error)}`,
+    );
     scheduleFallback(token, deps, expectedGeneration);
 
     return;
@@ -189,7 +195,9 @@ async function inspectToken(
     });
     logger.info(`keepalive sent for ${token.name}`);
   } catch (error) {
-    logger.warn(`keepalive failed for ${token.name}: ${(error as Error).message}`);
+    logger.warn(
+      `keepalive failed for ${token.name}: ${error instanceof Error ? error.message : String(error)}`,
+    );
     scheduleFallback(token, deps, expectedGeneration);
 
     return;
@@ -238,7 +246,9 @@ export async function startTokenWindowKeepalive(
   try {
     tokens = await deps.findTokens();
   } catch (error) {
-    logger.warn(`token discovery failed: ${(error as Error).message}`);
+    logger.warn(
+      `token discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
 
     return;
   }

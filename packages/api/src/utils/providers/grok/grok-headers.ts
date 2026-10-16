@@ -96,45 +96,48 @@ export function buildGrokChatHeaders(options: GrokChatHeaderOptions): Record<str
   if (!TRACEPARENT_PATTERN.test(traceparent))
     throw new TypeError("traceparent must be a W3C 00-<32hex>-<16hex>-01 value");
 
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    "user-agent": grokShellUserAgent(options.platform),
-    "x-grok-client-mode": GROK_CLIENT_MODE,
-    "x-xai-token-auth": "xai-grok-cli",
-    "x-authenticateresponse": "authenticate-response",
-    "x-compactions-remaining": nonNegativeInteger(
-      "compactionsRemaining",
-      options.compactionsRemaining ?? GROK_COMPACTIONS_REMAINING_DEFAULT,
-    ),
-    "x-compaction-at": String(GROK_COMPACTION_AT),
-    "x-grok-client-version": GROK_BUILD_VERSION,
-    "x-grok-user-id": requiredValue("userId", options.userId),
-    "x-grok-conv-group-id": requiredValue("convGroupId", options.convGroupId),
-    "x-grok-client-identifier": GROK_CLIENT_IDENTIFIER,
-    authorization: bearerValue(options.bearer),
-    traceparent,
-    "x-grok-conv-id": requiredValue("convId", options.convId),
-    "x-grok-req-id": requiredValue("reqId", options.reqId),
-    "x-grok-model-override": requiredValue("model", options.model),
-    "x-grok-session-id": requiredValue("sessionId", options.sessionId),
-    "x-grok-agent-id": requiredValue("agentId", options.agentId),
-    "x-grok-turn-idx": nonNegativeInteger("turnIdx", options.turnIdx),
-  };
+  // A Map keeps insertion order, which is the wire order of the golden capture.
+  const headers = new Map(
+    Object.entries({
+      "content-type": "application/json",
+      "user-agent": grokShellUserAgent(options.platform),
+      "x-grok-client-mode": GROK_CLIENT_MODE,
+      "x-xai-token-auth": "xai-grok-cli",
+      "x-authenticateresponse": "authenticate-response",
+      "x-compactions-remaining": nonNegativeInteger(
+        "compactionsRemaining",
+        options.compactionsRemaining ?? GROK_COMPACTIONS_REMAINING_DEFAULT,
+      ),
+      "x-compaction-at": String(GROK_COMPACTION_AT),
+      "x-grok-client-version": GROK_BUILD_VERSION,
+      "x-grok-user-id": requiredValue("userId", options.userId),
+      "x-grok-conv-group-id": requiredValue("convGroupId", options.convGroupId),
+      "x-grok-client-identifier": GROK_CLIENT_IDENTIFIER,
+      authorization: bearerValue(options.bearer),
+      traceparent,
+      "x-grok-conv-id": requiredValue("convId", options.convId),
+      "x-grok-req-id": requiredValue("reqId", options.reqId),
+      "x-grok-model-override": requiredValue("model", options.model),
+      "x-grok-session-id": requiredValue("sessionId", options.sessionId),
+      "x-grok-agent-id": requiredValue("agentId", options.agentId),
+      "x-grok-turn-idx": nonNegativeInteger("turnIdx", options.turnIdx),
+    }),
+  );
 
   // Not present in the capture; grok-build 1.0.45 client.rs:560-605 sends it with the turn
   // index group on retries only.
   if (options.transientRetry !== undefined)
-    headers["x-grok-transient-retry"] = nonNegativeInteger(
-      "transientRetry",
-      options.transientRetry,
+    headers.set(
+      "x-grok-transient-retry",
+      nonNegativeInteger("transientRetry", options.transientRetry),
     );
-  headers.accept = "text/event-stream";
-  headers["x-grok-doom-loop-check"] = String(GROK_DOOM_LOOP_CHECK);
-  headers["x-grok-exact-repetition-check"] = String(GROK_EXACT_REPETITION_CHECK);
+  headers.set("accept", "text/event-stream");
+  headers.set("x-grok-doom-loop-check", String(GROK_DOOM_LOOP_CHECK));
+  headers.set("x-grok-exact-repetition-check", String(GROK_EXACT_REPETITION_CHECK));
 
-  if (options.zstd) headers["content-encoding"] = "zstd";
+  if (options.zstd) headers.set("content-encoding", "zstd");
 
-  return headers;
+  return Object.fromEntries(headers);
 }
 
 export interface GrokProxyGetHeaderOptions {
@@ -151,17 +154,20 @@ export interface GrokProxyGetHeaderOptions {
 export function buildGrokProxyGetHeaders(
   options: GrokProxyGetHeaderOptions,
 ): Record<string, string> {
-  return {
-    authorization: bearerValue(options.bearer),
-    "x-xai-token-auth": "xai-grok-cli",
-    "x-userid": requiredValue("userId", options.userId),
-    "x-grok-client-version": GROK_BUILD_VERSION,
-    ...(options.email === undefined ? {} : { "x-email": requiredValue("email", options.email) }),
-    "x-grok-client-identifier": GROK_CLIENT_IDENTIFIER,
-    "x-grok-client-mode": GROK_CLIENT_MODE,
-    accept: "*/*",
-    "user-agent": grokShellUserAgent(options.platform),
-  };
+  const headers = new Map([
+    ["authorization", bearerValue(options.bearer)],
+    ["x-xai-token-auth", "xai-grok-cli"],
+    ["x-userid", requiredValue("userId", options.userId)],
+    ["x-grok-client-version", GROK_BUILD_VERSION],
+  ]);
+
+  if (options.email !== undefined) headers.set("x-email", requiredValue("email", options.email));
+  headers.set("x-grok-client-identifier", GROK_CLIENT_IDENTIFIER);
+  headers.set("x-grok-client-mode", GROK_CLIENT_MODE);
+  headers.set("accept", "*/*");
+  headers.set("user-agent", grokShellUserAgent(options.platform));
+
+  return Object.fromEntries(headers);
 }
 
 /**
@@ -169,10 +175,7 @@ export function buildGrokProxyGetHeaders(
  * `x-grok-session-id` is attached per request right after the bearer (grok-build xai-grok-tools
  * image_gen/mod.rs:199-213, video_gen/mod.rs:258-270).
  */
-export function buildGrokMediaHeaders(options: {
-  bearer: string;
-  sessionId: string;
-}): Record<string, string> {
+export function buildGrokMediaHeaders(options: { bearer: string; sessionId: string }) {
   return {
     "user-agent": grokMediaUserAgent(),
     authorization: bearerValue(options.bearer),
@@ -186,10 +189,7 @@ export function buildGrokMediaHeaders(options: {
  * Headers for `api.x.ai` STT/TTS calls (grok-build 1.0.45 xai-grok-pager client_identity.rs).
  * No session id: the voice client sends none (xai-grok-voice stt/streaming.rs:42-57).
  */
-export function buildGrokVoiceHeaders(options: {
-  bearer: string;
-  platform?: GrokPlatform;
-}): Record<string, string> {
+export function buildGrokVoiceHeaders(options: { bearer: string; platform?: GrokPlatform }) {
   return {
     "user-agent": grokShellUserAgent(options.platform),
     authorization: bearerValue(options.bearer),

@@ -1,4 +1,5 @@
 import {
+  type JsonValue,
   normalizeOpenAIEvent,
   OpenAIProtocolError,
   type OpenAINormalizedEvent,
@@ -6,7 +7,7 @@ import {
 
 export interface OpenAIEventStream extends AsyncIterable<OpenAINormalizedEvent> {}
 
-function parseBlock(block: string): unknown | undefined {
+function parseBlock(block: string): JsonValue | undefined {
   const data: string[] = [];
 
   for (const line of block.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n")) {
@@ -26,7 +27,10 @@ function parseBlock(block: string): unknown | undefined {
   if (payload === "[DONE]") return payload;
 
   try {
-    return JSON.parse(payload) as unknown;
+    // JSON.parse without a reviver yields only JSON values.
+    const parsed: JsonValue = JSON.parse(payload);
+
+    return parsed;
   } catch (error) {
     throw new OpenAIProtocolError(`Invalid OpenAI SSE JSON: ${String(error)}`);
   }
