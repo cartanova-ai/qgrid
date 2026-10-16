@@ -118,12 +118,6 @@ jobs:
           grep -q 'migration: ' "$BOOT_LOG" || { echo "boot log has no migration line"; cat "$BOOT_LOG"; exit 1; }
           test "$APPLIED" = "$EXPECTED" || { cat "$BOOT_LOG"; exit 1; }
 
-      # npm publish (버전 안 바뀌면 스킵)
-      - name: Publish packages
-        run: mise exec -- pnpm exec tsx scripts/publish.ts "$QGRID_RELEASE_DIR"
-        env:
-          NPM_CONFIG_PROVENANCE: true
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -191,6 +185,12 @@ jobs:
           APPLIED="$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -d qgrid_docker_smoke -Atc 'select count(*) from knex_migrations')"
           EXPECTED="$(docker exec qgrid-image-smoke sh -c 'ls src/migrations/*.ts | wc -l')"
           test "$APPLIED" = "$EXPECTED"
+
+      # 모든 패키지·이미지 검증을 통과한 뒤 게시한다. 이미 게시된 npm 버전은 스킵한다.
+      - name: Publish packages
+        run: mise exec -- pnpm exec tsx scripts/publish.ts "$QGRID_RELEASE_DIR"
+        env:
+          NPM_CONFIG_PROVENANCE: true
 
       - name: Publish release image
         if: steps.image.outputs.exists == 'false'
