@@ -1292,6 +1292,8 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
         if (action.kind === "retry") {
           // Same token, current credentials, reservation still held.
           if (staleRetries++ < GROK_MAX_STALE_AUTH_RETRIES) continue;
+          // Allowance spent: this token must not be reselected by the failover below.
+          excluded.add(token.id);
           action = { kind: "failover", error: action.error, transient: false };
         }
         if (action.kind === "refresh") {

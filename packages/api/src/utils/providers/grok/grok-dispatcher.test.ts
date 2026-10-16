@@ -1315,6 +1315,34 @@ describe("GrokDispatcher refresh recovery", () => {
     expect(h.reauth).not.toHaveBeenCalled();
   });
 
+
+  it("fails over to another token once the stale-401 retry allowance is spent", async () => {
+    const h = createHarness();
+    h.add(1);
+    h.add(2);
+    const token = h.dispatcher.tokens.get(1)!;
+    // Every send on token 1 is answered 401, and a concurrent refresh keeps replacing its bearer
+    // before the 401 lands, so each failure looks stale.
+    h.chat.set(1, [
+      { kind: "http", status: 401 },
+      { kind: "http", status: 401 },
+      { kind: "http", status: 401 },
+      { kind: "http", status: 401 },
+    ]);
+    let generation = 0;
+    traceSends(h, (send) => {
+      if (send >= 2) h.dispatcher.storeCredentials(token, credentialsFor(1, ++generation + 1));
+    });
+    const result = await h.dispatcher.generate(request({ preferredTokenId: 1 }));
+    expect(result.tokenName).toBe("t2");
+    const sendsOnTokenOne = h.requests.filter((r) =>
+      r.headers.get("x-grok-user-id") === credentialsFor(1).userId,
+    ).length;
+    // Initial send, forced-refresh retry, one stale retry; never a fourth on the same token.
+    expect(sendsOnTokenOne).toBeLessThanOrEqual(3);
+    expect(token.reauthRequired).toBe(false);
+  });
+
   it("holds the reservation across the 401 refresh so the retry stays within the in-flight cap", async () => {
     const h = createHarness({ maxInflightPerToken: 1 });
     h.add(1);
