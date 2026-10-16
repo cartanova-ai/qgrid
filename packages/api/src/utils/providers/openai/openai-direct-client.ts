@@ -142,7 +142,8 @@ function socketEvents(socket: OpenAIWebSocketLike, signal?: AbortSignal) {
       socket.off("open", onOpen);
       socket.off("message", onMessage);
       socket.off("close", onClose);
-      socket.off("error", onError);
+      // error 리스너는 남긴다(active=false라 push는 no-op). CONNECTING 소켓의 terminate()는
+      // 다음 tick에 error를 emit하므로, 떼어 두면 Unhandled 'error'로 프로세스가 죽는다.
       socket.off("unexpected-response", onUnexpectedResponse);
       records.length = 0;
       const closed = {

@@ -1,4 +1,8 @@
+import http from "node:http";
+import { type AddressInfo } from "node:net";
+
 import { describe, expect, it, vi } from "vitest";
+import WsClient from "ws";
 
 import { CHATGPT_CODEX_RESPONSES_URL } from "./openai-backend-protocol";
 import {
@@ -209,6 +213,11 @@ class MockSocket implements OpenAIWebSocketLike {
   }
 }
 
+// error 리스너는 terminate() 뒤 늦게 오는 error를 흡수하려고 cleanup 후에도 남긴다.
+function nonErrorListeners(socket: MockSocket): Listener[] {
+  return [...socket.listeners].flatMap(([event, listeners]) => (event === "error" ? [] : listeners));
+}
+
 function mockedWebSocket() {
   const sockets: MockSocket[] = [];
   const calls: Array<{ url: string; options: { headers?: Record<string, string> } }> = [];
@@ -302,7 +311,7 @@ describe("OpenAI direct Responses WebSocket client", () => {
     });
     expect(mock.sockets[0]!.closed).toEqual({ code: 1000, reason: "response completed" });
     expect(mock.sockets[0]!.terminated).toBe(false);
-    expect([...mock.sockets[0]!.listeners.values()].flat()).toHaveLength(0);
+    expect(nonErrorListeners(mock.sockets[0]!)).toHaveLength(0);
   });
 
   it("reuses one WebSocket for sequential requests with the same prompt affinity", async () => {
@@ -508,7 +517,7 @@ describe("OpenAI direct Responses WebSocket client", () => {
     mock.sockets[0]!.emit("message", Buffer.from([1]), true);
     await expect(binary).rejects.toThrow("unexpected binary message");
     expect(mock.sockets[0]!.terminated).toBe(true);
-    expect([...mock.sockets[0]!.listeners.values()].flat()).toHaveLength(0);
+    expect(nonErrorListeners(mock.sockets[0]!)).toHaveLength(0);
     expect(mock.sockets).toHaveLength(1);
 
     const closed = collect(client.responses({ model: "gpt", history: [] }));
@@ -551,7 +560,7 @@ describe("OpenAI direct Responses WebSocket client", () => {
 
     mock.sockets.forEach((socket) => {
       expect(socket.terminated).toBe(true);
-      expect([...socket.listeners.values()].flat()).toHaveLength(0);
+      expect(nonErrorListeners(socket)).toHaveLength(0);
     });
   });
 
@@ -575,7 +584,7 @@ describe("OpenAI direct Responses WebSocket client", () => {
     await expect(first).resolves.toMatchObject({ value: { type: "text-delta", text: "one" } });
     await iterator.return?.();
     expect(mock.sockets[0]!.terminated).toBe(true);
-    expect([...mock.sockets[0]!.listeners.values()].flat()).toHaveLength(0);
+    expect(nonErrorListeners(mock.sockets[0]!)).toHaveLength(0);
 
     const overflow = collect(client.responses({ model: "gpt", history: [] }));
     mock.sockets[1]!.emit("open");
@@ -584,7 +593,7 @@ describe("OpenAI direct Responses WebSocket client", () => {
     for (let index = 0; index < 1602; index += 1) mock.sockets[1]!.emit("message", ignored, false);
     await expect(overflow).rejects.toMatchObject({ code: "websocket_backpressure" });
     expect(mock.sockets[1]!.terminated).toBe(true);
-    expect([...mock.sockets[1]!.listeners.values()].flat()).toHaveLength(0);
+    expect(nonErrorListeners(mock.sockets[1]!)).toHaveLength(0);
   });
 
   it("closes on abort and refreshes only one definitive 401 handshake rejection", async () => {
@@ -620,6 +629,38 @@ describe("OpenAI direct Responses WebSocket client", () => {
     controller.abort();
     await expect(aborted).rejects.toMatchObject({ name: "AbortError" });
     expect(mock.sockets[2]!.terminated).toBe(true);
-    expect([...mock.sockets[2]!.listeners.values()].flat()).toHaveLength(0);
+    expect(nonErrorListeners(mock.sockets[2]!)).toHaveLength(0);
+  });
+});
+
+describe("OpenAI direct Responses WebSocket client over real ws", () => {
+  it("survives terminating a socket whose handshake was rejected", async () => {
+    const statuses = [401, 429];
+    const server = http.createServer();
+    server.on("upgrade", (_request, socket) => {
+      const status = statuses.shift() ?? 429;
+      socket.end(`HTTP/1.1 ${status} Rejected\r\nContent-Length: 0\r\n\r\n`);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    const uncaught = vi.fn();
+    process.on("uncaughtException", uncaught);
+    try {
+      const client = new OpenAIDirectClient({
+        credentials: { accessToken: "old", accountId: "acct" },
+        transportKind: "websocket",
+        webSocketFactory: (_url, options) => new WsClient(`ws://127.0.0.1:${port}`, options),
+        refreshCredentials: async () => ({ accessToken: "new", accountId: "acct" }),
+      });
+      await expect(collect(client.responses({ model: "gpt", history: [] }))).rejects.toThrow(
+        "handshake rejected with HTTP 429",
+      );
+      // ws는 CONNECTING 소켓의 terminate() error를 다음 tick에 emit한다.
+      await tick();
+      expect(uncaught).not.toHaveBeenCalled();
+    } finally {
+      process.off("uncaughtException", uncaught);
+      server.close();
+    }
   });
 });
