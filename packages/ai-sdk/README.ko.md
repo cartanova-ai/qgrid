@@ -53,6 +53,7 @@ qgrid 서버(`http://localhost:44900`)가 실행 중이어야 합니다.
 OpenAI 서버 경로는 private ChatGPT Codex Responses backend를 HTTPS/SSE로 직접 호출합니다. 이 backend는 문서화되지 않아 예고 없이 변경될 수 있으며, qgrid의 mock protocol test는 live provider 검증이 아닙니다.
 
 ## 사용법
+>
 > 들어가기전에: 모든 클라이언트 사용법은 [AI-SDK](https://ai-sdk.dev/docs/ai-sdk-core)와 동일합니다.
 
 ### 텍스트 생성
@@ -69,6 +70,7 @@ const { text } = await generateText({
 ```
 
 ### 구조화 응답 (Structured Output)
+>
 > [AI-SDK structured output guide를 참조하세요](https://ai-sdk.dev/docs/ai-sdk-core/generating-structured-data)
 
 ```typescript
@@ -200,7 +202,7 @@ const { text } = await generateText({
 ```
 
 | 옵션 | 값 | 적용 범위 | 설명 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `tokenName` | provider prefix를 포함한 토큰 이름 | 공통 | `anthropic/yds`처럼 활성 토큰 하나를 엄격히 지정. prefix는 model provider와 같아야 하며 빈 값·누락·inactive·quota 초과 시 다른 토큰으로 fallback하지 않음 |
 | `logger` | `boolean` | 공통 | qgrid request log 저장 여부. 기본값은 `true`. `false`로 설정해도 client tool 실행과 multi-step 연결은 계속 동작 |
 | `sessionKey` | `string` | OpenAI 전용 | 전체 history 재전송 시 불투명 prompt-cache affinity를 파생하는 멀티턴 대화 식별자 ([아래](#멀티턴-prompt-cache-sessionkey) 참조) |
@@ -236,7 +238,7 @@ providerOptions: {
 Thinking 비활성화 정책 스냅샷(2026-10-10, Claude Code 조사 기준 2.1.295):
 
 | Provider | 현재 정책에서 off를 허용하는 모델 ID |
-|---|---|
+| --- | --- |
 | OpenAI | `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` |
 | Anthropic | `claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-haiku-4-5`, `claude-sonnet-4-5`, `claude-sonnet-4-6`, `claude-sonnet-5`, `claude-opus-4-5`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` |
 
@@ -330,6 +332,152 @@ const { image } = await generateImage({
 Images를 직접 호출하고 요청 로그에는 채팅과 이미지 usage의 추정 비용을 합산합니다.
 텍스트만 응답할 수도 있습니다. 공개 SDK 도구 팩토리는 제공하지 않으며, 자동 채팅 이미지도
 `generateImage`와 같이 PNG만 지원합니다.
+
+## Grok 사용
+
+qgrid는 `grok/*` 모델을 qgrid 대시보드에 등록한 xAI 구독 토큰(요금제: Plus, Premium, Super, Ultra)(Grok 로그인)으로 라우팅합니다.
+토큰 이름은 `grok/` prefix를 가집니다(예: `grok/main`). 모든 Grok 모델은 다른 모델과 같은 factory
+설정을 받습니다: `serverUrl`(기본값 `QGRID_URL`), `projectName`(기본값 `QGRID_PROJECT_NAME`).
+서버와 SDK를 함께 업데이트하세요.
+
+| Factory | 모델 ID | AI SDK 함수 |
+| --- | --- | --- |
+| `qgrid(id)` | `grok/grok-4.7`(카탈로그 기본 모델), `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`, 그 밖의 `grok/<id>` | `generateText`, `streamText` |
+| `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0`, `grok/grok-imagine-image-quality` | `generateImage` |
+| `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
+| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0` | `experimental_transcribe` |
+| `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임) | `experimental_generateSpeech` |
+
+옵션은 `providerOptions.xai` 아래에 `@ai-sdk/xai`와 같은 이름을 쓰므로 `@ai-sdk/xai`용 코드가 그대로
+컴파일됩니다. qgrid 전용 설정(`grok/` prefix를 포함한 `tokenName`, `logger`)은 `providerOptions.qgrid`에
+둡니다. 형식이 잘못된 값은 요청 전에 예외를 던지고, 형식은 맞지만 qgrid가 지원하지 않는 옵션은 AI SDK
+`unsupported` warning과 함께 무시됩니다.
+
+### Grok 텍스트
+
+```typescript
+import { generateText } from "ai";
+import { qgrid } from "@cartanova/qgrid-ai-sdk";
+
+const { text, providerMetadata } = await generateText({
+  model: qgrid("grok/grok-4.7"),
+  prompt: "Summarize this release note",
+  providerOptions: { xai: { reasoningEffort: "high", promptCacheKey: "session-42" } },
+});
+providerMetadata?.xai?.costInUsdTicks; // 1 tick = 1e-10 USD
+```
+
+Grok language model은 user 이미지 part(https URL 또는 inline bytes)를 버리지 않고 전달합니다.
+
+| `providerOptions.xai` 키 | Language model 처리 |
+| --- | --- |
+| `promptCacheKey` | 그대로 전달: `providerOptions.qgrid.sessionKey`와 같은 cache affinity 핸들 |
+| `serviceTier` | 그대로 전달 |
+| `parallelToolCalls` | 그대로 전달 |
+| `reasoningEffort` | qgrid `effort`로 변환, 모델의 `low`/`medium`/`high`/`xhigh` 집합으로 검증. 이 경로는 항상 reasoning하므로 `none`은 미지원 |
+| `store` | 미지원: qgrid는 항상 `store: false`를 보냄 |
+| `previousResponseId` | 미지원: qgrid가 대화 history를 직접 재생함 |
+| `include` | 미지원: qgrid가 include 목록을 고정함 |
+| `maxTurns` | 미지원: qgrid는 서버 측 agentic turn을 실행하지 않음 |
+| `user`, `safetyIdentifier` | 미지원: qgrid는 최종 사용자 식별자를 전달하지 않음 |
+
+### Grok 미디어 옵션
+
+| 모델 | 그대로 전달 | 변환 | 미지원(warning) |
+| --- | --- | --- | --- |
+| Image | `n`(호출당 최대 3), `aspectRatio`, `xai.resolution`(`1k`/`1.5k`/`2k`), `xai.quality`, `xai.aspect_ratio`(`aspectRatio`가 없을 때) | 참조 `images`는 `referenceImages`(edit endpoint), `xai.output_format`은 `outputFormat`이 되며 `png`, `jpeg`, `webp`만 허용 | `size`, `seed`, `mask`, `xai.sync_mode`, `xai.user` |
+| Video | `duration`(정수 1-15), `aspectRatio`, `xai.resolution`(`480p`/`720p`/`1080p`), `xai.mode: "reference-to-video"`, `xai.pollIntervalMs`, `xai.pollTimeoutMs` | `resolution` `WxH`는 `@ai-sdk/xai`와 같이 매핑(`1280x720` → `720p`), prompt `image`는 시작 프레임, `xai.referenceImageUrls`(7개가 아닌 최대 5개)는 `referenceImages`, `xai.lastFrame`(qgrid 확장, `grok-imagine-video-1.5` 전용) | `fps`, `seed`, `xai.keyframes`, `xai.storageOptions`, `xai.referenceVoiceIds`, `xai.user`. `xai.mode` `edit-video`/`extend-video`와 `xai.videoUrl`은 예외 |
+| Transcription | `xai.language` | 오디오 bytes는 base64로, `mediaType`은 파라미터 제거(`audio/webm;codecs=opus` → `audio/webm`) | 나머지 모든 `xai` 키(`audioFormat`, `sampleRate`, `format`, `diarize`, `keyterm`, ...) |
+| Speech | `voice`, `language` | `outputFormat`은 `format`(`mp3`, `wav`, `pcm`, `mulaw`, `alaw`, 그 외 값은 `@ai-sdk/xai`처럼 warning과 함께 `mp3`) | `instructions`, `speed`, 모든 `xai` 키(`sampleRate`, `bitRate`, `withTimestamps`, ...) |
+
+**요청 크기.** qgrid 서버는 최대 10 MiB JSON body를 받습니다. inline 미디어는 base64로 전송되어 3분의 1만큼
+커지므로, 서버는 inline 오디오, 각 inline 이미지, 한 요청의 inline 이미지 합계(비디오: `image` + `lastFrame` +
+참조 이미지)를 디코딩 기준 7 MiB로 제한합니다. SDK는 더 큰 입력을 전송 전에 거부하고, 서버 413도 같은 크기
+오류로 보여줍니다. 입력을 압축하거나, 옵션이 허용하면 https 이미지 URL을 넘기세요.
+
+### Grok 이미지
+
+```typescript
+import { generateImage } from "ai";
+import { qgrid } from "@cartanova/qgrid-ai-sdk";
+
+const { images, providerMetadata } = await generateImage({
+  model: qgrid.image("grok/grok-imagine-image"),
+  prompt: "A lighthouse at dusk, oil painting",
+  n: 2,
+  aspectRatio: "16:9",
+  providerOptions: { xai: { resolution: "2k", quality: "high", output_format: "jpeg" } },
+});
+images[0].mediaType; // "image/jpeg"
+providerMetadata.xai?.images[0]; // revisedPrompt와 해당 호출의 costInUsdTicks
+providerMetadata.qgrid?.images[0]; // mediaType, tokenName, requestLogId, costUsd
+```
+
+`generateImage`는 배치 호출의 `images` 배열만 합치므로, 각 호출의 비용은 그 호출의 첫 이미지 항목에 담깁니다.
+
+### Grok 비디오
+
+```typescript
+import { experimental_generateVideo as generateVideo } from "ai";
+import { qgrid, QgridVideoTimeoutError, resumeQgridVideo } from "@cartanova/qgrid-ai-sdk";
+
+try {
+  const { video, providerMetadata } = await generateVideo({
+    model: qgrid.video("grok/grok-imagine-video-1.5", { projectName: "studio" }),
+    prompt: "A paper boat drifting down a rain gutter",
+    duration: 6,
+    aspectRatio: "16:9",
+    providerOptions: { xai: { resolution: "720p" } },
+  });
+  providerMetadata.xai?.videoUrl; // api.x.ai URL
+  video.uint8Array; // qgrid가 아니라 이 프로세스에서 AI SDK가 다운로드
+} catch (error) {
+  if (error instanceof QgridVideoTimeoutError) {
+    const { videos } = await resumeQgridVideo(error.jobHandle, { projectName: "studio" });
+    videos[0]; // { type: "url", url, mediaType: "video/mp4" }
+  } else {
+    throw error;
+  }
+}
+```
+
+- 모델은 `videoStart` 후 300초 예산 안에서 5초마다 `videoStatus`를 polling합니다(`xai.pollIntervalMs` / `xai.pollTimeoutMs`로 변경). `abortSignal`은 polling만 멈추며 upstream job은 계속 실행됩니다.
+- start와 status의 `projectName`은 반드시 같아야 합니다. 서버는 job을 시작한 project에만 job handle 결과를 돌려줍니다. factory나 `QGRID_PROJECT_NAME`으로 한 번 지정하고, `resumeQgridVideo`에도 같은 값을 넘기세요.
+- 결과는 `@ai-sdk/xai`와 똑같이 `{ type: "url", url, mediaType: "video/mp4" }`입니다. URL은 `api.x.ai` 저장소를 가리키며 qgrid는 비디오를 가져오거나 프록시하거나 저장하지 않습니다. `experimental_generateVideo`는 호출한 프로세스에서 이 URL을 다운로드합니다. URL만 쓰려면 `download`를 직접 넘기세요.
+- AI SDK v3 video model에는 `doGenerate`만 있습니다(`doStart`/`doStatus` 없음). 시간 초과된 job은 `resumeQgridVideo(jobHandle, options)`로 이어서 기다립니다. handle은 `providerMetadata.qgrid.jobHandle`과 `QgridVideoTimeoutError` / `QgridVideoGenerationError`에도 있습니다.
+- 비디오 생성은 ZDR이 아닌 계정에서 live 검증되었습니다(기본 길이 8초; `experimental_generateVideo`의 최상위 `duration` 옵션으로 변경). Zero Data Retention 계정은 xAI가 거부하므로 비디오 라우팅에서 제외됩니다.
+- 비디오는 Zero Data Retention 계정으로 라우팅되지 않습니다. xAI가 이런 계정에 `output.upload_url`을 요구하는데 qgrid는 이를 지원하지 않습니다. 모든 토큰이 ZDR이면 HTTP 503으로 실패하므로, xAI에서 data-retention opt-out을 끄거나 ZDR이 아닌 계정을 추가하세요.
+
+### Grok 음성 인식과 음성 합성
+
+```typescript
+import { readFile } from "node:fs/promises";
+import {
+  experimental_generateSpeech as generateSpeech,
+  experimental_transcribe as transcribe,
+} from "ai";
+import { qgrid } from "@cartanova/qgrid-ai-sdk";
+
+const transcript = await transcribe({
+  model: qgrid.transcription("grok/grok-voice-transcribe-2.0"),
+  audio: await readFile("meeting.mp3"),
+  providerOptions: { xai: { language: "en" } },
+});
+transcript.text;
+transcript.durationInSeconds;
+
+const speech = await generateSpeech({
+  model: qgrid.speech("grok/grok-tts"),
+  text: "Your build is ready.",
+  voice: "ara",
+  language: "en",
+  outputFormat: "mp3",
+});
+speech.audio.uint8Array;
+```
+
+- `experimental_transcribe`는 bytes로 오디오 형식을 감지하고 실패하면 `audio/wav`를 씁니다. 서버는 `audio/*`가 아닌 값을 거부합니다. transcript에는 segment가 없습니다(`segments: []`).
+- 음성 합성 텍스트는 최대 15,000자입니다. `voice`, `language`, `outputFormat`을 지정하지 않으면 서버 기본값 `ara`, `en`, `mp3`가 쓰이며, live 검증된 조합은 이것뿐입니다. 다른 voice, language(`@ai-sdk/xai`의 `auto` 포함), codec은 그대로 전달되지만 미검증입니다. 서버가 돌려준 오디오 MIME 타입은 `providerMetadata.qgrid.mediaType`에 있고, AI SDK의 `speech.audio.mediaType`은 bytes에서 추정한 값입니다.
 
 ## Telemetry Logger
 
@@ -441,7 +589,7 @@ type QgridSupportedModel =
 ### GPT-6 사양
 
 | 모델 | Context (Codex 카탈로그) | 최대 출력 (공개 API) | 1M tokens당 input / cached input / cache write / output |
-|---|---:|---:|---:|
+| --- | ---: | ---: | ---: |
 | `openai/gpt-6-astra` | 272K | 128K | $10 / $1 / $12.50 / $50 |
 | `openai/gpt-6.1-sol` | 272K | 128K | $2 / $0.10 / $2.50 / $10 |
 | `openai/gpt-6-sol` | 272K | 128K | $2 / $0.20 / $2.50 / $10 |
@@ -452,7 +600,7 @@ type QgridSupportedModel =
 ### GPT-5.6 사양
 
 | 모델 | Context (Codex 카탈로그) | 최대 출력 (공개 API) | 1M tokens당 input / cached input / cache write / output |
-|---|---:|---:|---:|
+| --- | ---: | ---: | ---: |
 | `openai/gpt-5.6-sol` | 272K | 128K | $4 / $0.40 / $5 / $20 |
 | `openai/gpt-5.6-terra` | 272K | 128K | $2 / $0.20 / $2.50 / $12 |
 | `openai/gpt-5.6-luna` | 272K | 128K | $0.20 / $0.02 / $0.25 / $1.20 |
@@ -494,7 +642,7 @@ qgrid(modelId, {
 ## 환경변수
 
 | 변수 | 설명 | 기본값 |
-|---|---|---|
+| --- | --- | --- |
 | `QGRID_URL` | qgrid 서버 주소 | `http://localhost:44900` |
 | `QGRID_PROJECT_NAME` | request log 프로젝트 이름 (provider/logger 공통) | (없음) |
 

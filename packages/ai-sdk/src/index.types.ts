@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /**
  * OpenAI 경로(ChatGPT 구독 Codex 백엔드)의 reasoning effort. 백엔드 모델 카탈로그의
  * supported_reasoning_levels 합집합이다. `none`/`minimal`은 공개 effort 값이 아니며,
@@ -22,7 +24,27 @@ type QgridCommonProviderConfig = {
 };
 
 /** Codex Images request ID, not a guaranteed serving version; does not select a chat model. */
-export type QgridImageModel = "openai/gpt-image-2";
+export type QgridImageModel =
+  | "openai/gpt-image-2"
+  | "grok/grok-imagine-image"
+  | "grok/grok-imagine-image-2.0"
+  | "grok/grok-imagine-image-quality";
+
+/** Grok video generation model ids (xAI subscription; not yet wired to a provider factory). */
+export type QgridVideoModel =
+  | "grok/grok-imagine-video"
+  | "grok/grok-imagine-video-1.5"
+  | "grok/grok-imagine-video-1.5-lite";
+
+/** Grok speech-to-text model ids. */
+export type QgridTranscriptionModel = "grok/grok-voice-transcribe-2.0";
+
+/**
+ * Grok text-to-speech model id. Placeholder: the live probe verified the `/tts` endpoint with the
+ * subscription JWT, but no TTS model id was observed (`/speech-models` returned 404).
+ */
+export type QgridSpeechModel = "grok/grok-tts";
+
 export type QgridImageProviderConfig = QgridCommonProviderConfig;
 
 /** `providerOptions.qgrid` for `generateImage({ model: qgrid.image(...) })`. */
@@ -129,6 +151,60 @@ export type QgridInputPart =
   | { type: "text"; text: string; text_elements: [] }
   | { type: "image"; url: string };
 
+/**
+ * Grok(xAI subscription) language model ids. The literals are the four ids the subscription
+ * `/models` catalog returned at GROK_BUILD_VERSION 1.0.60 (`grok-4.7` is the default); any other
+ * `grok/<id>` is accepted so newly cataloged models need no SDK release.
+ */
+export type QgridGrokModel =
+  | "grok/grok-4.7"
+  | "grok/grok-4.7-build-fast"
+  | "grok/grok-4.6"
+  | "grok/grok-4.5"
+  | (`grok/${string}` & {});
+
+/**
+ * `providerOptions.xai` for Grok models, cloned field-for-field from `@ai-sdk/xai`
+ * (`xai-responses-language-model-options.ts`) so code written for `@ai-sdk/xai` keeps parsing.
+ * Parsing only proves the shape; `mapXaiProviderOptions` decides which keys qgrid honors.
+ */
+export const qgridXaiProviderOptionsSchema = z.object({
+  /**
+   * Constrains how hard a reasoning model thinks before responding. qgrid validates the value
+   * against the model's catalog effort set; `none` is rejected because the proxy always reasons.
+   */
+  reasoningEffort: z.enum(["none", "low", "medium", "high", "xhigh"]).optional(),
+  /** Maximum number of agentic tool-calling turns. Rejected by qgrid. */
+  maxTurns: z.number().int().optional(),
+  /** Whether the model may call tools in parallel. @default true */
+  parallelToolCalls: z.boolean().optional(),
+  /** Cache key used to route requests with shared prompt prefixes. */
+  promptCacheKey: z.string().optional(),
+  /** Stable identifier used to attribute policy violations to an end user. Rejected by qgrid. */
+  safetyIdentifier: z.string().optional(),
+  serviceTier: z.enum(["default", "priority"]).optional(),
+  /** Rejected by qgrid: it always sends `store: false`. */
+  store: z.boolean().optional(),
+  /** Rejected by qgrid: it replays history itself. */
+  previousResponseId: z.string().optional(),
+  /** A unique identifier for the end user, used for abuse monitoring. Rejected by qgrid. */
+  user: z.string().optional(),
+  /** Rejected by qgrid: it fixes `include` itself. */
+  include: z
+    .array(
+      z.enum([
+        "file_search_call.results",
+        "web_search_call.action.sources",
+        "code_interpreter_call.outputs",
+        "reasoning.encrypted_content",
+        "no_inline_citations",
+      ]),
+    )
+    .nullish(),
+});
+
+export type QgridXaiProviderOptions = z.infer<typeof qgridXaiProviderOptionsSchema>;
+
 export type QgridSupportedModel =
   | "openai/gpt-6-astra"
   | "openai/gpt-6.1-sol"
@@ -160,7 +236,8 @@ export type QgridSupportedModel =
   | "anthropic/claude-opus-5"
   | "anthropic/claude-opus-5-5"
   | "anthropic/claude-sonnet-5-5"
-  | "anthropic/claude-haiku-5-5";
+  | "anthropic/claude-haiku-5-5"
+  | QgridGrokModel;
 
 /** Observed image response values. Usage is response-level and appears on the first image only. */
 export type QgridImageGenerationMetadata = {

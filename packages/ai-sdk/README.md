@@ -53,6 +53,7 @@ A qgrid server (`http://localhost:44900`) must be running.
 The OpenAI server route calls the private ChatGPT Codex Responses backend directly over HTTPS/SSE. That backend is undocumented and may change without notice; qgrid's mocked protocol tests are not live-provider verification.
 
 ## Usage
+>
 > Before you start: all client-side usage is identical to the [AI SDK](https://ai-sdk.dev/docs/ai-sdk-core).
 
 ### Text generation
@@ -69,6 +70,7 @@ const { text } = await generateText({
 ```
 
 ### Structured Output
+>
 > See the [AI SDK structured output guide](https://ai-sdk.dev/docs/ai-sdk-core/generating-structured-data)
 
 ```typescript
@@ -209,7 +211,7 @@ const { text } = await generateText({
 ```
 
 | Option | Values | Applies to | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `tokenName` | provider-prefixed token name | both providers | Strictly targets one active token, such as `anthropic/yds`. The prefix must match the model provider; empty, missing, inactive, or over-threshold targets fail without fallback |
 | `logger` | `boolean` | both providers | qgrid request logging. Defaults to `true`; `false` disables request-log persistence for this generation without disabling client tools or multi-step continuation |
 | `sessionKey` | `string` | OpenAI only | Multi-turn conversation identifier used to derive opaque prompt-cache affinity while replaying full history (see [below](#multi-turn-prompt-cache-sessionkey)) |
@@ -245,7 +247,7 @@ providerOptions: {
 Thinking-off policy snapshot (2026-10-10; Claude Code investigation baseline 2.1.295):
 
 | Provider | Off-capable model IDs in the current policy |
-|---|---|
+| --- | --- |
 | OpenAI | `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` |
 | Anthropic | `claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-haiku-4-5`, `claude-sonnet-4-5`, `claude-sonnet-4-6`, `claude-sonnet-5`, `claude-opus-4-5`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` |
 
@@ -340,6 +342,154 @@ images for editing. The server calls subscription Images directly for ordinary a
 output, then combines separate chat and image usage estimates in the request log. Chat may
 still return text only. No public SDK image-tool factory is required; automatic chat images
 are PNG-only, like `generateImage`.
+
+## Using Grok
+
+qgrid routes `grok/*` models through an xAI subscription token (plans: Plus, Premium, Super, Ultra) registered in the qgrid
+dashboard (Grok sign-in). Token names carry the `grok/` prefix, for example `grok/main`. Every
+Grok model accepts the same factory config as the other models: `serverUrl` (default
+`QGRID_URL`) and `projectName` (default `QGRID_PROJECT_NAME`). Update the server and SDK together.
+
+| Factory | Model ids | AI SDK function |
+| --- | --- | --- |
+| `qgrid(id)` | `grok/grok-4.7` (default catalog model), `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`, any other `grok/<id>` | `generateText`, `streamText` |
+| `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0`, `grok/grok-imagine-image-quality` | `generateImage` |
+| `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
+| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0` | `experimental_transcribe` |
+| `qgrid.speech(id)` | `grok/grok-tts` (the id only labels the request log) | `experimental_generateSpeech` |
+
+Options use the `@ai-sdk/xai` names under `providerOptions.xai`, so code written for
+`@ai-sdk/xai` keeps compiling. qgrid-only settings (`tokenName` with the `grok/` prefix, `logger`)
+stay under `providerOptions.qgrid`. Malformed values throw before any request; well-formed
+options qgrid cannot honor are dropped with an AI SDK `unsupported` warning.
+
+### Grok text
+
+```typescript
+import { generateText } from "ai";
+import { qgrid } from "@cartanova/qgrid-ai-sdk";
+
+const { text, providerMetadata } = await generateText({
+  model: qgrid("grok/grok-4.7"),
+  prompt: "Summarize this release note",
+  providerOptions: { xai: { reasoningEffort: "high", promptCacheKey: "session-42" } },
+});
+providerMetadata?.xai?.costInUsdTicks; // 1 tick = 1e-10 USD
+```
+
+Grok language models keep user image parts (https URLs or inline bytes) instead of dropping them.
+
+| `providerOptions.xai` key | Language model handling |
+| --- | --- |
+| `promptCacheKey` | Faithful: the same cache-affinity handle as `providerOptions.qgrid.sessionKey` |
+| `serviceTier` | Faithful |
+| `parallelToolCalls` | Faithful |
+| `reasoningEffort` | Transformed to qgrid `effort`, validated against the model's `low`/`medium`/`high`/`xhigh` set; `none` is unsupported because the route always reasons |
+| `store` | Unsupported: qgrid always sends `store: false` |
+| `previousResponseId` | Unsupported: qgrid replays conversation history itself |
+| `include` | Unsupported: qgrid fixes the include list itself |
+| `maxTurns` | Unsupported: qgrid does not run server-side agentic turns |
+| `user`, `safetyIdentifier` | Unsupported: qgrid does not forward end-user identifiers |
+
+### Grok media options
+
+| Model | Faithful | Transformed | Unsupported (warning) |
+| --- | --- | --- | --- |
+| Image | `n` (up to 3 per call), `aspectRatio`, `xai.resolution` (`1k`/`1.5k`/`2k`), `xai.quality`, `xai.aspect_ratio` (used when `aspectRatio` is unset) | reference `images` become `referenceImages` (edit endpoint); `xai.output_format` becomes `outputFormat` and must be `png`, `jpeg`, or `webp` | `size`, `seed`, `mask`, `xai.sync_mode`, `xai.user` |
+| Video | `duration` (integer 1-15), `aspectRatio`, `xai.resolution` (`480p`/`720p`/`1080p`), `xai.mode: "reference-to-video"`, `xai.pollIntervalMs`, `xai.pollTimeoutMs` | `resolution` `WxH` is mapped as in `@ai-sdk/xai` (`1280x720` to `720p`); prompt `image` becomes the start frame; `xai.referenceImageUrls` (up to 5, not 7) become `referenceImages`; `xai.lastFrame` (qgrid extension, `grok-imagine-video-1.5` only) | `fps`, `seed`, `xai.keyframes`, `xai.storageOptions`, `xai.referenceVoiceIds`, `xai.user`. `xai.mode` `edit-video`/`extend-video` and `xai.videoUrl` throw |
+| Transcription | `xai.language` | audio bytes become base64 and `mediaType` loses its parameters (`audio/webm;codecs=opus` to `audio/webm`) | every other `xai` key (`audioFormat`, `sampleRate`, `format`, `diarize`, `keyterm`, ...) |
+| Speech | `voice`, `language` | `outputFormat` becomes `format` (`mp3`, `wav`, `pcm`, `mulaw`, `alaw`; anything else falls back to `mp3` with a warning, as in `@ai-sdk/xai`) | `instructions`, `speed`, every `xai` key (`sampleRate`, `bitRate`, `withTimestamps`, ...) |
+
+**Request size.** The qgrid server accepts JSON bodies up to 10 MiB. Inline media travels as
+base64, which grows by a third, so the server caps inline audio, each inline image, and all
+inline images of one request together (video: `image` + `lastFrame` + references) at 7 MiB
+decoded. The SDK rejects larger input before transport; a server 413 surfaces as the same size
+error. Compress the input, or pass an https image URL where the option accepts one.
+
+### Grok images
+
+```typescript
+import { generateImage } from "ai";
+import { qgrid } from "@cartanova/qgrid-ai-sdk";
+
+const { images, providerMetadata } = await generateImage({
+  model: qgrid.image("grok/grok-imagine-image"),
+  prompt: "A lighthouse at dusk, oil painting",
+  n: 2,
+  aspectRatio: "16:9",
+  providerOptions: { xai: { resolution: "2k", quality: "high", output_format: "jpeg" } },
+});
+images[0].mediaType; // "image/jpeg"
+providerMetadata.xai?.images[0]; // revisedPrompt and the call's costInUsdTicks
+providerMetadata.qgrid?.images[0]; // mediaType, tokenName, requestLogId, costUsd
+```
+
+`generateImage` merges only the `images` arrays of batched calls, so each call's cost rides on
+its first image entry.
+
+### Grok video
+
+```typescript
+import { experimental_generateVideo as generateVideo } from "ai";
+import { qgrid, QgridVideoTimeoutError, resumeQgridVideo } from "@cartanova/qgrid-ai-sdk";
+
+try {
+  const { video, providerMetadata } = await generateVideo({
+    model: qgrid.video("grok/grok-imagine-video-1.5", { projectName: "studio" }),
+    prompt: "A paper boat drifting down a rain gutter",
+    duration: 6,
+    aspectRatio: "16:9",
+    providerOptions: { xai: { resolution: "720p" } },
+  });
+  providerMetadata.xai?.videoUrl; // the api.x.ai URL
+  video.uint8Array; // downloaded by AI SDK in this process, not by qgrid
+} catch (error) {
+  if (error instanceof QgridVideoTimeoutError) {
+    const { videos } = await resumeQgridVideo(error.jobHandle, { projectName: "studio" });
+    videos[0]; // { type: "url", url, mediaType: "video/mp4" }
+  } else {
+    throw error;
+  }
+}
+```
+
+- The model calls `videoStart`, then polls `videoStatus` every 5 s within a 300 s budget (override with `xai.pollIntervalMs` / `xai.pollTimeoutMs`). `abortSignal` stops polling; the upstream job keeps running.
+- `projectName` is required to be identical for start and status: the server only answers a job handle to the project that started it. Set it once on the factory or through `QGRID_PROJECT_NAME`; pass the same value to `resumeQgridVideo`.
+- The result is `{ type: "url", url, mediaType: "video/mp4" }`, exactly as `@ai-sdk/xai` returns it. The URL points at `api.x.ai` storage; qgrid never fetches, proxies, or stores the video. `experimental_generateVideo` downloads it from the calling process; pass a custom `download` to keep only the URL.
+- AI SDK v3 video models only have `doGenerate` (no `doStart`/`doStatus`). `resumeQgridVideo(jobHandle, options)` is the qgrid way to continue a timed-out job; the handle is also in `providerMetadata.qgrid.jobHandle` and on `QgridVideoTimeoutError` / `QgridVideoGenerationError`.
+- Video generation was verified live on a non-ZDR account (default clip is 8 s; pass the top-level `duration` option of `experimental_generateVideo` to change it). Zero Data Retention accounts are refused by xAI and are skipped for video.
+- Video is not routed to Zero Data Retention accounts: xAI requires an `output.upload_url` for them, which qgrid does not support. When every token is ZDR the call fails with HTTP 503; turn off the data-retention opt-out at xAI or add a non-ZDR account.
+
+### Grok transcription and speech
+
+```typescript
+import { readFile } from "node:fs/promises";
+import {
+  experimental_generateSpeech as generateSpeech,
+  experimental_transcribe as transcribe,
+} from "ai";
+import { qgrid } from "@cartanova/qgrid-ai-sdk";
+
+const transcript = await transcribe({
+  model: qgrid.transcription("grok/grok-voice-transcribe-2.0"),
+  audio: await readFile("meeting.mp3"),
+  providerOptions: { xai: { language: "en" } },
+});
+transcript.text;
+transcript.durationInSeconds;
+
+const speech = await generateSpeech({
+  model: qgrid.speech("grok/grok-tts"),
+  text: "Your build is ready.",
+  voice: "ara",
+  language: "en",
+  outputFormat: "mp3",
+});
+speech.audio.uint8Array;
+```
+
+- `experimental_transcribe` detects the audio type from its bytes and falls back to `audio/wav`; the server rejects anything that is not `audio/*`. Transcripts carry no segments (`segments: []`).
+- Speech text is limited to 15,000 characters. Unset `voice`, `language` and `outputFormat` use the server defaults `ara`, `en` and `mp3`, the only combination verified live. Other voices, languages (including `@ai-sdk/xai`'s `auto`) and codecs are passed through but unverified. The server's audio MIME type is in `providerMetadata.qgrid.mediaType`; AI SDK's `speech.audio.mediaType` is sniffed from the bytes.
 
 ## Telemetry Logger
 
@@ -452,7 +602,7 @@ type QgridSupportedModel =
 ### GPT-6 specifications
 
 | Model | Context (Codex catalog) | Max output (public API) | Input / cached input / cache write / output per 1M tokens |
-|---|---:|---:|---:|
+| --- | ---: | ---: | ---: |
 | `openai/gpt-6-astra` | 272K | 128K | $10 / $1 / $12.50 / $50 |
 | `openai/gpt-6.1-sol` | 272K | 128K | $2 / $0.10 / $2.50 / $10 |
 | `openai/gpt-6-sol` | 272K | 128K | $2 / $0.20 / $2.50 / $10 |
@@ -463,7 +613,7 @@ The Codex catalog fetched on 2026-09-23 advertises a 272K context window for Ast
 ### GPT-5.6 specifications
 
 | Model | Context (Codex catalog) | Max output (public API) | Input / cached input / cache write / output per 1M tokens |
-|---|---:|---:|---:|
+| --- | ---: | ---: | ---: |
 | `openai/gpt-5.6-sol` | 272K | 128K | $4 / $0.40 / $5 / $20 |
 | `openai/gpt-5.6-terra` | 272K | 128K | $2 / $0.20 / $2.50 / $12 |
 | `openai/gpt-5.6-luna` | 272K | 128K | $0.20 / $0.02 / $0.25 / $1.20 |
@@ -505,7 +655,7 @@ If multiple projects/workflows share one qgrid server, set `QGRID_PROJECT_NAME`.
 ## Environment variables
 
 | Variable | Description | Default |
-|---|---|---|
+| --- | --- | --- |
 | `QGRID_URL` | qgrid server address | `http://localhost:44900` |
 | `QGRID_PROJECT_NAME` | request log project name (provider and logger) | (empty) |
 

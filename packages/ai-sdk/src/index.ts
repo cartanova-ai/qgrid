@@ -2,14 +2,20 @@ import {
   type LanguageModelV3,
   type LanguageModelV3CallOptions,
   type LanguageModelV3Content,
+  type LanguageModelV3FilePart,
   type LanguageModelV3FinishReason,
   type LanguageModelV3FunctionTool,
   type LanguageModelV3GenerateResult,
+  type LanguageModelV3Message,
   type LanguageModelV3StreamPart,
   type LanguageModelV3StreamResult,
+  type SharedV3ProviderMetadata,
+  type SharedV3Warning,
 } from "@ai-sdk/provider";
+import { z } from "zod";
 
 import { createEnvelopeStreamParser } from "./envelope-stream-parser";
+import { mapXaiProviderOptions, type QgridGrokEffort } from "./grok-options";
 import {
   closeQgridRequestTransport,
   createQgridRequestTransport,
@@ -21,6 +27,8 @@ import {
   type QueryOutput,
   type QgridAnthropicModel,
   type QgridAnthropicProviderConfig,
+  type QgridGrokModel,
+  type QgridInputPart,
   type QgridOpenAIModel,
   type QgridOpenAIProviderConfig,
   type QgridProviderConfig,
@@ -36,12 +44,23 @@ import {
   THREAD_COORD_TTL_MS,
   TOP_LEVEL_SCHEMA_WARNING,
 } from "./qgrid.constant";
+import { createQgridSpeech } from "./speech-model";
+import { createQgridTranscription } from "./transcription-model";
 import {
+  assertImageInputFitsJsonTransport,
+  bytesToBase64,
   extractPromptAndHistory,
   extractToolResultsFromHistory,
   parseSSE,
   toQgridTool,
 } from "./utils";
+import { createQgridVideo } from "./video-model";
+
+/** `qgrid()` config for Grok models; `defaultEffort` uses the Grok catalog effort vocabulary. */
+export type QgridGrokProviderConfig = Omit<QgridOpenAIProviderConfig, "defaultEffort"> & {
+  /** Omitted: the server applies the model's catalog default effort. */
+  defaultEffort?: QgridGrokEffort;
+};
 
 // model-scoped opaque affinity → threadCoord. The key is derived independently of this map, so
 // separate qgrid() instances and processes send the same cache affinity for the same session.
@@ -57,6 +76,195 @@ function warnDroppedImages(droppedImageCount: number): void {
     `[qgrid] ${droppedImageCount} image message part(s) were ignored because qgrid language models do not support image input. For image generation or editing, use generateImage with qgrid.image().`,
   );
 }
+
+function isGrokModel(modelId: string): boolean {
+  return modelId.startsWith("grok/");
+}
+
+const IMAGE_SIGNATURES: ReadonlyArray<{ mediaType: string; bytes: readonly number[] }> = [
+  { mediaType: "image/png", bytes: [0x89, 0x50, 0x4e, 0x47] },
+  { mediaType: "image/jpeg", bytes: [0xff, 0xd8, 0xff] },
+  { mediaType: "image/gif", bytes: [0x47, 0x49, 0x46, 0x38] },
+  { mediaType: "image/webp", bytes: [0x52, 0x49, 0x46, 0x46] },
+];
+
+function sniffImageMediaType(bytes: Uint8Array): string | undefined {
+  return IMAGE_SIGNATURES.find((signature) =>
+    signature.bytes.every((byte, index) => bytes[index] === byte),
+  )?.mediaType;
+}
+
+// Grok input image URL for an image file part: an https URL is passed through, bytes become a data
+// URL. Returns undefined for non-image parts and for images the backend cannot fetch.
+function grokImageUrl(part: LanguageModelV3FilePart): string | undefined {
+  const mediaType = part.mediaType.toLowerCase();
+  if (!mediaType.startsWith("image/")) return undefined;
+  const { data } = part;
+  if (data instanceof URL) {
+    return data.protocol === "https:" || data.protocol === "data:" ? data.href : undefined;
+  }
+  if (typeof data === "string") {
+    if (/^(https:|data:)/i.test(data)) return data;
+    if (mediaType === "image/*") return undefined;
+    return `data:${mediaType};base64,${data}`;
+  }
+  const resolved = mediaType === "image/*" ? sniffImageMediaType(data) : mediaType;
+  return resolved ? `data:${resolved};base64,${bytesToBase64(data)}` : undefined;
+}
+
+type GrokUserPart = { type: "text"; text: string } | { type: "image"; url: string };
+
+function grokUserParts(content: LanguageModelV3Message["content"]): GrokUserPart[] {
+  if (typeof content === "string") return [{ type: "text", text: content }];
+  const parts: GrokUserPart[] = [];
+  for (const part of content) {
+    if (part.type === "text") {
+      parts.push({ type: "text", text: part.text });
+    } else if (part.type === "file") {
+      const url = grokImageUrl(part);
+      if (url !== undefined) parts.push({ type: "image", url });
+    }
+  }
+  return parts;
+}
+
+type PreparedPrompt = {
+  prompt: string;
+  system: string | undefined;
+  history: unknown[];
+  input?: QgridInputPart[];
+};
+
+// Grok keeps user image parts: the current turn's images travel in `input`, earlier user turns
+// carry Responses-style `input_image` parts in history. Other providers drop images with a warning.
+function preparePrompt(modelId: string, messages: LanguageModelV3Message[]): PreparedPrompt {
+  const extracted = extractPromptAndHistory(messages);
+  if (!isGrokModel(modelId)) {
+    warnDroppedImages(extracted.droppedImageCount);
+    return extracted;
+  }
+
+  const userMessages = messages.filter((message) => message.role === "user");
+  const nonSystem = messages.filter((message) => message.role !== "system");
+  const promptMessage = nonSystem.at(-1)?.role === "user" ? nonSystem.at(-1) : undefined;
+  const historyUserMessages = promptMessage ? userMessages.slice(0, -1) : userMessages;
+
+  let keptImageCount = 0;
+  const imageUrls: string[] = [];
+  const countImages = (parts: GrokUserPart[]) => {
+    for (const part of parts) {
+      if (part.type === "image") {
+        keptImageCount++;
+        imageUrls.push(part.url);
+      }
+    }
+  };
+
+  let historyUserIndex = 0;
+  const history = extracted.history.map((item) => {
+    if (!isUserHistoryMessage(item)) return item;
+    const source = historyUserMessages[historyUserIndex++];
+    if (!source) return item;
+    const parts = grokUserParts(source.content);
+    if (!parts.some((part) => part.type === "image")) return item;
+    countImages(parts);
+    return {
+      type: "message",
+      role: "user",
+      content: parts.map((part) =>
+        part.type === "text"
+          ? { type: "input_text", text: part.text }
+          : { type: "input_image", image_url: part.url },
+      ),
+    };
+  });
+
+  let input: QgridInputPart[] | undefined;
+  if (promptMessage) {
+    const parts = grokUserParts(promptMessage.content);
+    if (parts.some((part) => part.type === "image")) {
+      countImages(parts);
+      input = parts.map((part) =>
+        part.type === "text"
+          ? { type: "text", text: part.text, text_elements: [] }
+          : { type: "image", url: part.url },
+      );
+    }
+  }
+
+  assertImageInputFitsJsonTransport(imageUrls);
+  warnDroppedImages(extracted.droppedImageCount - keptImageCount);
+  return {
+    prompt: extracted.prompt,
+    system: extracted.system,
+    history,
+    ...(input ? { input } : {}),
+  };
+}
+
+function isUserHistoryMessage(item: unknown): boolean {
+  return (
+    typeof item === "object" &&
+    item !== null &&
+    "type" in item &&
+    item.type === "message" &&
+    "role" in item &&
+    item.role === "user"
+  );
+}
+
+type ResolvedXaiOptions = {
+  warnings: SharedV3Warning[];
+  effort?: QgridGrokEffort;
+  promptCacheKey?: string;
+  // Forwarded verbatim under `providerOptions.xai`; the Grok dispatcher owns these semantics.
+  wire?: { serviceTier?: "default" | "priority"; parallelToolCalls?: boolean };
+};
+
+function resolveXaiOptions(
+  modelId: string,
+  options: LanguageModelV3CallOptions,
+): ResolvedXaiOptions {
+  const raw = options.providerOptions?.xai;
+  if (!isGrokModel(modelId)) {
+    return raw === undefined
+      ? { warnings: [] }
+      : {
+          warnings: [
+            {
+              type: "unsupported",
+              feature: "providerOptions.xai",
+              details: `providerOptions.xai applies only to grok/ models and was ignored for ${modelId}.`,
+            },
+          ],
+        };
+  }
+  const mapped = mapXaiProviderOptions(raw, modelId);
+  const { effort, promptCacheKey, serviceTier, parallelToolCalls } = mapped.request;
+  const wire = {
+    ...(serviceTier === undefined ? {} : { serviceTier }),
+    ...(parallelToolCalls === undefined ? {} : { parallelToolCalls }),
+  };
+  return {
+    warnings: mapped.warnings.map((warning) => ({
+      type: "unsupported",
+      feature: `providerOptions.xai.${warning.key}`,
+      details: warning.reason,
+    })),
+    ...(effort === undefined ? {} : { effort }),
+    ...(promptCacheKey === undefined ? {} : { promptCacheKey }),
+    ...(Object.keys(wire).length > 0 ? { wire } : {}),
+  };
+}
+
+const xaiResponseMetadataSchema = z.object({
+  providerMetadata: z.object({
+    xai: z.object({
+      costInUsdTicks: z.number().optional(),
+      contextWindow: z.number().optional(),
+    }),
+  }),
+});
 
 function serializeObjectResponseFormat(
   responseFormat: LanguageModelV3CallOptions["responseFormat"],
@@ -99,17 +307,20 @@ function setThreadCoord(sessionKey: string, coord: QgridThreadCoord): void {
 
 function providerWarnings(
   options: QgridResolvedProviderOptions,
+  xaiWarnings: SharedV3Warning[] = [],
 ): LanguageModelV3GenerateResult["warnings"] {
-  return options.fallbackModels === undefined
-    ? []
-    : [
-        {
-          type: "unsupported",
-          feature: "providerOptions.qgrid.fallbackModels",
-          details:
-            "fallbackModels is deprecated and ignored; qgrid does not implement model fallback routing.",
-        },
-      ];
+  const warnings: SharedV3Warning[] =
+    options.fallbackModels === undefined
+      ? []
+      : [
+          {
+            type: "unsupported",
+            feature: "providerOptions.qgrid.fallbackModels",
+            details:
+              "fallbackModels is deprecated and ignored; qgrid does not implement model fallback routing.",
+          },
+        ];
+  return [...warnings, ...xaiWarnings];
 }
 
 async function deriveCacheAffinityKey(
@@ -122,10 +333,22 @@ async function deriveCacheAffinityKey(
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function qgridProviderMetadata(data: QueryOutput) {
+function qgridProviderMetadata(data: QueryOutput): SharedV3ProviderMetadata {
+  const xai = xaiResponseMetadataSchema.safeParse(data);
+  const xaiMetadata = xai.success
+    ? {
+        ...(xai.data.providerMetadata.xai.costInUsdTicks === undefined
+          ? {}
+          : { costInUsdTicks: xai.data.providerMetadata.xai.costInUsdTicks }),
+        ...(xai.data.providerMetadata.xai.contextWindow === undefined
+          ? {}
+          : { contextWindow: xai.data.providerMetadata.xai.contextWindow }),
+      }
+    : undefined;
   return {
+    ...(xaiMetadata && Object.keys(xaiMetadata).length > 0 ? { xai: xaiMetadata } : {}),
     qgrid: {
-      ...(data.requestLogId !== undefined ? { requestLogId: data.requestLogId } : {}),
+      ...(data.requestLogId === undefined ? {} : { requestLogId: data.requestLogId }),
       model: data.model,
       requestedModel: data.requestedModel ?? data.model,
       modelFallbacks: data.modelFallbacks ?? [],
@@ -184,9 +407,15 @@ export function qgrid(
   modelId: QgridAnthropicModel,
   config?: QgridAnthropicProviderConfig,
 ): LanguageModelV3;
-export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig): LanguageModelV3 {
+export function qgrid(modelId: QgridGrokModel, config?: QgridGrokProviderConfig): LanguageModelV3;
+export function qgrid(
+  modelId: QgridSupportedModel,
+  config?: QgridProviderConfig | QgridGrokProviderConfig,
+): LanguageModelV3 {
   const serverUrl = config?.serverUrl ?? process.env.QGRID_URL ?? DEFAULT_QGRID_SERVER_URL;
-  const effort = config?.defaultEffort ?? DEFAULT_QGRID_EFFORT;
+  // Grok keeps the catalog default effort unless the caller chooses one.
+  const effort: string | undefined =
+    config?.defaultEffort ?? (isGrokModel(modelId) ? undefined : DEFAULT_QGRID_EFFORT);
   const projectName = config?.projectName ?? process.env.QGRID_PROJECT_NAME;
 
   type ClientRunContext = NonNullable<QueryOutput["runContext"]>;
@@ -257,12 +486,12 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
       );
       const hasTools = tools && tools.length > 0;
       const qgridOptions = getQgridProviderOptions(options);
-      const { prompt, system, history, droppedImageCount } = extractPromptAndHistory(
-        options.prompt,
-      );
-      warnDroppedImages(droppedImageCount);
+      const xaiOptions = resolveXaiOptions(modelId, options);
+      const { prompt, system, history, input } = preparePrompt(modelId, options.prompt);
       const effectiveEffort =
-        qgridOptions.thinking === false ? undefined : (qgridOptions.effort ?? effort);
+        qgridOptions.thinking === false
+          ? undefined
+          : (qgridOptions.effort ?? xaiOptions.effort ?? effort);
       const verbosity = qgridOptions.verbosity;
       const reasoningSummary = qgridOptions.reasoningSummary;
       const serviceTier = qgridOptions.serviceTier;
@@ -271,7 +500,8 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
       const tokenName = qgridOptions.tokenName;
       // 멀티턴 대화 식별자. 호출자가 자기 도메인 ID(예: 게임 세션 ID)만 넘기면,
       // thread 좌표 보관/회송은 threadCoordStore 가 내부에서 처리한다 → 클라이언트 무부담.
-      const sessionKey = qgridOptions.sessionKey;
+      // Grok: providerOptions.xai.promptCacheKey is the same affinity handle.
+      const sessionKey = qgridOptions.sessionKey ?? xaiOptions.promptCacheKey;
       const cacheAffinityKey = await deriveCacheAffinityKey(modelId, sessionKey);
 
       // qgrid server는 object root schema만 받는다. tools 유무와 무관하게 같은 계약을 적용한다.
@@ -306,6 +536,7 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
           body: JSON.stringify({
             args: {
               prompt,
+              ...(input ? { input } : {}),
               model: modelId,
               system,
               effort: effectiveEffort,
@@ -313,7 +544,7 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
               ...(verbosity ? { verbosity } : {}),
               ...(reasoningSummary ? { reasoningSummary } : {}),
               ...(serviceTier ? { serviceTier } : {}),
-              ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+              ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
               ...(hasTools ? { tools: tools.map(toQgridTool) } : {}),
               ...(jsonSchema ? { jsonSchema } : {}),
               ...(history.length > 0 ? { history: JSON.stringify(history) } : {}),
@@ -323,6 +554,7 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
               ...(tokenName ? { tokenName } : {}),
               ...(runContext ? { runContext } : {}),
               ...(toolResultsPayload ? { toolResults: toolResultsPayload } : {}),
+              ...(xaiOptions.wire ? { providerOptions: { xai: xaiOptions.wire } } : {}),
             },
           }),
           signal: options.abortSignal,
@@ -389,7 +621,7 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
         content,
         finishReason,
         usage: toAiSdkUsage(data.usage),
-        warnings: providerWarnings(qgridOptions),
+        warnings: providerWarnings(qgridOptions, xaiOptions.warnings),
         providerMetadata: qgridProviderMetadata(data),
         response: { modelId: data.model },
       };
@@ -401,19 +633,19 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
       );
       const hasTools = tools && tools.length > 0;
       const qgridOptions = getQgridProviderOptions(options);
+      const xaiOptions = resolveXaiOptions(modelId, options);
       const effectiveEffort =
-        qgridOptions.thinking === false ? undefined : (qgridOptions.effort ?? effort);
+        qgridOptions.thinking === false
+          ? undefined
+          : (qgridOptions.effort ?? xaiOptions.effort ?? effort);
       const verbosity = qgridOptions.verbosity;
       const reasoningSummary = qgridOptions.reasoningSummary;
       const serviceTier = qgridOptions.serviceTier;
       const timeoutMs = qgridOptions.timeoutMs;
       const logger = qgridOptions.logger;
       const tokenName = qgridOptions.tokenName;
-      const { prompt, system, history, droppedImageCount } = extractPromptAndHistory(
-        options.prompt,
-      );
-      warnDroppedImages(droppedImageCount);
-      const sessionKey = qgridOptions.sessionKey;
+      const { prompt, system, history, input } = preparePrompt(modelId, options.prompt);
+      const sessionKey = qgridOptions.sessionKey ?? xaiOptions.promptCacheKey;
       const cacheAffinityKey = await deriveCacheAffinityKey(modelId, sessionKey);
 
       const jsonSchema = serializeObjectResponseFormat(options.responseFormat);
@@ -447,6 +679,7 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
         body: JSON.stringify({
           args: {
             prompt,
+            ...(input ? { input } : {}),
             model: modelId,
             system,
             effort: effectiveEffort,
@@ -454,7 +687,7 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
             ...(verbosity ? { verbosity } : {}),
             ...(reasoningSummary ? { reasoningSummary } : {}),
             ...(serviceTier ? { serviceTier } : {}),
-            ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+            ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
             ...(hasTools ? { tools: tools.map(toQgridTool) } : {}),
             ...(jsonSchema ? { jsonSchema } : {}),
             ...(history.length > 0 ? { history: JSON.stringify(history) } : {}),
@@ -464,6 +697,7 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
             ...(tokenName ? { tokenName } : {}),
             ...(runContext ? { runContext } : {}),
             ...(toolResultsPayload ? { toolResults: toolResultsPayload } : {}),
+            ...(xaiOptions.wire ? { providerOptions: { xai: xaiOptions.wire } } : {}),
           },
         }),
         signal,
@@ -510,7 +744,10 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
         controller: ReadableStreamDefaultController<LanguageModelV3StreamPart>,
       ) {
         try {
-          controller.enqueue({ type: "stream-start", warnings: providerWarnings(qgridOptions) });
+          controller.enqueue({
+            type: "stream-start",
+            warnings: providerWarnings(qgridOptions, xaiOptions.warnings),
+          });
           let streamCompleted = false;
           for await (const event of parseSSE(streamRes.body!, signal)) {
             if (cancelled) return;
@@ -629,8 +866,28 @@ export function qgrid(modelId: QgridSupportedModel, config?: QgridProviderConfig
 }
 
 qgrid.image = createQgridImage;
+qgrid.video = createQgridVideo;
+qgrid.transcription = createQgridTranscription;
+qgrid.speech = createQgridSpeech;
 
+export {
+  QGRID_MAX_REQUEST_BODY_BYTES,
+  QgridMediaHttpError,
+  type QgridGrokMediaProviderOptions,
+  type QgridMediaProviderConfig,
+  type QgridXaiImageProviderOptions,
+} from "./image-model";
+export {
+  QgridVideoGenerationError,
+  QgridVideoTimeoutError,
+  resumeQgridVideo,
+  type QgridVideoPollOptions,
+  type QgridVideoResult,
+  type QgridXaiVideoProviderOptions,
+} from "./video-model";
+export { type QgridXaiTranscriptionProviderOptions } from "./transcription-model";
 export { createQgridLogger } from "./logger";
+export { QgridXaiOptionsError, type QgridGrokEffort } from "./grok-options";
 export type {
   QgridImageGenerationMetadata,
   QgridImageModel,
@@ -640,6 +897,7 @@ export type {
   QgridAnthropicModel,
   QgridAnthropicProviderConfig,
   QgridAnthropicProviderOptions,
+  QgridGrokModel,
   QgridLoggerConfig,
   QgridOpenAIEffort,
   QgridOpenAIModel,
@@ -647,6 +905,10 @@ export type {
   QgridOpenAIProviderOptions,
   QgridProviderConfig,
   QgridProviderOptions,
+  QgridSpeechModel,
   QgridSupportedModel,
+  QgridTranscriptionModel,
+  QgridVideoModel,
+  QgridXaiProviderOptions,
 } from "./index.types";
 export default qgrid;
