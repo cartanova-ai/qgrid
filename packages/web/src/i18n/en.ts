@@ -57,6 +57,22 @@ export default {
   "qgrid.dispatcherFailed": (provider: string) => `${provider} dispatcher failed to initialize`,
   "qgrid.dispatcherStarting": (provider: string) =>
     `${provider} dispatcher is starting up. Please retry shortly`,
+  "qgrid.grokCapabilityUnavailable": (detail: string) => `Grok capability unavailable: ${detail}`,
+  "qgrid.grokCapacity": "All Grok tokens are at their in-flight request cap. Please retry shortly",
+  "qgrid.grokContentPolicy": (detail: string) =>
+    `Grok generation blocked by content policy: ${detail}`,
+  "qgrid.grokInvalidRequest": (detail: string) => `Invalid Grok request: ${detail}`,
+  "qgrid.grokLoginFailed": (detail: string) => `Grok login failed: ${detail}`,
+  "qgrid.grokNotOAuthToken": "Grok login returned credentials that are not an xAI OAuth token",
+  "qgrid.grokNoWorkers": (detail: string) => `No Grok token is available: ${detail}`,
+  "qgrid.grokOnDemandExcluded": (tokens: string) =>
+    `All Grok tokens are excluded because on-demand billing is enabled at xAI: ${tokens}. Turn off on-demand billing, or add another account`,
+  "qgrid.grokZdrVideoUnavailable": (tokens: string) =>
+    `Grok video is unavailable because Zero Data Retention is on for: ${tokens}. Turn off the data-retention opt-out at xAI, or use a non-ZDR account`,
+  "qgrid.invalidInput": (detail: string) => `qgrid: invalid input: ${detail}`,
+  "qgrid.requestBodyTooLarge": (limitMiB: number) =>
+    `Request body exceeds the ${limitMiB} MiB limit`,
+  "qgrid.videoJobNotFound": "video job not found",
   "error.unauthorized": "Unauthorized",
   notFound: (name: string, id: number) => `${name} ID ${id} not found`,
   "validation.email": "Invalid email format",

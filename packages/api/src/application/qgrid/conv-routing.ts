@@ -2,13 +2,17 @@
  * conv-routing — 대화 연속성(cache affinity) 좌표 검증/구성.
  *
  * 모든 turn은 현재 input과 전체 history를 전달한다.
- * OpenAI의 epoch=-1 좌표는 system/model hash와 opaque affinity를 검증한 뒤
+ * Direct provider(OpenAI, Grok)의 epoch=-1 좌표는 system/model hash와 opaque affinity를 검증한 뒤
  * token 선택과 prompt-cache 힌트로만 사용한다.
  */
 import { createHash } from "node:crypto";
 
 import { type ReuseThreadCoord } from "../../utils/providers/common/provider-dispatcher";
-import { type JsonValue, type UserInput } from "../../utils/providers/common/provider-types";
+import {
+  type JsonValue,
+  type ProviderId,
+  type UserInput,
+} from "../../utils/providers/common/provider-types";
 import { type QgridThreadCoord, type QueryInput, type QgridToolResultInput } from "./qgrid.types";
 
 export function systemHash(system?: string, modelNamespace?: string): string {
@@ -40,19 +44,26 @@ export interface ConvDecision {
   preferredTokenId?: number;
 }
 
+// HTTPS direct transport 로 prompt_cache_key affinity 를 쓰는 provider.
+export type DirectProviderId = Extract<ProviderId, "openai" | "grok">;
+
 export interface ConvRoutingOptions {
-  directOpenAI?: boolean;
+  directProvider?: DirectProviderId;
+  // 보통 `<provider>/<model>`. 같은 system 이라도 provider/model 이 다르면 좌표를 공유하지 않는다.
   modelNamespace?: string;
 }
 
-// 입력과 전체 history를 구성하고, 검증된 OpenAI cache affinity만 부가한다.
+// 입력과 전체 history를 구성하고, 검증된 direct-provider cache affinity만 부가한다.
 export function decideConvRouting(
   input: QueryInput,
   options: ConvRoutingOptions = {},
 ): ConvDecision {
+  const directProvider = options.directProvider;
   const sysHash = systemHash(
     input.system,
-    options.directOpenAI ? (options.modelNamespace ?? input.model ?? "openai") : undefined,
+    directProvider === undefined
+      ? undefined
+      : (options.modelNamespace ?? input.model ?? directProvider),
   );
   const history: Array<JsonValue> | undefined = input.history
     ? (JSON.parse(input.history) as Array<JsonValue>)
@@ -63,14 +74,14 @@ export function decideConvRouting(
   // 재사용 자격: 좌표 존재 + system 동일. sessionKey 격리 + systemHash 로 대화 동일성이
   // 보장되고, 공통 prefix 는 백엔드가 prompt_cache_key 고정으로 알아서 캐시한다.
   const directCoordEligible =
-    options.directOpenAI === true &&
+    directProvider !== undefined &&
     coord?.epoch === -1 &&
     coord.systemHash === sysHash &&
     input.cacheAffinityKey !== undefined &&
     coord.threadId === input.cacheAffinityKey;
   // affinity 를 요청하지 않은 one-shot 요청에 임의 키를 붙이면 transport 가 그 소켓을
   // affinity 소켓으로 오인해 재사용되지 않을 연결을 계속 붙들어 둔다 → 키를 비워 둔다.
-  const cacheKey = options.directOpenAI ? input.cacheAffinityKey : undefined;
+  const cacheKey = directProvider === undefined ? undefined : input.cacheAffinityKey;
 
   return {
     // tool follow-up도 실행 user 줄에 결과를 사용해 계속 답하라는 안내를 담는다.

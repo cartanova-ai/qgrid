@@ -20,12 +20,12 @@ import { type TokenSubsetMapping } from "@/services/sonamu.generated";
 import { useUpdateTokenMutation } from "@/services/token/use-update-token-mutation";
 
 import { OAuthCodeEntry } from "./OAuthCodeEntry";
-import { type Provider, useOAuthLoginFlow } from "./use-oauth-login-flow";
+import { isOAuthProvider, useOAuthLoginFlow } from "./use-oauth-login-flow";
 
 type Token = TokenSubsetMapping["A"];
 
 // Quota gate 가 구현된 provider 에서만 threshold 편집/표시를 연다(거짓 UI 방지).
-const QUOTA_THRESHOLD_PROVIDERS = new Set(["anthropic", "openai"]);
+const QUOTA_THRESHOLD_PROVIDERS = new Set(["anthropic", "openai", "grok"]);
 
 // threshold 입력(문자열) → 저장값(number|null) 검증.
 // 빈 값 또는 0 = 해제(null, 제한 없음). 1..100 정수는 그대로. 소수/음수/100 초과는 거부.
@@ -76,6 +76,12 @@ const PROVIDER_THEMES: Record<string, ProviderTheme> = {
     badge: "bg-google-50 text-google-600",
     cost: "text-google-600",
   },
+  grok: {
+    stripe: "bg-sand-800",
+    bar: "bg-sand-600",
+    badge: "bg-sand-800 text-sand-50",
+    cost: "text-sand-800",
+  },
 };
 
 const DEFAULT_THEME: ProviderTheme = {
@@ -110,6 +116,69 @@ function formatWindowLabel(fallback: string, windowDurationMins?: number | null)
   const hours = windowDurationMins / 60;
   if (hours >= 24) return `${Math.round(hours / 24)}d`;
   return `${Math.round(hours)}h`;
+}
+
+// Grok billing period (USAGE_PERIOD_TYPE_WEEKLY 등) → "weekly".
+function formatPeriodType(periodType: string | null | undefined): string | null {
+  if (!periodType) return null;
+  const label = periodType.replace(/^USAGE_PERIOD_TYPE_/, "").toLowerCase();
+  return label && label !== "unspecified" ? label : null;
+}
+
+/** Grok 등 provider별 상태 표시(on-demand 제외, ZDR 비디오 제외, keepalive 미적용, 과금 주기). */
+export function UsageStateNotes({
+  usage,
+}: {
+  usage: {
+    onDemandExcluded?: boolean;
+    zdrVideoExcluded?: boolean;
+    keepaliveApplicable?: boolean;
+    periodType?: string | null;
+    tier?: string | null;
+  };
+}) {
+  const period = formatPeriodType(usage.periodType);
+  const hasNotes =
+    usage.onDemandExcluded === true ||
+    usage.zdrVideoExcluded === true ||
+    usage.keepaliveApplicable === false ||
+    period !== null ||
+    !!usage.tier;
+  if (!hasNotes) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1 text-[10px]">
+      {usage.onDemandExcluded === true && (
+        <span
+          className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700"
+          title="xAI에서 on-demand 과금을 끄면 다시 라우팅됩니다"
+        >
+          excluded: on-demand billing enabled
+        </span>
+      )}
+      {usage.zdrVideoExcluded === true && (
+        <span
+          className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700"
+          title="xAI에서 data-retention opt-out(Zero Data Retention)을 끄면 비디오가 다시 라우팅됩니다"
+        >
+          video unavailable: zero data retention
+        </span>
+      )}
+      {period !== null && (
+        <span className="px-1.5 py-0.5 rounded-full bg-sand-100 text-sand-600">{period}</span>
+      )}
+      {usage.tier && (
+        <span className="px-1.5 py-0.5 rounded-full bg-sand-100 text-sand-600">{usage.tier}</span>
+      )}
+      {usage.keepaliveApplicable === false && (
+        <span
+          className="px-1.5 py-0.5 rounded-full bg-sand-100 text-sand-400"
+          title="이 provider는 토큰 윈도 keepalive 대상이 아닙니다"
+        >
+          keepalive n/a
+        </span>
+      )}
+    </div>
+  );
 }
 
 function UsageRow({
@@ -196,7 +265,12 @@ function TokenUsage({ token, theme }: { token: Token; theme: ProviderTheme }) {
   }
 
   if (!data?.fiveHour && !data?.sevenDay) {
-    return <p className="text-[11px] text-sand-400 py-1">No usage data</p>;
+    return (
+      <div className="space-y-1.5 py-1">
+        {data && <UsageStateNotes usage={data} />}
+        <p className="text-[11px] text-sand-400">No usage data</p>
+      </div>
+    );
   }
 
   // threshold 선은 gate 기준 primary window에만, 지원 provider일 때만.
@@ -206,6 +280,7 @@ function TokenUsage({ token, theme }: { token: Token; theme: ProviderTheme }) {
 
   return (
     <div className="space-y-1.5 py-1">
+      <UsageStateNotes usage={data} />
       {data.fiveHour && (
         <UsageRow
           label="5h"
@@ -218,11 +293,13 @@ function TokenUsage({ token, theme }: { token: Token; theme: ProviderTheme }) {
       )}
       {data.sevenDay && (
         <UsageRow
-          label="7d"
+          label={formatPeriodType(data.periodType) === "monthly" ? "1mo" : "7d"}
           utilization={data.sevenDay.utilization}
           resetsAt={data.sevenDay.resetsAt}
           windowDurationMins={data.sevenDay.windowDurationMins}
           theme={theme}
+          // Grok 은 기간 창 하나(sevenDay)만 있어 그것이 gate 기준 primary 다.
+          threshold={token.provider === "grok" ? thresholdForPrimary : undefined}
         />
       )}
     </div>
@@ -521,6 +598,7 @@ function WeightControl({ token }: { token: Token }) {
  */
 function ReloginButton({ token }: { token: Token }) {
   const oauth = useOAuthLoginFlow();
+  const provider = isOAuthProvider(token.provider) ? token.provider : null;
 
   const submitCode = async (pastedCode: string) => {
     if (await oauth.submitCode(pastedCode)) oauth.reset();
@@ -531,8 +609,10 @@ function ReloginButton({ token }: { token: Token }) {
       <button
         type="button"
         title="기존 이름으로 다시 로그인"
-        disabled={oauth.loadingProvider !== null}
-        onClick={() => void oauth.start(token.provider as Provider, token.name ?? "")}
+        disabled={provider === null || oauth.loadingProvider !== null}
+        onClick={() => {
+          if (provider) void oauth.start(provider, token.name ?? "");
+        }}
         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium border border-sienna-300 text-sienna-600 hover:bg-sienna-50 disabled:opacity-50 transition-colors duration-150"
       >
         {oauth.loadingProvider === token.provider ? (
@@ -656,8 +736,14 @@ function SortableTokenCard({ token }: { token: Token }) {
   );
 }
 
-const PROVIDERS = ["all", "openai", "anthropic"] as const;
+const PROVIDERS = ["all", "openai", "anthropic", "grok"] as const;
 type ProviderFilter = (typeof PROVIDERS)[number];
+const PROVIDER_FILTER_LABELS: Record<ProviderFilter, string> = {
+  all: "All",
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  grok: "Grok",
+};
 
 export function UsageCard() {
   const { data, isLoading } = TokenService.useTokens("A", { orderBy: "ord-asc" });
@@ -755,7 +841,7 @@ export function UsageCard() {
               }`}
               onClick={() => setProviderFilter(p)}
             >
-              {p === "all" ? "All" : p === "openai" ? "OpenAI" : "Anthropic"}
+              {PROVIDER_FILTER_LABELS[p]}
             </button>
           ))}
         </div>

@@ -28,7 +28,24 @@ export const OpenAICredentials = z.object({
 });
 export type OpenAICredentials = z.infer<typeof OpenAICredentials>;
 
-export const TokenCredentials = z.union([AnthropicCredentials, OpenAICredentials]);
+// Web-safe storage shape only. Registration and refresh validate with the strict schema in
+// utils/providers/grok/grok-types.ts (at+jwt from auth.x.ai, GUID ids).
+export const GrokCredentials = z.object({
+  authMode: z.literal("oauth"),
+  accessToken: z.string(),
+  refreshToken: z.string(),
+  expiresAt: z.string(),
+  issuer: z.literal("https://auth.x.ai"),
+  clientId: z.string(),
+  scopes: z.array(z.string()),
+  userId: z.string(),
+  sessionId: z.string(),
+  agentId: z.string(),
+  subscriptionTier: z.string().optional(),
+});
+export type GrokCredentials = z.infer<typeof GrokCredentials>;
+
+export const TokenCredentials = z.union([AnthropicCredentials, OpenAICredentials, GrokCredentials]);
 export type TokenCredentials = z.infer<typeof TokenCredentials>;
 
 // Token - ListParams

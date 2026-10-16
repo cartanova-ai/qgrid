@@ -1,6 +1,22 @@
 import { Input } from "@sonamu-kit/react-components/components";
 import { useState } from "react";
 
+import { type Provider } from "./use-oauth-login-flow";
+
+const HELP_TEXT: Record<Provider, string> = {
+  openai:
+    "새 탭에서 OpenAI 로그인을 완료한 뒤 연결 실패 화면이 나타나면, 주소창의 전체 URL을 아래에 붙여넣으세요.",
+  anthropic:
+    "새 탭에서 Claude 로그인을 완료하면 코드가 표시됩니다. 코드 전체를 아래에 붙여넣으세요.",
+  grok: "새 탭에서 xAI(auth.x.ai) 로그인을 완료하면 127.0.0.1 주소로 이동하며 페이지가 열리지 않습니다. 주소창의 전체 URL(또는 그 안의 code 값)을 아래에 붙여넣으세요.",
+};
+
+const PLACEHOLDER: Record<Provider, string> = {
+  openai: "http://localhost:1455/auth/callback?code=...&state=...",
+  anthropic: "code#state",
+  grok: "http://127.0.0.1:.../callback?code=...&state=...",
+};
+
 /**
  * 원격 접속(code 모드) 로그인의 인증 결과 입력 단계.
  * Add Token 모달과 재로그인이 같은 문구·에러·재시작 동선을 쓰도록 한 곳에 둔다.
@@ -12,28 +28,21 @@ export function OAuthCodeEntry({
   onSubmit,
   onRestart,
 }: {
-  provider: "anthropic" | "openai";
+  provider: Provider;
   isPending: boolean;
   isError: boolean;
   onSubmit: (pastedCode: string) => void;
   onRestart: () => void;
 }) {
   const [pastedCode, setPastedCode] = useState("");
-  const isOpenAI = provider === "openai";
 
   return (
     <div className="space-y-2">
-      <p className="text-[12px] text-sand-600 leading-relaxed">
-        {isOpenAI
-          ? "새 탭에서 OpenAI 로그인을 완료한 뒤 연결 실패 화면이 나타나면, 주소창의 전체 URL을 아래에 붙여넣으세요."
-          : "새 탭에서 Claude 로그인을 완료하면 코드가 표시됩니다. 코드 전체를 아래에 붙여넣으세요."}
-      </p>
+      <p className="text-[12px] text-sand-600 leading-relaxed">{HELP_TEXT[provider]}</p>
       <Input
         value={pastedCode}
         onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPastedCode(e.target.value)}
-        placeholder={
-          isOpenAI ? "http://localhost:1455/auth/callback?code=...&state=..." : "code#state"
-        }
+        placeholder={PLACEHOLDER[provider]}
         className="w-full border border-sand-200 rounded-md px-3 py-2 text-sm font-mono text-sand-900 bg-white placeholder:text-sand-300 focus:outline-none focus:border-sienna-300"
       />
       {isError && (

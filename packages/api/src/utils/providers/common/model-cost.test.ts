@@ -1,6 +1,53 @@
 import { describe, expect, it } from "vitest";
 
-import { calculateCostUsd, getModelCosts } from "./model-cost";
+import {
+  calculateCostUsd,
+  getModelCosts,
+  grokImageCost,
+  grokReportedCost,
+  usdFromGrokTicks,
+} from "./model-cost";
+
+describe("Grok cost", () => {
+  it("converts provider ticks at 1e-10 USD", () => {
+    expect(usdFromGrokTicks(500_000_000)).toBe(0.05);
+    expect(usdFromGrokTicks(33_760_000)).toBeCloseTo(0.003376, 12);
+  });
+
+  it.each(["grok-4.7", "grok-4.6", "grok-4.5", "grok/grok-4.7"])(
+    "prices %s from the catalog ticks when the provider omitted the cost",
+    (model) => {
+      expect(getModelCosts(model)).toEqual({ inputTokens: 2, cachedInputTokens: 0.5, outputTokens: 6 });
+      // 1M input of which 400k cached, 100k output: 0.6*2 + 0.4*0.5 + 0.1*6.
+      expect(
+        calculateCostUsd(model, {
+          inputTokens: 1_000_000,
+          cachedInputTokens: 400_000,
+          outputTokens: 100_000,
+        }),
+      ).toBeCloseTo(2.0, 10);
+    },
+  );
+
+  it("prefers reported image ticks and falls back to the catalog per-image price", () => {
+    expect(grokImageCost("grok/grok-imagine-image-quality", 2, 700_000_000)).toEqual({
+      costUsd: 0.07,
+      costSource: "provider",
+      ticks: 700_000_000,
+    });
+    expect(grokImageCost("grok-imagine-image-quality", 2)).toEqual({
+      costUsd: 0.1,
+      costSource: "pricing_table",
+      ticks: 1_000_000_000,
+    });
+    expect(grokImageCost("grok-imagine-image-unknown", 1)).toBeUndefined();
+  });
+
+  it("reports video/voice cost only when xAI reported it", () => {
+    expect(grokReportedCost(undefined)).toBeUndefined();
+    expect(grokReportedCost(0)).toEqual({ costUsd: 0, costSource: "provider", ticks: 0 });
+  });
+});
 
 describe("calculateCostUsd", () => {
   it.each([

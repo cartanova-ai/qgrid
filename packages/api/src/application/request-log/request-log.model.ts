@@ -13,6 +13,7 @@ import {
 
 import { SD } from "../../i18n/sd.generated";
 import { calculateCostUsd } from "../../utils/providers/common/model-cost";
+import { isProviderId, type ProviderId } from "../../utils/providers/common/provider-types";
 import { type RequestLogSubsetKey, type RequestLogSubsetMapping } from "../sonamu.generated";
 import { requestLogLoaderQueries, requestLogSubsetQueries } from "../sonamu.generated.sso";
 import {
@@ -123,6 +124,13 @@ function isAnthropicUsageRow(row: Pick<RequestLogUsageRow, "token_name" | "model
     row.model_name?.startsWith("claude-") === true ||
     row.model_name?.startsWith("anthropic/claude-") === true
   );
+}
+
+/** Provider of a provider-qualified model id (`openai/`, `anthropic/`, `grok/`); legacy ids are unknown. */
+export function providerOfModelName(modelName: string | null | undefined): ProviderId | "unknown" {
+  const slash = modelName?.indexOf("/") ?? -1;
+  const prefix = slash > 0 ? modelName?.slice(0, slash) : undefined;
+  return isProviderId(prefix) ? prefix : "unknown";
 }
 
 function canonicalModelName(modelName: string): string {
@@ -379,12 +387,7 @@ class RequestLogModelClass extends BaseModelClass<
       { requests: number; errors: number; inputTokens: number; cacheReadTokens: number }
     >();
     rows.forEach((row) => {
-      const model = row.requested_model_name ?? "";
-      const provider = model.startsWith("openai/")
-        ? "openai"
-        : model.startsWith("anthropic/")
-          ? "anthropic"
-          : "unknown";
+      const provider = providerOfModelName(row.requested_model_name);
       const agg = byProvider.get(provider) ?? {
         requests: 0,
         errors: 0,
@@ -466,10 +469,10 @@ class RequestLogModelClass extends BaseModelClass<
 
       return {
         name: tool.name,
-        ...(tool.description !== undefined ? { description: tool.description } : {}),
+        ...(tool.description === undefined ? {} : { description: tool.description }),
         parameterCount: Object.keys(inputSchema.properties ?? {}).length,
         inputZod,
-        ...(inputZod !== fullInputZod ? { fullInputZod } : {}),
+        ...(inputZod === fullInputZod ? {} : { fullInputZod }),
       };
     });
   }
@@ -512,8 +515,8 @@ class RequestLogModelClass extends BaseModelClass<
       json_schema: params.json_schema ?? null,
       is_structured:
         params.is_structured ?? (params.json_schema !== null && params.json_schema !== undefined),
-      ...(params.history !== undefined ? { history: params.history as { type: string }[] } : {}),
-      ...(params.tools !== undefined ? { tools: params.tools } : {}),
+      ...(params.history === undefined ? {} : { history: params.history as { type: string }[] }),
+      ...(params.tools === undefined ? {} : { tools: params.tools }),
     });
     return wdb.transaction(async (trx) => {
       const ids = await trx.ubUpsert("request_logs");
@@ -751,16 +754,16 @@ class RequestLogModelClass extends BaseModelClass<
         output_tokens: aggregate.output_tokens,
         cache_read_tokens: aggregate.cache_read_tokens,
         cache_creation_tokens: aggregate.cache_creation_tokens,
-        ...(aggregate.cache_creation_5m_tokens !== undefined
-          ? { cache_creation_5m_tokens: aggregate.cache_creation_5m_tokens }
-          : {}),
-        ...(aggregate.cache_creation_1h_tokens !== undefined
-          ? { cache_creation_1h_tokens: aggregate.cache_creation_1h_tokens }
-          : {}),
+        ...(aggregate.cache_creation_5m_tokens === undefined
+          ? {}
+          : { cache_creation_5m_tokens: aggregate.cache_creation_5m_tokens }),
+        ...(aggregate.cache_creation_1h_tokens === undefined
+          ? {}
+          : { cache_creation_1h_tokens: aggregate.cache_creation_1h_tokens }),
         duration_ms: aggregate.duration_ms,
         fallback_count: aggregate.fallback_count,
         cost_usd: aggregate.cost_usd,
-        ...(aggregate.cost_source !== undefined ? { cost_source: aggregate.cost_source } : {}),
+        ...(aggregate.cost_source === undefined ? {} : { cost_source: aggregate.cost_source }),
         ttft_ms:
           firstTtft?.ttft_ms === null || firstTtft?.ttft_ms === undefined
             ? 0

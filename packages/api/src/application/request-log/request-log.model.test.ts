@@ -4,7 +4,43 @@ import { Client, type ClientConfig } from "pg";
 import { Sonamu } from "sonamu";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { RequestLogModel } from "./request-log.model";
+import { providerOfModelName, RequestLogModel } from "./request-log.model";
+
+describe("request-log provider inference", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["grok/grok-4.7", "grok"],
+    ["grok/grok-imagine-image-quality", "grok"],
+    ["openai/gpt-6-sol", "openai"],
+    ["anthropic/claude-opus-5-5", "anthropic"],
+    ["gpt-5.4", "unknown"],
+    ["xai/grok-4.7", "unknown"],
+    [null, "unknown"],
+  ] as const)("%s -> %s", (model, provider) => {
+    expect(providerOfModelName(model)).toBe(provider);
+  });
+
+  it("groups grok rows under their own provider in recent stats", async () => {
+    const rows = [
+      { requested_model_name: "grok/grok-4.7", status: "succeeded", input_tokens: 10, cache_read_tokens: 4 },
+      { requested_model_name: "grok/grok-imagine-image-quality", status: "error", input_tokens: 0, cache_read_tokens: 0 },
+      { requested_model_name: "openai/gpt-6-sol", status: "succeeded", input_tokens: 5, cache_read_tokens: 0 },
+    ];
+    const chain = { select: vi.fn(() => chain), where: vi.fn(async () => rows) };
+    vi.spyOn(
+      RequestLogModel as unknown as { getPuri: () => { from: () => typeof chain } },
+      "getPuri",
+    ).mockReturnValue({ from: () => chain });
+
+    await expect(RequestLogModel.providerStatsSince(new Date(0))).resolves.toEqual([
+      { provider: "grok", requests: 2, errors: 1, inputTokens: 10, cacheReadTokens: 4 },
+      { provider: "openai", requests: 1, errors: 0, inputTokens: 5, cacheReadTokens: 0 },
+    ]);
+  });
+});
 
 function mockQueryBuilder(rows: unknown[]) {
   const chain = {

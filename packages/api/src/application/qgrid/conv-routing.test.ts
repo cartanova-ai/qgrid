@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decideConvRouting, systemHash } from "./conv-routing";
+import { decideConvRouting, issueConvContext, systemHash } from "./conv-routing";
 import { type QueryInput } from "./qgrid.types";
 
 function input(overrides: Partial<QueryInput> = {}): QueryInput {
@@ -104,7 +104,7 @@ describe("decideConvRouting", () => {
           },
         },
       }),
-      { directOpenAI: true, modelNamespace: model },
+      { directProvider: "openai", modelNamespace: model },
     );
 
     expect(decision.coldHistory).toEqual([{ role: "user", content: "first" }]);
@@ -128,7 +128,7 @@ describe("decideConvRouting", () => {
           },
         },
       }),
-      { directOpenAI: true, modelNamespace: "openai/gpt-5.5" },
+      { directProvider: "openai", modelNamespace: "openai/gpt-5.5" },
     );
 
     expect(decision.promptCacheKey).toBe(cacheAffinityKey);
@@ -141,11 +141,83 @@ describe("decideConvRouting", () => {
 
   it("direct OpenAI 요청에 affinity key 가 없으면 cache key 를 만들지 않는다", () => {
     const decision = decideConvRouting(input({ model: "openai/gpt-5.5" }), {
-      directOpenAI: true,
+      directProvider: "openai",
       modelNamespace: "openai/gpt-5.5",
     });
 
     expect(decision.promptCacheKey).toBeUndefined();
     expect(decision.preferredTokenId).toBeUndefined();
+  });
+
+  it("direct Grok 도 epoch=-1 좌표를 같은 규칙으로 검증하고 재발급한다", () => {
+    const cacheAffinityKey = "c".repeat(64);
+    const model = "grok/grok-4.7";
+    const decision = decideConvRouting(
+      input({
+        prompt: "next",
+        model,
+        system: "same",
+        cacheAffinityKey,
+        runContext: {
+          threadCoord: {
+            workerId: 9,
+            threadId: cacheAffinityKey,
+            epoch: -1,
+            systemHash: systemHash("same", model),
+          },
+        },
+      }),
+      { directProvider: "grok", modelNamespace: model },
+    );
+
+    expect(decision.systemHash).toBe(systemHash("same", model));
+    expect(decision.promptCacheKey).toBe(cacheAffinityKey);
+    expect(decision.preferredTokenId).toBe(9);
+    expect(issueConvContext({ workerId: 11, threadId: "upstream", epoch: 0 }, decision)).toEqual({
+      workerId: 11,
+      threadId: cacheAffinityKey,
+      epoch: -1,
+      systemHash: systemHash("same", model),
+    });
+  });
+
+  it("OpenAI 좌표는 같은 system/model 이름이라도 Grok 요청에서 재사용되지 않는다", () => {
+    const cacheAffinityKey = "d".repeat(64);
+    const decision = decideConvRouting(
+      input({
+        model: "grok/gpt-5.5",
+        system: "same",
+        cacheAffinityKey,
+        runContext: {
+          threadCoord: {
+            workerId: 3,
+            threadId: cacheAffinityKey,
+            epoch: -1,
+            systemHash: systemHash("same", "openai/gpt-5.5"),
+          },
+        },
+      }),
+      { directProvider: "grok", modelNamespace: "grok/gpt-5.5" },
+    );
+
+    expect(decision.promptCacheKey).toBe(cacheAffinityKey);
+    expect(decision.preferredTokenId).toBeUndefined();
+  });
+
+  it("directProvider 가 없으면 cache key 와 namespace 를 쓰지 않는다", () => {
+    const decision = decideConvRouting(
+      input({ model: "anthropic/claude-sonnet-4-6", system: "same", cacheAffinityKey: "e" }),
+    );
+
+    expect(decision.systemHash).toBe(systemHash("same"));
+    expect(decision.promptCacheKey).toBeUndefined();
+  });
+
+  it("modelNamespace 가 없으면 input.model 로 namespace 를 정한다", () => {
+    const decision = decideConvRouting(input({ model: "grok/grok-4.7", system: "s" }), {
+      directProvider: "grok",
+    });
+
+    expect(decision.systemHash).toBe(systemHash("s", "grok/grok-4.7"));
   });
 });

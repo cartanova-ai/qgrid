@@ -26,6 +26,18 @@ import {
   FinishRunInput,
   TokenStats,
   OAuthStartResult,
+  GrokDeviceCodeStart,
+  GrokDevicePollResult,
+  GenerateImagesInput,
+  GenerateImagesOutput,
+  VideoStartInput,
+  VideoStartOutput,
+  VideoStatusInput,
+  VideoStatusOutput,
+  TranscribeInput,
+  TranscribeOutput,
+  SpeakInput,
+  SpeakOutput,
   UsageResponse,
   HealthResponse,
 } from "./qgrid/qgrid.types";
@@ -713,6 +725,12 @@ export namespace QgridService {
           ttftMs: number;
           costUsd: number;
           costSource: "provider" | "pricing_table" | "mixed";
+          providerMetadata?: {
+            xai?: {
+              costInUsdTicks?: number;
+              contextWindow?: number;
+            };
+          };
           content:
             | {
                 type: "text";
@@ -804,6 +822,12 @@ export namespace QgridService {
         ttftMs: number;
         costUsd: number;
         costSource: "provider" | "pricing_table" | "mixed";
+        providerMetadata?: {
+          xai?: {
+            costInUsdTicks?: number;
+            contextWindow?: number;
+          };
+        };
         content:
           | {
               type: "text";
@@ -1080,6 +1104,110 @@ export namespace QgridService {
   export const useOauthStartOpenAIMutation = () =>
     useMutation({
       mutationFn: (params: { name: string }) => oauthStartOpenAI(params.name),
+    });
+
+  export async function oauthStartGrok(name: string): Promise<OAuthStartResult> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/oauthStartGrok`,
+      data: { name },
+    });
+  }
+
+  export const useOauthStartGrokMutation = () =>
+    useMutation({
+      mutationFn: (params: { name: string }) => oauthStartGrok(params.name),
+    });
+
+  export async function oauthStartGrokDevice(name: string): Promise<GrokDeviceCodeStart> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/oauthStartGrokDevice`,
+      data: { name },
+    });
+  }
+
+  export const useOauthStartGrokDeviceMutation = () =>
+    useMutation({
+      mutationFn: (params: { name: string }) => oauthStartGrokDevice(params.name),
+    });
+
+  export async function oauthPollGrokDevice(deviceCode: string): Promise<GrokDevicePollResult> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/oauthPollGrokDevice`,
+      data: { deviceCode },
+    });
+  }
+
+  export const useOauthPollGrokDeviceMutation = () =>
+    useMutation({
+      mutationFn: (params: { deviceCode: string }) => oauthPollGrokDevice(params.deviceCode),
+    });
+
+  export async function generateImages(params: GenerateImagesInput): Promise<GenerateImagesOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/generateImages`,
+      data: { params },
+    });
+  }
+
+  export const useGenerateImagesMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: GenerateImagesInput }) => generateImages(params.params),
+    });
+
+  export async function videoStart(params: VideoStartInput): Promise<VideoStartOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/videoStart`,
+      data: { params },
+    });
+  }
+
+  export const useVideoStartMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: VideoStartInput }) => videoStart(params.params),
+    });
+
+  export async function videoStatus(params: VideoStatusInput): Promise<VideoStatusOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/videoStatus`,
+      data: { params },
+    });
+  }
+
+  export const useVideoStatusMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: VideoStatusInput }) => videoStatus(params.params),
+    });
+
+  export async function transcribe(params: TranscribeInput): Promise<TranscribeOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/transcribe`,
+      data: { params },
+    });
+  }
+
+  export const useTranscribeMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: TranscribeInput }) => transcribe(params.params),
+    });
+
+  export async function speak(params: SpeakInput): Promise<SpeakOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/speak`,
+      data: { params },
+    });
+  }
+
+  export const useSpeakMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: SpeakInput }) => speak(params.params),
     });
 
   export async function usage(tokenId?: number): Promise<UsageResponse> {

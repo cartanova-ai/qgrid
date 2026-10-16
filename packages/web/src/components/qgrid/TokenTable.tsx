@@ -16,6 +16,11 @@ function getExpiresAt(token: Token): number | null {
   if ("expiresAt" in c && typeof c.expiresAt === "number") return c.expiresAt;
   if ("accessTokenExpiresAt" in c && typeof c.accessTokenExpiresAt === "number")
     return c.accessTokenExpiresAt;
+  // Grok stores an ISO-8601 timestamp.
+  if ("expiresAt" in c && typeof c.expiresAt === "string") {
+    const ms = Date.parse(c.expiresAt);
+    return Number.isNaN(ms) ? null : ms;
+  }
   return null;
 }
 

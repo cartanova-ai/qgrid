@@ -175,8 +175,9 @@ export class TokenSubscriber {
       await this.dispatcher.openaiDispatcher
         ?.onTokenRemoved(payload.id)
         .catch((e) => logger.warn(`openai token remove failed: ${(e as Error).message}`));
-      // 삭제된 토큰의 provider를 모를 수 있으므로 양쪽 풀에서 제거한다.
+      // 삭제된 토큰의 provider를 모를 수 있으므로 모든 풀에서 제거한다.
       this.dispatcher.anthropicDispatcher?.onTokenRemoved(payload.id);
+      await this.removeGrokToken(payload.id);
       logger.info(`NOTIFY ${payload.op} id=${payload.id} → removed from cache`);
       if (previousRow === undefined || wasKeepaliveTarget) this.notifyTokensChanged();
       return;
@@ -188,6 +189,7 @@ export class TokenSubscriber {
         ?.onTokenRemoved(payload.id)
         .catch((e) => logger.warn(`openai token remove failed: ${(e as Error).message}`));
       this.dispatcher.anthropicDispatcher?.onTokenRemoved(payload.id);
+      await this.removeGrokToken(payload.id);
       logger.info(`NOTIFY ${payload.op} id=${payload.id} → missing, removed from cache`);
       if (previousRow === undefined || wasKeepaliveTarget) this.notifyTokensChanged();
       return;
@@ -245,6 +247,33 @@ export class TokenSubscriber {
       } else {
         this.dispatcher.anthropicDispatcher?.onTokenRemoved(payload.id);
       }
+    } else if (row.provider === "grok") {
+      const grokDispatcher = this.dispatcher.grokDispatcher;
+      if (grokDispatcher) {
+        await Promise.resolve()
+          .then(() => {
+            if (payload.op === "INSERT" && row.active) {
+              return grokDispatcher.onTokenAdded(
+                payload.id,
+                row.name,
+                row.credentials,
+                row.quota_threshold,
+                row.weight,
+              );
+            }
+            if (row.active) {
+              return grokDispatcher.onTokenUpdated(
+                payload.id,
+                row.name,
+                row.credentials,
+                row.quota_threshold,
+                row.weight,
+              );
+            }
+            return grokDispatcher.onTokenRemoved(payload.id);
+          })
+          .catch((e) => logger.warn(`grok token sync failed: ${(e as Error).message}`));
+      }
     }
     logger.info(`NOTIFY ${payload.op} id=${payload.id} (${row.name}) active=${row.active}`);
     const isKeepaliveTarget = row.active && row.provider === "anthropic";
@@ -288,6 +317,21 @@ export class TokenSubscriber {
     await this.dispatcher.openaiDispatcher
       ?.replaceTokens(openaiRows)
       .catch((e) => logger.warn(`openai reconcile failed: ${(e as Error).message}`));
+    const grokDispatcher = this.dispatcher.grokDispatcher;
+    if (grokDispatcher) {
+      const grokRows = rows
+        .filter((r) => r.provider === "grok")
+        .map((r) => ({
+          id: r.id,
+          name: r.name,
+          credentials: r.credentials,
+          quotaThreshold: r.quota_threshold,
+          weight: r.weight,
+        }));
+      await Promise.resolve()
+        .then(() => grokDispatcher.replaceTokens(grokRows))
+        .catch((e) => logger.warn(`grok reconcile failed: ${(e as Error).message}`));
+    }
     this.lastReconcileAt = new Date();
     if (
       previousAnthropicIds &&
@@ -296,6 +340,15 @@ export class TokenSubscriber {
     ) {
       this.notifyTokensChanged();
     }
+  }
+
+  // Grok dispatcher 는 선택적으로 주입된다. 동기/비동기 구현 모두의 실패를 격리한다.
+  async removeGrokToken(id: number): Promise<void> {
+    const grokDispatcher = this.dispatcher.grokDispatcher;
+    if (!grokDispatcher) return;
+    await Promise.resolve()
+      .then(() => grokDispatcher.onTokenRemoved(id))
+      .catch((e) => logger.warn(`grok token remove failed: ${(e as Error).message}`));
   }
 
   enqueueOperation(operation: () => Promise<void>): Promise<void> {
