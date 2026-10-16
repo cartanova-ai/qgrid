@@ -56,9 +56,11 @@ export default defineConfig(({ command, isSsrBuild }) => ({
               if (id.includes("node_modules/react-dom") || id.includes("node_modules/react/")) {
                 return "vendor-react";
               }
+
               if (id.includes("@tanstack/react-query") || id.includes("@tanstack/react-router")) {
                 return "vendor-tanstack";
               }
+
               return undefined;
             },
           },

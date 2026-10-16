@@ -17,12 +17,16 @@ function imageInputUrl(file: ImageModelV3File): string {
     if (!/^https:\/\//i.test(file.url)) {
       throw new Error("qgrid.image: reference image URLs must use HTTPS");
     }
+
     return file.url;
   }
+
   if (!["image/png", "image/jpeg", "image/webp"].includes(file.mediaType)) {
     throw new Error("qgrid.image: reference images must be PNG, JPEG, or WebP");
   }
+
   const data = typeof file.data === "string" ? file.data : bytesToBase64(file.data);
+
   return `data:${file.mediaType};base64,${data}`;
 }
 
@@ -64,6 +68,7 @@ export const QGRID_MAX_INLINE_MEDIA_BYTES = 7 * 1024 * 1024;
 
 function base64DecodedBytes(data: string): number {
   const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+
   return Math.floor((data.length * 3) / 4) - padding;
 }
 
@@ -73,11 +78,13 @@ function base64DecodedBytes(data: string): number {
  */
 export function assertInlineMediaFits(items: Array<string | undefined>, label: string): void {
   let total = 0;
+
   for (const item of items) {
     if (item === undefined || /^https:\/\//i.test(item)) continue;
     const comma = item.startsWith("data:") ? item.indexOf(",") : -1;
     total += base64DecodedBytes(comma >= 0 ? item.slice(comma + 1) : item);
   }
+
   if (total > QGRID_MAX_INLINE_MEDIA_BYTES) {
     throw new Error(
       `${label}: inline media is ${formatMiB(total)}, above the qgrid server limit of ${formatMiB(QGRID_MAX_INLINE_MEDIA_BYTES)} per request; compress it or pass an https URL where supported.`,
@@ -92,11 +99,13 @@ export function assertInlineMediaFits(items: Array<string | undefined>, label: s
 export function serializeMediaBody(params: Record<string, unknown>, label: string): string {
   const body = JSON.stringify({ params });
   const bytes = new TextEncoder().encode(body).byteLength;
+
   if (bytes > QGRID_MAX_REQUEST_BODY_BYTES) {
     throw new Error(
       `${label}: request body is ${formatMiB(bytes)}, above the qgrid server limit of ${formatMiB(QGRID_MAX_REQUEST_BODY_BYTES)}; compress inline media or pass an https URL where supported.`,
     );
   }
+
   return body;
 }
 
@@ -112,6 +121,7 @@ function isAbortError(error: unknown): boolean {
  */
 function rethrowAbort(error: unknown, signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw signal.reason ?? error;
+
   if (isAbortError(error)) throw error;
 }
 
@@ -139,11 +149,14 @@ export async function postMediaEndpoint<T>(args: {
   headers?: Record<string, string | undefined>;
 }): Promise<MediaPostResult<T>> {
   const headers = new Headers();
+
   for (const [key, value] of Object.entries(args.headers ?? {})) {
     if (value !== undefined) headers.set(key, value);
   }
+
   headers.set("Content-Type", "application/json");
   let response: Response;
+
   try {
     response = await fetch(`${args.serverUrl}/api/qgrid/${args.endpoint}`, {
       method: "POST",
@@ -158,33 +171,42 @@ export async function postMediaEndpoint<T>(args: {
       cause: error,
     });
   }
+
   if (!response.ok) {
     const text = await response.text().catch((error: unknown) => {
       rethrowAbort(error, args.signal);
+
       return "";
     });
+
     if (response.status === 413) {
       throw new QgridMediaHttpError(
         `${args.label}: the qgrid server rejected the request as too large (413); inline media is limited to ${formatMiB(QGRID_MAX_INLINE_MEDIA_BYTES)} decoded per request. ${text.slice(0, ERROR_BODY_PREVIEW_CHARS)}`,
         413,
       );
     }
+
     throw new QgridMediaHttpError(
       `qgrid ${args.endpoint} ${response.status}: ${text.slice(0, ERROR_BODY_PREVIEW_CHARS)}`,
       response.status,
     );
   }
+
   // Only a body that is not JSON becomes the schema error below; an abort mid-body propagates.
   const json: unknown = await response.json().catch((error: unknown) => {
     rethrowAbort(error, args.signal);
+
     return undefined;
   });
+
   const parsed = args.schema.safeParse(json);
+
   if (!parsed.success) {
     throw new Error(
       `${args.label}: unexpected ${args.endpoint} response; update the qgrid server and SDK together (${formatIssues(parsed.error)})`,
     );
   }
+
   return { data: parsed.data, headers: Object.fromEntries(response.headers) };
 }
 
@@ -216,11 +238,14 @@ export function parseGrokQgridOptions(
   label: string,
 ): { tokenName?: string; logger?: false } {
   if (raw === undefined) return {};
+
   if (!isRecord(raw)) throw new Error(`${label}: providerOptions.qgrid must be an object`);
   const parsed = grokQgridOptionsSchema.safeParse(raw);
+
   if (!parsed.success) {
     throw new Error(`${label}: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
   }
+
   return {
     ...(parsed.data.tokenName === undefined ? {} : { tokenName: parsed.data.tokenName }),
     ...(parsed.data.logger === false ? { logger: false as const } : {}),
@@ -238,12 +263,16 @@ export function parseXaiMediaOptions<T>(
   label: string,
 ): { options: T | undefined; warnings: SharedV3Warning[] } {
   if (raw === undefined) return { options: undefined, warnings: [] };
+
   if (!isRecord(raw)) throw new Error(`${label}: providerOptions.xai must be an object`);
   const parsed = schema.safeParse(raw);
+
   if (!parsed.success) {
     throw new Error(`${label}: invalid providerOptions.xai: ${formatIssues(parsed.error)}`);
   }
+
   const warnings: SharedV3Warning[] = [];
+
   for (const [key, value] of Object.entries(raw)) {
     if (value === undefined || value === null || honored.has(key)) continue;
     warnings.push({
@@ -252,6 +281,7 @@ export function parseXaiMediaOptions<T>(
       details: `qgrid does not support providerOptions.xai.${key} for this model; it was ignored.`,
     });
   }
+
   return { options: parsed.data, warnings };
 }
 
@@ -265,16 +295,20 @@ type MediaFile =
 export function toImageRef(file: MediaFile, label: string): string {
   if (file.type === "url") return toImageRefUrl(file.url, label);
   const mediaType = file.mediaType.toLowerCase();
+
   if (!IMAGE_REF_MEDIA_TYPES.includes(mediaType)) {
     throw new Error(`${label}: reference images must be PNG, JPEG, or WebP`);
   }
+
   const data = typeof file.data === "string" ? file.data : bytesToBase64(file.data);
+
   return `data:${mediaType};base64,${data}`;
 }
 
 /** Accepts an https URL or a base64 PNG/JPEG/WebP data URL string. */
 export function toImageRefUrl(url: string, label: string): string {
   if (/^https:\/\//i.test(url)) return url;
+
   if (/^data:image\/(png|jpeg|webp);base64,/i.test(url)) return url;
   throw new Error(`${label}: image references must be https URLs or PNG/JPEG/WebP data URLs`);
 }
@@ -286,9 +320,11 @@ export function createQgridImage(
   config?: QgridImageProviderConfig,
 ): ImageModelV3 {
   if (modelId.startsWith("grok/")) return createGrokImage(modelId, config);
+
   if (modelId !== "openai/gpt-image-2") {
     throw new Error(`qgrid.image: unsupported image model ${modelId}`);
   }
+
   const serverUrl = config?.serverUrl ?? process.env.QGRID_URL ?? DEFAULT_QGRID_SERVER_URL;
   const projectName = config?.projectName ?? process.env.QGRID_PROJECT_NAME;
 
@@ -302,18 +338,23 @@ export function createQgridImage(
       if (options.mask !== undefined) {
         throw new Error("qgrid.image: masks are not supported by the subscription Images endpoint");
       }
+
       if (options.n !== 1) {
         throw new Error(
           "qgrid.image: only one image per call is supported; omit maxImagesPerCall so AI SDK can batch n images",
         );
       }
+
       if (!options.prompt?.trim()) {
         throw new Error("qgrid.image: a non-empty text prompt is required");
       }
+
       if ((options.files?.length ?? 0) > 5) {
         throw new Error("qgrid.image: at most five reference images are supported");
       }
+
       const qgridOptions = (options.providerOptions.qgrid ?? {}) as QgridImageProviderOptions;
+
       if (
         qgridOptions.tokenName !== undefined &&
         (typeof qgridOptions.tokenName !== "string" ||
@@ -323,35 +364,43 @@ export function createQgridImage(
           "qgrid.image: tokenName must be a non-empty OpenAI token name with the openai/ prefix",
         );
       }
+
       if (qgridOptions.logger !== undefined && typeof qgridOptions.logger !== "boolean") {
         throw new Error("qgrid.image: logger must be a boolean");
       }
+
       if (qgridOptions.outputFormat !== undefined && qgridOptions.outputFormat !== "png") {
         throw new Error("qgrid.image: the subscription Images endpoint supports PNG output only");
       }
+
       if (
         qgridOptions.quality !== undefined &&
         !["low", "medium", "high"].includes(qgridOptions.quality)
       ) {
         throw new Error("qgrid.image: quality must be low, medium, or high");
       }
+
       if (
         qgridOptions.background !== undefined &&
         !["auto", "opaque", "transparent"].includes(qgridOptions.background)
       ) {
         throw new Error("qgrid.image: background must be auto, opaque, or transparent");
       }
+
       if (options.size !== undefined && !/^[1-9]\d*x[1-9]\d*$/.test(options.size)) {
         throw new Error("qgrid.image: size must be positive integer WIDTHxHEIGHT");
       }
 
       const imageUrls = (options.files ?? []).map(imageInputUrl);
       assertImageInputFitsJsonTransport(imageUrls);
+
       const input: QgridInputPart[] = [
         { type: "text", text: options.prompt, text_elements: [] },
         ...imageUrls.map((url) => ({ type: "image" as const, url })),
       ];
+
       const warnings: Awaited<ReturnType<ImageModelV3["doGenerate"]>>["warnings"] = [];
+
       for (const feature of ["seed", "aspectRatio"] as const) {
         if (options[feature] !== undefined) {
           warnings.push({
@@ -362,6 +411,7 @@ export function createQgridImage(
           });
         }
       }
+
       for (const feature of [
         ...(options.size === undefined ? [] : ["size"]),
         ...(qgridOptions.quality === undefined ? [] : ["providerOptions.qgrid.quality"]),
@@ -376,10 +426,13 @@ export function createQgridImage(
 
       const timestamp = new Date();
       const headers = new Headers();
+
       for (const [key, value] of Object.entries(options.headers ?? {})) {
         if (value !== undefined) headers.set(key, value);
       }
+
       headers.set("Content-Type", "application/json");
+
       const response = await qgridFetch(
         `${serverUrl}/api/qgrid/query`,
         {
@@ -412,18 +465,23 @@ export function createQgridImage(
         },
         { operation: "query", serverUrl },
       );
+
       if (!response.ok) {
         throw new Error(`qgrid ${response.status}: ${await response.text().catch(() => "")}`);
       }
+
       const data = (await response.json()) as QueryOutput;
       const images = data.content?.filter((item) => item.type === "image") ?? [];
       const image = images[0];
+
       if (images.length !== 1 || !image?.data || image.generation?.route !== "codex-images") {
         throw new Error(
           "qgrid.image: expected one image from the direct subscription Images route; update the qgrid server and SDK together",
         );
       }
+
       const usage = image.generation.usage;
+
       return {
         images: [image.data],
         warnings,
@@ -510,28 +568,36 @@ function createGrokImage(modelId: string, config?: QgridImageProviderConfig): Im
       if (!options.prompt?.trim()) {
         throw new Error(`${label}: a non-empty text prompt is required`);
       }
+
       if (!Number.isInteger(options.n) || options.n < 1 || options.n > GROK_MAX_IMAGES_PER_CALL) {
         throw new Error(
           `${label}: Grok returns 1 to ${GROK_MAX_IMAGES_PER_CALL} images per call; omit maxImagesPerCall so AI SDK can batch`,
         );
       }
+
       const files = options.files ?? [];
+
       if (files.length > 5) {
         throw new Error(`${label}: at most five reference images are supported`);
       }
+
       const qgridOptions = parseGrokQgridOptions(options.providerOptions.qgrid, label);
+
       const xai = parseXaiMediaOptions(
         options.providerOptions.xai,
         xaiImageOptionsSchema,
         XAI_IMAGE_HONORED,
         label,
       );
+
       const outputFormat = xai.options?.output_format;
+
       if (outputFormat !== undefined && !isGrokOutputFormat(outputFormat)) {
         throw new Error(`${label}: providerOptions.xai.output_format must be png, jpeg, or webp`);
       }
 
       const warnings: SharedV3Warning[] = [];
+
       if (options.size !== undefined) {
         warnings.push({
           type: "unsupported",
@@ -539,13 +605,16 @@ function createGrokImage(modelId: string, config?: QgridImageProviderConfig): Im
           details: "This model does not support the `size` option. Use `aspectRatio` instead.",
         });
       }
+
       if (options.seed !== undefined) warnings.push({ type: "unsupported", feature: "seed" });
+
       if (options.mask !== undefined) warnings.push({ type: "unsupported", feature: "mask" });
       warnings.push(...xai.warnings);
 
       const referenceImages = files.map((file) => toImageRef(file, label));
       assertInlineMediaFits(referenceImages, label);
       const aspectRatio = options.aspectRatio ?? xai.options?.aspect_ratio;
+
       const body = serializeMediaBody(
         {
           model: modelId,
@@ -563,6 +632,7 @@ function createGrokImage(modelId: string, config?: QgridImageProviderConfig): Im
       );
 
       const timestamp = new Date();
+
       const { data, headers } = await postMediaEndpoint({
         serverUrl,
         endpoint: "generateImages",
@@ -572,16 +642,20 @@ function createGrokImage(modelId: string, config?: QgridImageProviderConfig): Im
         signal: options.abortSignal,
         headers: options.headers,
       });
+
       if (data.images.length === 0) {
         throw new Error(`${label}: the Grok backend returned no images`);
       }
+
       const costInUsdTicks = data.usage.costInUsdTicks;
+
       // generateImage() keeps only `providerMetadata.<provider>.images` when it merges batched
       // calls, so per-call cost and log ids also ride on the image entries (first image of the call).
       const callCost = {
         ...(data.costUsd === undefined ? {} : { costUsd: data.costUsd }),
         ...(data.costSource === undefined ? {} : { costSource: data.costSource }),
       };
+
       return {
         images: data.images.map((image) => image.b64),
         warnings,

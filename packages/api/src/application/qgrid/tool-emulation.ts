@@ -11,6 +11,7 @@ const STRUCTURED_ENVELOPE_LIMITS = {
   maxNodes: 20_000,
   maxDepth: 132,
 } as const;
+
 import {
   type ImageGenerationMetadata,
   type QgridContent,
@@ -22,6 +23,7 @@ import {
 const logger = getLogger(["qgrid", "tool-emulation"]);
 
 type EmulationResult = Omit<QueryOutput, "content" | "finishReason" | "runContext">;
+
 type ToolCall = { toolName: string; args: string };
 
 // envelope 는 {result: <union>} 한 겹 구조 — 스키마 근거는 tool-emulation-schema.ts 참조.
@@ -58,6 +60,7 @@ function buildEnvelopeSchema(answerKind: AnswerKind) {
 
 const TEXT_ENVELOPE = buildEnvelopeSchema("text");
 const JSON_ENVELOPE = buildEnvelopeSchema("json");
+
 type EnvelopeResponse = z.infer<typeof JSON_ENVELOPE>["result"];
 
 export class ToolCallEmulationError extends Error {
@@ -99,6 +102,7 @@ export function applyToolCallEmulation(
   }
 
   const parsed = parseEnvelope(result.text, tools, answerKind);
+
   if (parsed.action === "tool_call") {
     return toolCallOutput(result, parsed.toolCalls, images, runContext);
   }
@@ -121,11 +125,13 @@ export function isToolCallEnvelope(
     // Commentary is not the structured answer. Only an explicit tool control
     // object is eligible, and that object must still pass the strict parser.
     let value: unknown;
+
     try {
       value = JSON.parse(text);
     } catch {
       return false;
     }
+
     if (
       !value ||
       typeof value !== "object" ||
@@ -137,6 +143,7 @@ export function isToolCallEnvelope(
     )
       return false;
   }
+
   return parseEnvelope(text, tools, answerKind).action === "tool_call";
 }
 
@@ -148,6 +155,7 @@ function parseEnvelope(text: string, tools: QgridTool[], answerKind: AnswerKind)
   }
 
   let value: unknown;
+
   try {
     value = JSON.parse(text);
   } catch (error) {
@@ -168,6 +176,7 @@ function parseEnvelope(text: string, tools: QgridTool[], answerKind: AnswerKind)
   assertStructuredEnvelopeComplexity(value);
   const schema = answerKind === "text" ? TEXT_ENVELOPE : JSON_ENVELOPE;
   const validation = schema.safeParse(value);
+
   if (!validation.success) {
     const issue = validation.error.issues[0];
     const path = issue && issue.path.length > 0 ? ` at ${issue.path.join(".")}` : "";
@@ -184,12 +193,15 @@ function parseEnvelope(text: string, tools: QgridTool[], answerKind: AnswerKind)
   // Zod clones JSON objects and drops own "__proto__" keys. The parsed JSON is safe to return
   // after validation and preserves the caller's exact structured value.
   const response = (value as { result: EnvelopeResponse }).result;
+
   if (response.action === "tool_call") {
     const unknownTool = findUnknownTool(response.toolCalls, tools);
+
     if (unknownTool !== undefined) {
       throw new ToolCallEmulationError(`unknown emulated tool: ${unknownTool}`);
     }
   }
+
   return response;
 }
 
@@ -232,11 +244,13 @@ function answerOutput(
 
 function findUnknownTool(toolCalls: ToolCall[], tools: QgridTool[]): string | undefined {
   const knownToolNames = new Set(tools.map((tool) => tool.name));
+
   return toolCalls.find((toolCall) => !knownToolNames.has(toolCall.toolName))?.toolName;
 }
 
 function appendImages(content: QgridContent[], images?: EmulationImage[]): QgridContent[] {
   if (!images?.length) return content;
+
   return [
     ...content,
     ...images.map(
@@ -259,19 +273,23 @@ function assertStructuredEnvelopeComplexity(root: unknown): void {
   while (stack.length > 0) {
     const current = stack.pop()!;
     nodes += 1;
+
     if (nodes > STRUCTURED_ENVELOPE_LIMITS.maxNodes) {
       throw new ToolCallEmulationError(
         `structured-output envelope exceeds node limit of ${STRUCTURED_ENVELOPE_LIMITS.maxNodes}`,
       );
     }
+
     if (current.depth > maxDepth) {
       throw new ToolCallEmulationError(
         `structured-output envelope exceeds depth limit of ${maxDepth}`,
       );
     }
+
     if (typeof current.value === "number" && !Number.isFinite(current.value)) {
       throw new ToolCallEmulationError("answer must be valid JSON");
     }
+
     if (current.value === null || typeof current.value !== "object") continue;
 
     for (const value of Object.values(current.value)) {

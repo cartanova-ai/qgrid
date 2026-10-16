@@ -24,6 +24,7 @@ import {
 import { isSonamuError } from "@/services/sonamu.shared";
 
 type RequestLog = RequestLogSubsetMapping["A"];
+
 type RequestLogStep = RequestLogStepSubsetMapping["T"];
 
 const showSearchSchema = z.object({
@@ -37,6 +38,7 @@ export const Route = createFileRoute("/requests/show")({
 
 function RequestShowPage() {
   const { id } = Route.useSearch();
+
   return <RequestDetail id={id} />;
 }
 
@@ -59,6 +61,7 @@ function tryParseJson(text: string): { ok: true; value: unknown } | { ok: false 
 
 function safeParseJson(text: string | null | undefined): unknown {
   if (!text) return {};
+
   try {
     return JSON.parse(text);
   } catch {
@@ -71,12 +74,15 @@ function CopyButton({ text, dark }: { text: string; dark?: boolean }) {
   useEffect(() => {
     if (!copied) return undefined;
     const id = setTimeout(() => setCopied(false), 1500);
+
     return () => clearTimeout(id);
   }, [copied]);
+
   const handleCopy = () => {
     navigator.clipboard.writeText(text);
     setCopied(true);
   };
+
   return (
     <button
       type="button"
@@ -102,13 +108,17 @@ const DATA_IMAGE_TAG_RE =
 function parseImageSegments(text: string): ImageSegment[] {
   const segments: ImageSegment[] = [];
   let cursor = 0;
+
   for (const match of text.matchAll(DATA_IMAGE_TAG_RE)) {
     const index = match.index ?? 0;
+
     if (index > cursor) segments.push({ type: "text", text: text.slice(cursor, index) });
     segments.push({ type: "image", src: match[1], alt: match[2] ?? "generated image" });
     cursor = index + match[0].length;
   }
+
   if (cursor < text.length) segments.push({ type: "text", text: text.slice(cursor) });
+
   return segments.filter((segment) => segment.type === "image" || segment.text.trim().length > 0);
 }
 
@@ -116,6 +126,7 @@ function ImageAwareContent({ text, markdown }: { text: string; markdown?: boolea
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const segments = parseImageSegments(text);
   const hasImage = segments.some((segment) => segment.type === "image");
+
   if (!hasImage) {
     return markdown ? (
       <div className="prose prose-sm prose-qgrid max-w-none">
@@ -199,6 +210,7 @@ function FormattedContent({ text, markdown }: { text: string; markdown?: boolean
     if (markdown) {
       return <ImageAwareContent text={text} markdown />;
     }
+
     return <ImageAwareContent text={parsed.ok ? JSON.stringify(parsed.value, null, 2) : text} />;
   }
 
@@ -315,12 +327,14 @@ function ErrorPanel({ message }: { message: string }) {
 
 function HeaderBar({ data }: { data: RequestLog }) {
   const isRunning = data.status === "running";
+
   const modelDisplay = requestModelDisplay({
     status: data.status,
     requestedModel: data.requested_model_name,
     servedModel: data.model_name,
     imageCostMethod: data.image_cost_method,
   });
+
   const hasRequestedOnly =
     !isRunning && data.requested_model_name !== null && data.model_name === null;
 
@@ -374,6 +388,7 @@ function HeaderBar({ data }: { data: RequestLog }) {
 
 function MetricsPanel({ data, toolCallCount }: { data: RequestLog; toolCallCount: number }) {
   const tokensPerSecEnabled = isTokensPerSecEnabled(data);
+
   return (
     <div className="panel overflow-hidden px-5 py-3 space-y-3">
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-6 gap-y-3">
@@ -465,11 +480,13 @@ type StepTreeEntry = {
 
 function formatDurationMs(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return "—";
+
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
 }
 
 function formatRunTtftMs(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || ms <= 0) return "—";
+
   return formatDurationMs(ms);
 }
 
@@ -478,17 +495,25 @@ function detectTokenRateProvider(source: {
   token_name?: string | null;
 }): TokenRateProvider | null {
   const modelName = source.model_name?.trim().toLowerCase();
+
   if (modelName) {
     const canonical = modelName.includes("/") ? modelName.split("/").pop()! : modelName;
+
     if (canonical.startsWith("claude-")) return "anthropic";
+
     if (/^(gpt-|codex-|o\d)/.test(canonical)) return "openai";
+
     if (canonical.startsWith("grok-")) return "grok";
   }
 
   const tokenName = source.token_name?.trim().toLowerCase();
+
   if (tokenName?.startsWith("anthropic/")) return "anthropic";
+
   if (tokenName?.startsWith("openai/")) return "openai";
+
   if (tokenName?.startsWith("grok/")) return "grok";
+
   return null;
 }
 
@@ -497,6 +522,7 @@ function isTokensPerSecEnabled(source: {
   token_name?: string | null;
 }): boolean {
   const provider = detectTokenRateProvider(source);
+
   return provider !== null && TOKENS_PER_SEC_PROVIDERS.has(provider);
 }
 
@@ -518,8 +544,11 @@ function formatTokensPerSec(
   ) {
     return "—";
   }
+
   const generationMs = durationMs - ttftMs;
+
   if (outputTokens <= 0 || generationMs <= 0) return "—";
+
   return `${Math.round(outputTokens / (generationMs / 1000)).toLocaleString()} tok/s`;
 }
 
@@ -542,6 +571,7 @@ function CompactMetric({ label, value }: { label?: string; value: string }) {
 function readToolInputImages(args: unknown): unknown[] | undefined {
   if (!args || typeof args !== "object" || Array.isArray(args)) return [];
   const inputImages = (args as { inputImages?: unknown }).inputImages;
+
   return Array.isArray(inputImages) ? inputImages : undefined;
 }
 
@@ -549,6 +579,7 @@ function getToolInputImages(args: unknown): ToolInputImage[] {
   return (readToolInputImages(args) ?? []).filter((item): item is ToolInputImage => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return false;
     const image = item as ToolInputImage;
+
     return (
       (typeof image.url === "string" && image.url.length > 0) ||
       (typeof image.data === "string" && image.data.length > 0)
@@ -560,16 +591,20 @@ function hideToolInputImages(args: unknown): unknown {
   if (!args || typeof args !== "object" || Array.isArray(args)) return args;
   const record = args as Record<string, unknown>;
   const inputImages = readToolInputImages(record);
+
   if (!inputImages) return args;
+
   return {
     ...record,
     inputImages: inputImages.map((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return item;
       const image = item as ToolInputImage;
+
       const maskedUrl =
         typeof image.url === "string" && image.url.toLowerCase().startsWith("data:")
           ? `[data-url ${image.url.length} chars]`
           : image.url;
+
       return {
         mediaType: image.mediaType,
         byteSize: image.byteSize,
@@ -584,14 +619,19 @@ function ToolInputImages({ images }: { images: ToolInputImage[] }) {
   const renderableImages = images
     .map((image, index) => {
       const urlSrc = image.url && !image.url.startsWith("[") ? image.url : undefined;
+
       const dataSrc = image.data
         ? `data:${image.mediaType ?? "image/png"};base64,${image.data}`
         : "";
+
       const src = urlSrc ?? dataSrc;
+
       return src ? { image, index, src } : null;
     })
     .filter((item): item is { image: ToolInputImage; index: number; src: string } => item !== null);
+
   if (renderableImages.length === 0) return null;
+
   return (
     <div>
       <span className="text-[10px] uppercase tracking-wider text-sand-400 font-medium px-2">
@@ -626,20 +666,25 @@ function RequestInputImages({ stepId }: { stepId: number | null }) {
   const { data: detail } = RequestLogStepService.useRequestLogStep("I", stepId ?? 0, {
     enabled: stepId !== null,
   });
+
   const args = detail ? safeParseJson(detail.tool_args) : null;
+
   return <ToolInputImages images={getToolInputImages(args)} />;
 }
 
 function ToolCallItem({ entry }: { entry: ToolCallEntry }) {
   const hasError = !!entry.error;
   const [opened, setOpened] = useState(false);
+
   const { data: detail } = RequestLogStepService.useRequestLogStep("A", entry.id, {
     enabled: opened,
   });
+
   const args = detail ? safeParseJson(detail.tool_args) : null;
   const displayArgs = hideToolInputImages(args);
   const result = detail ? safeParseJson(detail.tool_result) : null;
   const error = detail?.error ?? entry.error;
+
   return (
     <details
       className="group/tool"
@@ -707,10 +752,13 @@ function ToolCallItem({ entry }: { entry: ToolCallEntry }) {
 
 function ReasoningBlock({ stepId }: { stepId: number }) {
   const [opened, setOpened] = useState(false);
+
   const { data: detail } = RequestLogStepService.useRequestLogStep("A", stepId, {
     enabled: opened,
   });
+
   const reasoningText = detail?.reasoning_text ?? null;
+
   return (
     <details
       className="group/reason mt-3"
@@ -745,11 +793,13 @@ function StepTreeItem({
   tokensPerSecEnabled: boolean;
 }) {
   const generate = entry.generate;
+
   const hasReasoning =
     generate !== null &&
     generate.reasoningTokens !== null &&
     generate.reasoningTokens !== undefined &&
     generate.reasoningTokens > 0;
+
   const errorCount = entry.toolCalls.filter((toolCall) => toolCall.error).length;
 
   return (
@@ -872,14 +922,17 @@ function buildStepTree(steps: RequestLogStep[]): StepTreeEntry[] {
 
   function ensureStep(stepIndex: number): StepTreeEntry {
     const existing = grouped.get(stepIndex);
+
     if (existing) return existing;
     const next = { stepIndex, generate: null, toolCalls: [] };
     grouped.set(stepIndex, next);
+
     return next;
   }
 
   for (const step of steps) {
     const group = ensureStep(step.step_index);
+
     if (step.type === "generate") {
       group.generate = {
         id: step.id,
@@ -936,26 +989,33 @@ type HistoryItem = {
 function historyItemBg(item: HistoryItem): string {
   if (item.type === "function_call" || item.type === "function_call_output")
     return "bg-caution-400/10";
+
   if (item.role === "assistant") return "bg-sage-50";
+
   return "bg-sand-50";
 }
 
 function historyItemLabel(item: HistoryItem): string {
   if (item.type === "function_call") return `fn: ${item.name ?? "unknown"}`;
+
   if (item.type === "function_call_output") return `fn result`;
+
   return item.role ?? item.type;
 }
 
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;
+
   if (Array.isArray(content)) {
     return content
       .map((c) => {
         if (typeof c === "object" && c !== null && "text" in c) return (c as { text: string }).text;
+
         return JSON.stringify(c);
       })
       .join("\n");
   }
+
   return JSON.stringify(content);
 }
 
@@ -1002,11 +1062,14 @@ function toolNamePreview(
   omittedCount: number;
 } {
   const names: string[] = [];
+
   for (const tool of tools) {
     const next = [...names, tool.name].join(", ");
+
     if (next.length > maxCharacters) break;
     names.push(tool.name);
   }
+
   return { names, omittedCount: tools.length - names.length };
 }
 
@@ -1042,6 +1105,7 @@ function ToolsHeaderMetadata({ tools }: { tools: ToolDefinitions }) {
 
 function ToolInputZod({ code, fullCode }: { code: string; fullCode?: string }) {
   const highlighted = useMemo(() => highlightTypeText(code), [code]);
+
   return (
     <pre
       data-zod-parameter-shape
@@ -1080,6 +1144,7 @@ function ToolCard({ tool }: { tool: ToolView }) {
 
 function ToolsPanel({ id, tools }: { id: number; tools: ToolDefinitions }) {
   const [open, setOpen] = useState(false);
+
   const query = useQuery({
     ...RequestLogService.toolsViewQueryOptions(id),
     enabled: open,
@@ -1088,6 +1153,7 @@ function ToolsPanel({ id, tools }: { id: number; tools: ToolDefinitions }) {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
+
   const hasView = query.data !== undefined && query.data.length > 0;
 
   return (
@@ -1120,9 +1186,11 @@ const TYPE_TOKEN_RE =
 function highlightTypeText(text: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   let afterTypeKeyword = false;
+
   for (const match of text.matchAll(TYPE_TOKEN_RE)) {
     const [token, str, num, kw, builtin, punct, ident] = match;
     const key = `${match.index}-${token}`;
+
     if (str || num) {
       nodes.push(
         <span key={key} className="text-sage-400">
@@ -1161,6 +1229,7 @@ function highlightTypeText(text: string): ReactNode[] {
       nodes.push(token);
     }
   }
+
   return nodes;
 }
 
@@ -1174,7 +1243,9 @@ function ResponseTypePanel({ id }: { id: number }) {
   const { zod = null, typescript = null } = data ?? {};
   const code = mode === "zod" ? (zod ?? typescript) : (typescript ?? zod);
   const highlighted = useMemo(() => (code === null ? null : highlightTypeText(code)), [code]);
+
   if (!data || code === null || highlighted === null) return null;
+
   return (
     <div className="panel overflow-hidden">
       <div className="panel-header flex items-center px-4 py-2">
@@ -1217,6 +1288,7 @@ function ResponseTypePanel({ id }: { id: number }) {
 
 function RequestDetail({ id }: { id: number }) {
   const { data, isLoading, error, isError } = RequestLogService.useRequestLog("A", id);
+
   const {
     data: stepsData,
     isLoading: isStepsLoading,
@@ -1227,6 +1299,7 @@ function RequestDetail({ id }: { id: number }) {
     page: 1,
     orderBy: "id-asc" as const,
   });
+
   const steps = stepsData?.rows ?? [];
   const stepTree = buildStepTree(steps);
 
@@ -1264,8 +1337,10 @@ function RequestDetail({ id }: { id: number }) {
   }
 
   const toolCalls = stepTree.flatMap((step) => step.toolCalls);
+
   const firstImageGenerationStepId =
     toolCalls.find((toolCall) => toolCall.toolName === "image_generation")?.id ?? null;
+
   const hasSteps = stepTree.length > 0;
   const tokensPerSecEnabled = isTokensPerSecEnabled(data);
   const history = data.history ?? null;

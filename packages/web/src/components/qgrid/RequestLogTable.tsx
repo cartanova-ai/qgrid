@@ -21,6 +21,7 @@ function formatDateTime(iso: string): string {
   const dd = String(d.getDate()).padStart(2, "0");
   const hh = String(d.getHours()).padStart(2, "0");
   const mi = String(d.getMinutes()).padStart(2, "0");
+
   return `${mm}-${dd} ${hh}:${mi}`;
 }
 
@@ -32,6 +33,7 @@ function formatDuration(ms: number): string {
   const total = Math.round(ms / 1000);
   const m = Math.floor(total / 60);
   const s = total % 60;
+
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
@@ -62,6 +64,7 @@ function RequestModel({
     servedModel,
     imageCostMethod,
   });
+
   const hasRequestedOnly = requestedModel !== null && servedModel === null;
 
   return (
@@ -79,6 +82,7 @@ function RequestModel({
 // Non-zero TTFT is usually sub-second, so use adaptive ms/s formatting.
 function formatTtft(ms: number): string {
   if (ms <= 0) return "—";
+
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
 }
 
@@ -133,7 +137,9 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
 
   const projectFilterParam = (() => {
     if (projectFilter === UNASSIGNED) return { project_name_is_null: true as const };
+
     if (projectFilter) return { project_name: projectFilter };
+
     return {};
   })();
 
@@ -158,6 +164,7 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
       ...listFilters,
     },
   );
+
   const {
     data: costData,
     isError: isCostError,
@@ -167,6 +174,7 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
     page: 1,
     ...listFilters,
   });
+
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.ceil(total / PAGE_SIZE);
@@ -274,7 +282,9 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                   {COLUMNS.map((col) => {
                     const padX =
                       col.label === "Duration" ? "pl-5 pr-3" : col.width ? "px-4" : "px-3";
+
                     const active = col.sortKey === sortColumn;
+
                     return (
                       <th
                         key={col.label}
@@ -322,8 +332,10 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                     onClick={(e) => {
                       if (e.metaKey || e.ctrlKey) {
                         window.open(`/requests/show?id=${row.id}`, "_blank");
+
                         return;
                       }
+
                       navigate({ to: "/requests/show", search: { id: row.id } });
                     }}
                   >

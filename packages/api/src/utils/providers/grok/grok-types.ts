@@ -11,6 +11,7 @@ import { GROK_AUTH_ISSUER } from "./grok-constants";
 // ---------------------------------------------------------------------------
 
 const JwtHeader = z.looseObject({ typ: z.string(), alg: z.string().optional() });
+
 const JwtPayload = z.looseObject({
   iss: z.string(),
   sub: z.string().optional(),
@@ -26,6 +27,7 @@ const BASE64URL_SEGMENT = /^[A-Za-z0-9_-]+$/;
 
 function decodeSegment(segment: string): unknown {
   if (!BASE64URL_SEGMENT.test(segment)) return undefined;
+
   try {
     return JSON.parse(Buffer.from(segment, "base64url").toString("utf8"));
   } catch {
@@ -36,18 +38,23 @@ function decodeSegment(segment: string): unknown {
 /** Decodes a compact JWT's header and payload. The signature is never verified. */
 export function decodeGrokJwt(token: string): DecodedGrokJwt | undefined {
   const parts = token.split(".");
+
   if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) return undefined;
   const header = JwtHeader.safeParse(decodeSegment(parts[0]));
   const payload = JwtPayload.safeParse(decodeSegment(parts[1]));
+
   if (!header.success || !payload.success) return undefined;
+
   return { header: header.data, payload: payload.data };
 }
 
 /** An RFC 9068 access token (`typ: at+jwt`) issued by auth.x.ai. API keys are rejected. */
 export function isGrokAccessToken(token: string): boolean {
   const decoded = decodeGrokJwt(token);
+
   if (!decoded) return false;
   const typ = decoded.header.typ.toLowerCase();
+
   return (
     (typ === "at+jwt" || typ === "application/at+jwt") && decoded.payload.iss === GROK_AUTH_ISSUER
   );
@@ -72,6 +79,7 @@ export const GrokCredentials = z.object({
   agentId: GrokId,
   subscriptionTier: z.string().optional(),
 });
+
 export type GrokCredentials = z.infer<typeof GrokCredentials>;
 
 // ---------------------------------------------------------------------------
@@ -94,6 +102,7 @@ export const GrokBillingConfig = z.looseObject({
       .optional(),
   }),
 });
+
 export type GrokBillingConfig = z.infer<typeof GrokBillingConfig>;
 
 /** `GET /settings`. `on_demand_enabled: true` excludes the token (D6); null/absent allows. */
@@ -108,6 +117,7 @@ export const GrokSettings = z.looseObject({
   voice_mode_enabled: z.boolean().nullish(),
   accept_request_encodings: z.array(z.string()).nullish(),
 });
+
 export type GrokSettings = z.infer<typeof GrokSettings>;
 
 /** `GET /user?include=subscription`. `userId` is the account identity key. */
@@ -119,6 +129,7 @@ export const GrokUserSubscription = z.looseObject({
   /** Zero Data Retention opt-out; `true` was observed while ZDR was on (plan §11). */
   codingDataRetentionOptOut: z.boolean().nullish(),
 });
+
 export type GrokUserSubscription = z.infer<typeof GrokUserSubscription>;
 
 export const GrokModelReasoningEffort = z.looseObject({
@@ -137,6 +148,7 @@ export const GrokProxyModel = z.looseObject({
   reasoning_efforts: z.array(GrokModelReasoningEffort).optional(),
   supports_reasoning_effort: z.boolean().optional(),
 });
+
 export type GrokProxyModel = z.infer<typeof GrokProxyModel>;
 
 /** `GET /models` on the proxy (`{object: "list", data: [...]}`). */
@@ -144,6 +156,7 @@ export const GrokModelsResponse = z.looseObject({
   object: z.string().optional(),
   data: z.array(GrokProxyModel),
 });
+
 export type GrokModelsResponse = z.infer<typeof GrokModelsResponse>;
 
 // ---------------------------------------------------------------------------
@@ -165,6 +178,7 @@ export const GrokApiLanguageModel = z.looseObject({
   completion_text_token_price_long_context: ticks.optional(),
   long_context_threshold: z.number().int().positive().optional(),
 });
+
 export type GrokApiLanguageModel = z.infer<typeof GrokApiLanguageModel>;
 
 // The live envelope of /language-models was not captured; accept either list key.
@@ -172,6 +186,7 @@ export const GrokApiLanguageModelCatalog = z.union([
   z.looseObject({ models: z.array(GrokApiLanguageModel) }),
   z.looseObject({ data: z.array(GrokApiLanguageModel) }),
 ]);
+
 export type GrokApiLanguageModelCatalog = z.infer<typeof GrokApiLanguageModelCatalog>;
 
 export const GrokApiImageModel = z.looseObject({
@@ -188,12 +203,14 @@ export const GrokApiImageModel = z.looseObject({
     )
     .optional(),
 });
+
 export type GrokApiImageModel = z.infer<typeof GrokApiImageModel>;
 
 export const GrokApiImageModelCatalog = z.union([
   z.looseObject({ models: z.array(GrokApiImageModel) }),
   z.looseObject({ data: z.array(GrokApiImageModel) }),
 ]);
+
 export type GrokApiImageModelCatalog = z.infer<typeof GrokApiImageModelCatalog>;
 
 /** Model list of either catalog, whichever envelope key the API used. */
@@ -217,10 +234,12 @@ export const GrokImageResponse = z.looseObject({
     .min(1),
   usage: ticksUsage.optional(),
 });
+
 export type GrokImageResponse = z.infer<typeof GrokImageResponse>;
 
 /** `POST /videos/generations`. */
 export const GrokVideoStart = z.looseObject({ request_id: z.string().min(1) });
+
 export type GrokVideoStart = z.infer<typeof GrokVideoStart>;
 
 /**
@@ -238,6 +257,7 @@ export const GrokVideoStatus = z.looseObject({
     .nullish(),
   usage: ticksUsage.nullish(),
 });
+
 export type GrokVideoStatus = z.infer<typeof GrokVideoStatus>;
 
 export function grokVideoUrl(status: GrokVideoStatus): string | undefined {
@@ -250,6 +270,7 @@ export const GrokSttResponse = z.looseObject({
   language: z.string().optional(),
   duration: z.number().nonnegative().optional(),
 });
+
 export type GrokSttResponse = z.infer<typeof GrokSttResponse>;
 
 /** `POST /tts` body; the API answers 422 without `language` (U0). */
@@ -259,6 +280,7 @@ export const GrokTtsRequest = z.object({
   language: z.string().min(1),
   format: z.string().min(1),
 });
+
 export type GrokTtsRequest = z.infer<typeof GrokTtsRequest>;
 
 // ---------------------------------------------------------------------------

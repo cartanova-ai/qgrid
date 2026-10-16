@@ -34,20 +34,27 @@ function validateThreshold(
   raw: string,
 ): { ok: true; value: number | null } | { ok: false; error: string } {
   const trimmed = raw.trim();
+
   if (trimmed === "") return { ok: true, value: null };
+
   if (!/^\d+$/.test(trimmed)) return { ok: false, error: "정수만 입력하세요 (0–100)" };
   const n = Number(trimmed);
+
   if (n > 100) return { ok: false, error: "100 이하여야 합니다" };
+
   return { ok: true, value: n === 0 ? null : n };
 }
 
 function validateWeight(raw: string): { ok: true; value: number } | { ok: false; error: string } {
   const trimmed = raw.trim();
+
   if (!/^\d+$/.test(trimmed)) return { ok: false, error: "1–100 사이 정수를 입력하세요" };
   const value = Number(trimmed);
+
   if (value < 1 || value > 100) {
     return { ok: false, error: "1–100 사이 정수를 입력하세요" };
   }
+
   return { ok: true, value };
 }
 
@@ -98,16 +105,20 @@ function getProviderTheme(provider: string): ProviderTheme {
 
 function barColor(pct: number, theme: ProviderTheme): string {
   if (pct >= 95) return "bg-danger-400";
+
   if (pct >= 80) return "bg-caution-400";
+
   return theme.bar;
 }
 
 function formatResets(iso: string | null): string {
   if (!iso) return "";
   const diff = new Date(iso).getTime() - Date.now();
+
   if (diff <= 0) return "resetting...";
   const h = Math.floor(diff / 3_600_000);
   const m = Math.floor((diff % 3_600_000) / 60_000);
+
   return h > 0 ? `resets ${h}h ${m}m` : `resets ${m}m`;
 }
 
@@ -115,7 +126,9 @@ function formatWindowLabel(fallback: string, windowDurationMins?: number | null)
   if (!windowDurationMins || windowDurationMins <= 0) return fallback;
 
   const hours = windowDurationMins / 60;
+
   if (hours >= 24) return `${Math.round(hours / 24)}d`;
+
   return `${Math.round(hours)}h`;
 }
 
@@ -123,6 +136,7 @@ function formatWindowLabel(fallback: string, windowDurationMins?: number | null)
 function formatPeriodType(periodType: string | null | undefined): string | null {
   if (!periodType) return null;
   const label = periodType.replace(/^USAGE_PERIOD_TYPE_/, "").toLowerCase();
+
   return label && label !== "unspecified" ? label : null;
 }
 
@@ -139,13 +153,16 @@ export function UsageStateNotes({
   };
 }) {
   const period = formatPeriodType(usage.periodType);
+
   const hasNotes =
     usage.onDemandExcluded === true ||
     usage.zdrVideoExcluded === true ||
     usage.keepaliveApplicable === false ||
     period !== null ||
     !!usage.tier;
+
   if (!hasNotes) return null;
+
   return (
     <div className="flex flex-wrap items-center gap-1 text-[10px]">
       {usage.onDemandExcluded === true && (
@@ -200,6 +217,7 @@ function UsageRow({
 }) {
   const pct = utilization ?? 0;
   const hasThreshold = threshold !== undefined && threshold !== null;
+
   return (
     // 고정 폭 합(w-20+w-10+w-24 = 216px)이 좁은 카드보다 커서 resets 가 밖으로 밀려났다.
     // 라벨·수치는 내용에 맞게 줄이고, resets 는 폭이 확보되는 sm 이상에서만 보여준다.
@@ -239,6 +257,7 @@ function TokenUsage({ token, theme }: { token: Token; theme: ProviderTheme }) {
   useEffect(() => {
     if (data?.error) void queryClient.invalidateQueries({ queryKey: ["Token"] });
   }, [data?.error, dataUpdatedAt, queryClient]);
+
   if (token.reauth_required) {
     return (
       <div className="py-1">
@@ -247,6 +266,7 @@ function TokenUsage({ token, theme }: { token: Token; theme: ProviderTheme }) {
       </div>
     );
   }
+
   if (isLoading) {
     return (
       <div className="animate-pulse space-y-2 py-2">
@@ -327,20 +347,25 @@ function ThresholdControl({ token }: { token: Token }) {
 
   const openPopover = () => {
     const rect = triggerRef.current?.getBoundingClientRect();
+
     if (!rect) return;
+
     // left: 트리거 우변에 박스 우변을 맞추되 viewport [MARGIN, w-width-MARGIN] 로 clamp.
     const left = Math.min(
       Math.max(rect.right - POPOVER_WIDTH, MARGIN),
       Math.max(window.innerWidth - POPOVER_WIDTH - MARGIN, MARGIN),
     );
+
     // top: 기본은 버튼 위. 위 공간이 부족하면 아래로 flip. 최종적으로 viewport 안으로 clamp.
     const above = rect.top - GAP - POPOVER_EST_HEIGHT;
     const below = rect.bottom + GAP;
     const top = above >= MARGIN ? above : below;
+
     const clampedTop = Math.min(
       Math.max(top, MARGIN),
       Math.max(window.innerHeight - POPOVER_EST_HEIGHT - MARGIN, MARGIN),
     );
+
     setPos({ left, top: clampedTop });
     // 미설정이면 100에서 시작 — 거기서 -10 으로 내려가며 정하고, 0은 해제(null)로 저장한다.
     setValue(String(token.quota_threshold ?? 100));
@@ -480,25 +505,31 @@ function WeightControl({ token }: { token: Token }) {
 
   const openPopover = () => {
     const rect = triggerRef.current?.getBoundingClientRect();
+
     if (!rect) return;
     const width = 240;
     const height = 150;
     const margin = 8;
     const gap = 6;
+
     const left = Math.min(
       Math.max(rect.right - width, margin),
       Math.max(window.innerWidth - width - margin, margin),
     );
+
     const above = rect.top - gap - height;
+
     const top = Math.min(
       Math.max(above >= margin ? above : rect.bottom + gap, margin),
       Math.max(window.innerHeight - height - margin, margin),
     );
+
     setValue(String(token.weight));
     setPos({ left, top });
   };
 
   const close = () => setPos(null);
+
   const adjust = (delta: number) => {
     const current = /^\d+$/.test(value.trim()) ? Number(value.trim()) : 1;
     setValue(String(Math.min(Math.max(current + delta, 1), 100)));
@@ -661,10 +692,12 @@ function SortableTokenCard({ token }: { token: Token }) {
       easing: "ease",
     },
   });
+
   const { data: costData } = QgridService.useTotalCost(
     { num: 0, page: 1, ...(token.name ? { token_name: token.name } : {}) },
     { enabled: !!token.name },
   );
+
   const theme = getProviderTheme(token.provider);
 
   const style = {
@@ -746,7 +779,9 @@ function SortableTokenCard({ token }: { token: Token }) {
 }
 
 const PROVIDERS = ["all", "openai", "anthropic", "grok"] as const;
+
 type ProviderFilter = (typeof PROVIDERS)[number];
+
 const PROVIDER_FILTER_LABELS: Record<ProviderFilter, string> = {
   all: "All",
   openai: "OpenAI",
@@ -770,12 +805,14 @@ export function UsageCard() {
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
+
     if (!over || active.id === over.id) return;
 
     const activeId = Number(active.id);
     const overId = Number(over.id);
     const oldIndex = localTokens.findIndex((t) => t.id === activeId);
     const newIndex = localTokens.findIndex((t) => t.id === overId);
+
     if (oldIndex === -1 || newIndex === -1) return;
 
     const reordered = arrayMove(localTokens, oldIndex, newIndex);
@@ -784,6 +821,7 @@ export function UsageCard() {
     const queryKey = TokenService.getTokensQueryOptions("A", {
       orderBy: "ord-asc" as const,
     }).queryKey;
+
     const prev = queryClient.getQueryData(queryKey);
 
     queryClient.setQueryData(queryKey, (old: typeof prev) =>
@@ -795,6 +833,7 @@ export function UsageCard() {
       {
         onError: () => {
           queryClient.setQueryData(queryKey, prev);
+
           if (data?.rows) setLocalTokens(data.rows);
         },
         onSettled: () => {

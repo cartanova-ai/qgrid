@@ -16,6 +16,7 @@ const hideSidebarPaths = ["/login", "/signup"];
 function App({ children }: AppProps) {
   useEffect(() => {
     const browserLocale = navigator.language.split("-")[0];
+
     if (SUPPORTED_LOCALES.includes(browserLocale as (typeof SUPPORTED_LOCALES)[number])) {
       setLocale(browserLocale as (typeof SUPPORTED_LOCALES)[number]);
     }

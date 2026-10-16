@@ -47,24 +47,29 @@ export class TokenSubscriber {
 
     try {
       await this.connectAndReconcile();
+
       return true;
     } catch (e) {
       logger.warn(`subscriber start failed: ${(e as Error).message}, scheduling retry`);
       this.retryLater();
+
       return false;
     }
   }
 
   async stop(): Promise<void> {
     this.shutdownRequested = true;
+
     if (this.reconcileTimer) {
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = null;
     }
+
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+
     await this.closeClient();
   }
 
@@ -135,6 +140,7 @@ export class TokenSubscriber {
 
   retryLater(): void {
     if (this.shutdownRequested) return;
+
     if (this.reconnectTimer) return;
 
     void this.closeClient();
@@ -153,6 +159,7 @@ export class TokenSubscriber {
 
   async closeClient(): Promise<void> {
     const client = this.client;
+
     if (!client) return;
 
     this.client = null;
@@ -166,10 +173,13 @@ export class TokenSubscriber {
 
   async handleNotificationNow(payloadJson: string): Promise<void> {
     const payload = JSON.parse(payloadJson) as Payload;
+
     const previousRow = this.tokenChangeHandler
       ? this.dispatcher.tokens.get(payload.id)
       : undefined;
+
     const wasKeepaliveTarget = previousRow?.active === true && previousRow.provider === "anthropic";
+
     if (payload.op === "DELETE") {
       this.dispatcher.tokens.delete(payload.id);
       await this.dispatcher.openaiDispatcher
@@ -179,10 +189,14 @@ export class TokenSubscriber {
       this.dispatcher.anthropicDispatcher?.onTokenRemoved(payload.id);
       await this.removeGrokToken(payload.id);
       logger.info(`NOTIFY ${payload.op} id=${payload.id} → removed from cache`);
+
       if (previousRow === undefined || wasKeepaliveTarget) this.notifyTokensChanged();
+
       return;
     }
+
     const row = await TokenModel.findOne("A", { id: payload.id });
+
     if (!row) {
       this.dispatcher.tokens.delete(payload.id);
       await this.dispatcher.openaiDispatcher
@@ -191,7 +205,9 @@ export class TokenSubscriber {
       this.dispatcher.anthropicDispatcher?.onTokenRemoved(payload.id);
       await this.removeGrokToken(payload.id);
       logger.info(`NOTIFY ${payload.op} id=${payload.id} → missing, removed from cache`);
+
       if (previousRow === undefined || wasKeepaliveTarget) this.notifyTokensChanged();
+
       return;
     }
 
@@ -200,6 +216,7 @@ export class TokenSubscriber {
     if (row.provider === "openai") {
       const creds = row.credentials as Record<string, unknown>;
       const openaiDispatcher = this.dispatcher.openaiDispatcher;
+
       if (payload.op === "INSERT" && row.active) {
         await openaiDispatcher
           ?.onTokenAdded(
@@ -228,6 +245,7 @@ export class TokenSubscriber {
       }
     } else if (row.provider === "anthropic") {
       const creds = row.credentials as AnthropicCredentials;
+
       if (payload.op === "INSERT" && row.active) {
         this.dispatcher.anthropicDispatcher?.onTokenAdded(
           payload.id,
@@ -249,6 +267,7 @@ export class TokenSubscriber {
       }
     } else if (row.provider === "grok") {
       const grokDispatcher = this.dispatcher.grokDispatcher;
+
       if (grokDispatcher) {
         await Promise.resolve()
           .then(() => {
@@ -261,6 +280,7 @@ export class TokenSubscriber {
                 row.weight,
               );
             }
+
             if (row.active) {
               return grokDispatcher.onTokenUpdated(
                 payload.id,
@@ -270,13 +290,16 @@ export class TokenSubscriber {
                 row.weight,
               );
             }
+
             return grokDispatcher.onTokenRemoved(payload.id);
           })
           .catch((e) => logger.warn(`grok token sync failed: ${(e as Error).message}`));
       }
     }
+
     logger.info(`NOTIFY ${payload.op} id=${payload.id} (${row.name}) active=${row.active}`);
     const isKeepaliveTarget = row.active && row.provider === "anthropic";
+
     if (wasKeepaliveTarget !== isKeepaliveTarget) this.notifyTokensChanged();
   }
 
@@ -292,9 +315,11 @@ export class TokenSubscriber {
             .map((row) => row.id),
         )
       : null;
+
     await TokenModel.deactivateExpiredTokens();
     const rows = await TokenModel.findActive("A");
     this.dispatcher.replaceCache(rows);
+
     const anthropicRows = rows
       .filter((r) => r.provider === "anthropic")
       .map((r) => ({
@@ -304,7 +329,9 @@ export class TokenSubscriber {
         quotaThreshold: r.quota_threshold,
         weight: r.weight,
       }));
+
     this.dispatcher.anthropicDispatcher?.replaceTokens(anthropicRows);
+
     const openaiRows = rows
       .filter((r) => r.provider === "openai")
       .map((r) => ({
@@ -314,10 +341,12 @@ export class TokenSubscriber {
         quotaThreshold: r.quota_threshold,
         weight: r.weight,
       }));
+
     await this.dispatcher.openaiDispatcher
       ?.replaceTokens(openaiRows)
       .catch((e) => logger.warn(`openai reconcile failed: ${(e as Error).message}`));
     const grokDispatcher = this.dispatcher.grokDispatcher;
+
     if (grokDispatcher) {
       const grokRows = rows
         .filter((r) => r.provider === "grok")
@@ -328,11 +357,14 @@ export class TokenSubscriber {
           quotaThreshold: r.quota_threshold,
           weight: r.weight,
         }));
+
       await Promise.resolve()
         .then(() => grokDispatcher.replaceTokens(grokRows))
         .catch((e) => logger.warn(`grok reconcile failed: ${(e as Error).message}`));
     }
+
     this.lastReconcileAt = new Date();
+
     if (
       previousAnthropicIds &&
       (previousAnthropicIds.size !== anthropicRows.length ||
@@ -345,6 +377,7 @@ export class TokenSubscriber {
   // Grok dispatcher 는 선택적으로 주입된다. 동기/비동기 구현 모두의 실패를 격리한다.
   async removeGrokToken(id: number): Promise<void> {
     const grokDispatcher = this.dispatcher.grokDispatcher;
+
     if (!grokDispatcher) return;
     await Promise.resolve()
       .then(() => grokDispatcher.onTokenRemoved(id))
@@ -354,6 +387,7 @@ export class TokenSubscriber {
   enqueueOperation(operation: () => Promise<void>): Promise<void> {
     const next = this.operationChain.then(operation, operation);
     this.operationChain = next.catch(() => {});
+
     return next;
   }
 }

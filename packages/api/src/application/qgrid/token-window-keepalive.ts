@@ -58,6 +58,7 @@ let generation = 0;
 
 function clearTokenTimer(tokenId: number): void {
   const timer = timers.get(tokenId);
+
   if (!timer) return;
   timer.clear(timer.handle);
   timers.delete(tokenId);
@@ -72,9 +73,11 @@ function scheduleToken(
 ): void {
   if (generation !== expectedGeneration) return;
   clearTokenTimer(token.id);
+
   const handle = deps.setTimer(
     () => {
       timers.delete(token.id);
+
       if (generation !== expectedGeneration) return;
       void inspectToken(token, deps, expectedGeneration, allowFire).catch((error) => {
         logger.warn(`keepalive cycle failed for ${token.name}: ${(error as Error).message}`);
@@ -83,6 +86,7 @@ function scheduleToken(
     },
     Math.max(0, delayMs),
   );
+
   timers.set(token.id, { handle, clear: deps.clearTimer });
 }
 
@@ -114,40 +118,53 @@ async function inspectToken(
 ): Promise<void> {
   const now = deps.now();
   const guard = fireGuards.get(token.id);
+
   if (guard && guard.untilMs > now) {
     scheduleToken(token, deps, expectedGeneration, guard.untilMs - now, guard.allowFireAtExpiry);
+
     return;
   }
+
   if (guard) fireGuards.delete(token.id);
 
   let usage: UsageResponse;
+
   try {
     usage = await deps.readUsage(token.id);
   } catch (error) {
     logger.warn(`usage lookup failed for ${token.name}: ${(error as Error).message}`);
     scheduleFallback(token, deps, expectedGeneration);
+
     return;
   }
+
   if (generation !== expectedGeneration) return;
 
   if (usage.error) {
     logger.warn(`usage lookup failed for ${token.name}: ${usage.error}`);
     scheduleFallback(token, deps, expectedGeneration);
+
     return;
   }
 
   const resetsAt = usage.fiveHour?.resetsAt;
+
   if (resetsAt) {
     const resetMs = Date.parse(resetsAt);
+
     if (!Number.isFinite(resetMs)) {
       logger.warn(`invalid five-hour reset for ${token.name}: ${resetsAt}`);
       scheduleFallback(token, deps, expectedGeneration);
+
       return;
     }
+
     const inspectedAt = deps.now();
+
     if (resetMs > inspectedAt) {
       fireGuards.delete(token.id);
       scheduleToken(token, deps, expectedGeneration, resetMs - inspectedAt + RESET_GRACE_MS, true);
+
       return;
     }
   }
@@ -155,10 +172,12 @@ async function inspectToken(
   // 발사 직후 확인에서는 캐시된 null/과거 reset을 봐도 다시 발사하지 않는다.
   if (!allowFire) {
     scheduleFallback(token, deps, expectedGeneration);
+
     return;
   }
 
   deferToken(token, deps, expectedGeneration, POST_KEEPALIVE_USAGE_DELAY_MS, false);
+
   try {
     await deps.dispatch({
       prompt: "Reply OK.",
@@ -172,10 +191,12 @@ async function inspectToken(
   } catch (error) {
     logger.warn(`keepalive failed for ${token.name}: ${(error as Error).message}`);
     scheduleFallback(token, deps, expectedGeneration);
+
     return;
   }
 
   const postFireGuard = fireGuards.get(token.id);
+
   if (postFireGuard) {
     scheduleToken(
       token,
@@ -189,6 +210,7 @@ async function inspectToken(
 
 function clearScheduledTimers(): void {
   generation++;
+
   for (const tokenId of timers.keys()) clearTokenTimer(tokenId);
 }
 
@@ -196,32 +218,43 @@ export async function startTokenWindowKeepalive(
   deps: TokenWindowKeepaliveDeps = defaultDeps,
 ): Promise<void> {
   clearScheduledTimers();
+
   if (!deps.isRunnerEnabled()) {
     logger.info("token window keepalive runner disabled for this instance");
+
     return;
   }
+
   if (deps.readSetting(KEEPALIVE_SETTING_KEY) === "false") {
     logger.info("token window keepalive disabled");
+
     return;
   }
+
   const expectedGeneration = generation;
 
   let tokens: KeepaliveToken[];
+
   try {
     tokens = await deps.findTokens();
   } catch (error) {
     logger.warn(`token discovery failed: ${(error as Error).message}`);
+
     return;
   }
+
   if (generation !== expectedGeneration) return;
 
   const targets = tokens.filter(
     (token) => token.active && token.provider === "anthropic" && token.keepalive_enabled,
   );
+
   const targetIds = new Set(targets.map((token) => token.id));
+
   for (const tokenId of fireGuards.keys()) {
     if (!targetIds.has(tokenId)) fireGuards.delete(tokenId);
   }
+
   logger.info(`token window keepalive scheduling ${targets.length} token(s)`);
   await Promise.all(targets.map((token) => inspectToken(token, deps, expectedGeneration, true)));
 }

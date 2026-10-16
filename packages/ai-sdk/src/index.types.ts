@@ -8,6 +8,7 @@ import { z } from "zod";
  * 모델이 지원하지 않는 값은 서버가 조용히 무시한다.
  */
 export type QgridOpenAIEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+
 /**
  * Anthropic 경로(Claude Code `--effort`)의 reasoning effort. 모델별 상한(예: Sonnet 4.6 은 `xhigh`
  * 없음)은 Claude Code 가 처리하고, 이 집합 밖의 값은 서버가 조용히 무시한다.
@@ -15,6 +16,7 @@ export type QgridOpenAIEffort = "low" | "medium" | "high" | "xhigh" | "max" | "u
 export type QgridAnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type QgridOpenAIModel = Extract<QgridSupportedModel, `openai/${string}`>;
+
 export type QgridAnthropicModel = Extract<QgridSupportedModel, `anthropic/${string}`>;
 
 type QgridCommonProviderConfig = {
@@ -63,9 +65,11 @@ export type QgridImageProviderOptions = {
 export type QgridOpenAIProviderConfig = QgridCommonProviderConfig & {
   defaultEffort?: QgridOpenAIEffort;
 };
+
 export type QgridAnthropicProviderConfig = QgridCommonProviderConfig & {
   defaultEffort?: QgridAnthropicEffort;
 };
+
 /** `qgrid()` 는 모델 ID prefix 로 오버로드되므로 보통 provider 별 타입이 추론된다. */
 export type QgridProviderConfig = QgridOpenAIProviderConfig | QgridAnthropicProviderConfig;
 

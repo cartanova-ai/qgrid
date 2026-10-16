@@ -22,8 +22,10 @@ function codexPlatform(): CodexUserAgentPlatform {
     linux: "Linux",
     win32: "Windows",
   };
+
   const terminal = process.env.TERM_PROGRAM;
   const terminalVersion = process.env.TERM_PROGRAM_VERSION;
+
   return {
     osType: names[process.platform] ?? process.platform,
     osVersion: os.release(),
@@ -99,6 +101,7 @@ export function buildOpenAIResponsesRequest(
   options: OpenAIResponsesOptions,
 ): OpenAIResponsesRequest {
   const tools = options.tools ? [...options.tools] : [];
+
   if (options.imageGeneration) {
     tools.push(
       options.imageGeneration === true
@@ -206,6 +209,7 @@ function usageFrom(value: unknown): OpenAIUsage | undefined {
   const usage = value as Record<string, unknown>;
   const inputDetails = (usage.input_tokens_details ?? {}) as Record<string, unknown>;
   const outputDetails = (usage.output_tokens_details ?? {}) as Record<string, unknown>;
+
   return {
     inputTokens: Number(usage.input_tokens ?? 0),
     cachedInputTokens: Number(inputDetails.cached_tokens ?? 0),
@@ -221,13 +225,19 @@ export function imageMimeType(
 ): "image/png" | "image/jpeg" | "image/webp" {
   // Inspect only the header, without decoding a potentially large image twice.
   const header = Buffer.from(base64.slice(0, 24), "base64");
+
   if (header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
     return "image/png";
+
   if (header[0] === 255 && header[1] === 216 && header[2] === 255) return "image/jpeg";
+
   if (header.toString("ascii", 0, 4) === "RIFF" && header.toString("ascii", 8, 12) === "WEBP")
     return "image/webp";
+
   if (outputFormat === "jpeg") return "image/jpeg";
+
   if (outputFormat === "webp") return "image/webp";
+
   if (outputFormat === undefined || outputFormat === "png") return "image/png";
   throw new OpenAIProtocolError(`Unsupported image output format: ${String(outputFormat)}`);
 }
@@ -236,10 +246,13 @@ export function normalizeOpenAIEvent(raw: unknown): OpenAINormalizedEvent | unde
   if (!raw || typeof raw !== "object") return undefined;
   const event = raw as Record<string, unknown>;
   const type = String(event.type ?? "");
+
   if (type === "response.created") {
     const response = event.response as Record<string, unknown> | undefined;
+
     return { type: "created", ...(response?.id ? { responseId: String(response.id) } : {}) };
   }
+
   if (type === "response.output_text.delta" && typeof event.delta === "string") {
     return {
       type: "text-delta",
@@ -247,16 +260,19 @@ export function normalizeOpenAIEvent(raw: unknown): OpenAINormalizedEvent | unde
       ...(typeof event.item_id === "string" ? { itemId: event.item_id } : {}),
     };
   }
+
   if (
     (type === "response.output_item.added" || type === "response.output_item.done") &&
     event.item &&
     typeof event.item === "object"
   ) {
     const item = event.item as OpenAIResponseItem;
+
     if (item.type === "image_generation_call" && typeof item.result === "string") {
       // PNG exposes dimensions in its fixed header. Other formats retain the
       // backend's observed size; never substitute requested image controls.
       const header = Buffer.from(item.result.slice(0, 32), "base64");
+
       const pngSize =
         header.length >= 24 &&
         header.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex")) &&
@@ -264,11 +280,13 @@ export function normalizeOpenAIEvent(raw: unknown): OpenAINormalizedEvent | unde
         header.readUInt32BE(20) > 0
           ? `${header.readUInt32BE(16)}x${header.readUInt32BE(20)}`
           : undefined;
+
       const size =
         pngSize ??
         (typeof item.size === "string" && /^[1-9]\d*x[1-9]\d*$/.test(item.size)
           ? item.size
           : undefined);
+
       return {
         type: "image",
         ...(typeof item.id === "string" ? { id: item.id } : {}),
@@ -288,17 +306,22 @@ export function normalizeOpenAIEvent(raw: unknown): OpenAINormalizedEvent | unde
             : {}),
       };
     }
+
     return { type: "output-item", item, completed: type === "response.output_item.done" };
   }
+
   if (type === "response.completed") {
     const response = (event.response ?? {}) as Record<string, unknown>;
     const toolUsage = response.tool_usage as Record<string, unknown> | undefined;
     const parsedImageUsage = ImageGenerationMetadata.shape.usage.safeParse(toolUsage?.image_gen);
     const imageUsage = parsedImageUsage.success ? parsedImageUsage.data : undefined;
+
     const imageTool = Array.isArray(response.tools)
       ? response.tools.find((tool) => tool?.type === "image_generation")
       : undefined;
+
     const imageModel = typeof imageTool?.model === "string" ? imageTool.model : undefined;
+
     return {
       type: "completed",
       responseId: String(response.id ?? ""),
@@ -315,9 +338,11 @@ export function normalizeOpenAIEvent(raw: unknown): OpenAINormalizedEvent | unde
         : {}),
     };
   }
+
   if (type === "error" || type === "response.failed" || type === "response.incomplete") {
     const source = (event.error ?? event.response ?? event) as Record<string, unknown>;
     const nested = (source.error ?? source) as Record<string, unknown>;
+
     return {
       type: "error",
       error: new OpenAIProtocolError(
@@ -326,5 +351,6 @@ export function normalizeOpenAIEvent(raw: unknown): OpenAINormalizedEvent | unde
       ),
     };
   }
+
   return undefined;
 }

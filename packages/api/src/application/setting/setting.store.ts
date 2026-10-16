@@ -18,10 +18,12 @@ const logger = getLogger(["qgrid", "setting"]);
 let cache: Map<string, string> | null = null;
 
 type SettingChangeHandler = (key: string) => void;
+
 export type SettingPersistence = Pick<
   typeof SettingModel,
   "clearByKey" | "findAllAsMap" | "setByKey"
 >;
+
 let settingChangeHandler: SettingChangeHandler | null = null;
 
 /**

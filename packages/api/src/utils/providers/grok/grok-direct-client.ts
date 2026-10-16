@@ -64,11 +64,13 @@ export class GrokIdleTimeoutError extends Error {
 
 function abortReason(signal: AbortSignal): Error {
   const reason: unknown = signal.reason;
+
   return reason instanceof Error ? reason : new DOMException("Aborted", "AbortError");
 }
 
 function connectError(error: unknown): GrokHttpError {
   const message = error instanceof Error ? error.message : String(error);
+
   return new GrokHttpError(
     { ...classifyGrokHttpError(0, "", {}), message },
     "",
@@ -89,6 +91,7 @@ async function readErrorBody(response: Response): Promise<string> {
 
 export async function grokHttpErrorFromResponse(response: Response): Promise<GrokHttpError> {
   const bodyText = await readErrorBody(response);
+
   return new GrokHttpError(
     classifyGrokHttpError(response.status, bodyText, response.headers),
     bodyText,
@@ -111,39 +114,50 @@ async function* guardStream<T>(
   let settledNormally = false;
   let pendingNext = false;
   let stopped = false;
+
   const stop = (reason: Error | undefined) => {
     if (stopped) return;
     stopped = true;
     onStop(reason);
   };
+
   try {
     while (true) {
       if (signal?.aborted) throw abortReason(signal);
       let timer: NodeJS.Timeout | undefined;
       let removeAbort: (() => void) | undefined;
+
       const interrupt = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new GrokIdleTimeoutError(idleTimeoutMs)), idleTimeoutMs);
+
         if (signal) {
           const onAbort = () => reject(abortReason(signal));
           signal.addEventListener("abort", onAbort, { once: true });
           removeAbort = () => signal.removeEventListener("abort", onAbort);
         }
       });
+
       pendingNext = true;
+
       const next = iterator.next().finally(() => {
         pendingNext = false;
       });
+
       let result: IteratorResult<T>;
+
       try {
         result = await Promise.race([next, interrupt]);
       } finally {
         clearTimeout(timer);
         removeAbort?.();
       }
+
       if (result.done) {
         settledNormally = true;
+
         return;
       }
+
       yield result.value;
     }
   } catch (error) {
@@ -152,6 +166,7 @@ async function* guardStream<T>(
   } finally {
     if (settledNormally) stop(undefined);
     else stop(new DOMException("Grok stream consumer stopped", "AbortError"));
+
     // A pending next() would block return(); the cancelled request settles it instead.
     if (!pendingNext) await iterator.return?.(undefined).catch(() => undefined);
   }
@@ -194,6 +209,7 @@ export class GrokChatClient {
    */
   async stream(request: GrokChatStreamRequest): Promise<GrokChatStream> {
     request.signal?.throwIfAborted();
+
     const encoded =
       request.encoding === "plain"
         ? {
@@ -201,15 +217,20 @@ export class GrokChatClient {
             contentEncoding: undefined,
           }
         : await encodeGrokRequestBody(request.body);
+
     const headers = { ...request.headers };
+
     if (encoded.contentEncoding) headers["content-encoding"] = encoded.contentEncoding;
     else delete headers["content-encoding"];
 
     const controller = new AbortController();
+
     const signal = request.signal
       ? AbortSignal.any([request.signal, controller.signal])
       : controller.signal;
+
     let response: Response;
+
     try {
       response = await this.fetchImpl(`${this.baseUrl}/responses`, {
         method: "POST",
@@ -221,7 +242,9 @@ export class GrokChatClient {
       if (request.signal?.aborted) throw abortReason(request.signal);
       throw connectError(error);
     }
+
     if (!response.ok) throw await grokHttpErrorFromResponse(response);
+
     if (!response.body) {
       throw new GrokHttpError(
         { ...classifyGrokHttpError(502, "", response.headers), message: "empty body" },
@@ -229,6 +252,7 @@ export class GrokChatClient {
         readGrokResponseHeaders(response.headers),
       );
     }
+
     const events = guardStream(
       normalizeGrokSSE(response.body),
       request.idleTimeoutMs ?? GROK_DEFAULT_IDLE_TIMEOUT_MS,
@@ -237,6 +261,7 @@ export class GrokChatClient {
         if (reason) controller.abort(reason);
       },
     );
+
     return {
       status: response.status,
       headers: readGrokResponseHeaders(response.headers),
@@ -265,6 +290,7 @@ export async function grokProxyGet(
   const timeout = AbortSignal.timeout(options.timeoutMs ?? GROK_PROXY_GET_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   let response: Response;
+
   try {
     response = await (options.fetch ?? fetch)(`${options.baseUrl ?? GROK_CHAT_PROXY_URL}${path}`, {
       method: "GET",
@@ -275,8 +301,10 @@ export async function grokProxyGet(
     if (options.signal?.aborted) throw abortReason(options.signal);
     throw connectError(error);
   }
+
   if (!response.ok) throw await grokHttpErrorFromResponse(response);
   let json: unknown;
+
   try {
     json = await response.json();
   } catch (error) {
@@ -287,5 +315,6 @@ export async function grokProxyGet(
       { cause: error },
     );
   }
+
   return { status: response.status, headers: readGrokResponseHeaders(response.headers), json };
 }

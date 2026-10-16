@@ -19,6 +19,7 @@ async function loadSonamuTestingModules() {
     "./node_modules/sonamu/dist/testing/vitest-helpers.js",
     import.meta.url,
   );
+
   const reporterUrl = new URL(
     "./node_modules/sonamu/dist/testing/naite-vitest-reporter.js",
     import.meta.url,

@@ -48,6 +48,7 @@ export function createStartupMigrationSource(
   return {
     async getMigrations() {
       const entries = await readdir(dirs.sourceDir);
+
       return entries
         .filter((name) => MIGRATION_FILE_RE.test(name) && !name.endsWith(".d.ts"))
         .toSorted();
@@ -60,9 +61,11 @@ export function createStartupMigrationSource(
       const source = path.join(dirs.sourceDir, name);
       const target = existsSync(compiled) ? compiled : source;
       const module = (await import(pathToFileURL(target).href)) as MigrationModule;
+
       if (typeof module.up !== "function") {
         throw new Error(`migration ${name} has no up() export (${target})`);
       }
+
       return { up: module.up, down: module.down ?? (async () => undefined) };
     },
   };
@@ -80,11 +83,14 @@ export async function runRequiredMigrations(
   deps: StartupMigrationDeps = { getKnex: () => TokenModel.getDB("w"), exit: process.exit },
 ): Promise<void> {
   const log = getLogger(["qgrid", "startup"]);
+
   try {
     const knex = deps.getKnex();
+
     const [batch, migrations] = await knex.migrate.latest({
       migrationSource: createStartupMigrationSource(dirs),
     });
+
     if (migrations.length > 0) {
       log.info(`migration: ${migrations.length} applied (batch ${batch})`);
     }

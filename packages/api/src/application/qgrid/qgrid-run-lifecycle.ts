@@ -17,14 +17,17 @@ const STALE_RUN_THRESHOLD_MS = 30 * 60 * 1000;
 const STALE_CLEANUP_INTERVAL_MS = 60 * 1000;
 let staleCleanupInFlight: Promise<void> | undefined;
 let lastStaleCleanupStartedAt = 0;
+
 function withProviderPrefix(
   routeModel: string | undefined,
   model: string | undefined,
 ): string | undefined {
   if (!model) return undefined;
+
   if (model.includes("/")) return model;
   const slash = routeModel?.indexOf("/") ?? -1;
   const provider = slash > 0 ? routeModel?.slice(0, slash) : undefined;
+
   return provider ? `${provider}/${model}` : model;
 }
 
@@ -33,13 +36,17 @@ function withProviderPrefix(
  */
 function filterHistoryForStorage(rawHistory: string | undefined): unknown {
   if (!rawHistory) return undefined;
+
   try {
     const items = JSON.parse(rawHistory) as unknown[];
+
     const filtered = items.filter((item) => {
       if (!item || typeof item !== "object") return false;
       const record = item as Record<string, unknown>;
+
       return record.type === "message" && (record.role === "user" || record.role === "assistant");
     });
+
     return filtered.length > 0 ? filtered : undefined;
   } catch {
     return undefined;
@@ -49,6 +56,7 @@ function filterHistoryForStorage(rawHistory: string | undefined): unknown {
 function isParseableJson(text: string): boolean {
   try {
     JSON.parse(text);
+
     return true;
   } catch {
     return false;
@@ -112,6 +120,7 @@ async function appendGenerateStep(
     args.model,
     args.model ?? result.requestedModel ?? result.model,
   );
+
   const servedModelName = withProviderPrefix(args.model, result.model);
 
   // generate step 기록
@@ -133,6 +142,7 @@ async function appendGenerateStep(
     ttft_ms: result.ttftMs,
     finish_reason: result.finishReason,
   });
+
   return { requestedModelName, servedModelName };
 }
 
@@ -150,10 +160,12 @@ export async function afterQuery(
   );
 
   const imageParts = getImageParts(result);
+
   const imageCostMicroUsd = estimateImageGenerationCostMicroUsd(
     result,
     args.imageGenerationOptions,
   );
+
   for (const step of buildImageGenerationToolSteps(args, imageParts, stepIndex)) {
     await RequestLogModel.appendStep(requestLogId, step);
   }
@@ -161,8 +173,10 @@ export async function afterQuery(
   if (result.finishReason === "tool-calls") {
     // tool-call step을 즉시 기록하고, 다음 follow-up이 같은 row에 결과를 채운다.
     const toolCalls = result.content.filter((c) => c.type === "tool-call");
+
     for (let i = 0; i < toolCalls.length; i++) {
       const tc = toolCalls[i]!;
+
       if (tc.type !== "tool-call") continue;
       await RequestLogModel.appendStep(requestLogId, {
         step_index: stepIndex,
@@ -247,7 +261,9 @@ async function finishTerminalRun(
         );
       }
     }
+
     let aggregate: Awaited<ReturnType<typeof RequestLogModel.aggregateStepUsage>> | undefined;
+
     try {
       aggregate = await RequestLogModel.aggregateStepUsage(requestLogId);
     } catch (e) {
@@ -291,15 +307,18 @@ async function finishTerminalRun(
 async function cleanupStaleRuns(): Promise<void> {
   if (staleCleanupInFlight) {
     await staleCleanupInFlight;
+
     return;
   }
 
   const now = Date.now();
+
   if (now - lastStaleCleanupStartedAt < STALE_CLEANUP_INTERVAL_MS) return;
   lastStaleCleanupStartedAt = now;
 
   const cleanup = performStaleRunCleanup();
   staleCleanupInFlight = cleanup;
+
   try {
     await cleanup;
   } finally {
@@ -310,11 +329,14 @@ async function cleanupStaleRuns(): Promise<void> {
 async function performStaleRunCleanup(): Promise<void> {
   try {
     const errorMessage = "tool-call run: no follow-up within 30 minutes";
+
     const staleIds = await RequestLogModel.expireStaleToolWaitingRuns(
       STALE_RUN_THRESHOLD_MS,
       errorMessage,
     );
+
     const cleanedCount = staleIds.length;
+
     if (cleanedCount > 0) {
       logger.info(`cleaned up ${cleanedCount} stale running request logs`);
     }

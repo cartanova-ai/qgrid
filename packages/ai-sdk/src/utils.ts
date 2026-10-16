@@ -12,6 +12,7 @@ export async function createRun(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input: body }),
   });
+
   return res.json() as Promise<{ requestLogId: number }>;
 }
 
@@ -24,6 +25,7 @@ export async function appendStep(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input: body }),
   });
+
   return res.json() as Promise<{ stepId: number }>;
 }
 
@@ -33,6 +35,7 @@ export async function finishRun(serverUrl: string, body: FinishRunInput): Promis
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input: body }),
   });
+
   return res.json() as Promise<{ ok: boolean }>;
 }
 
@@ -46,6 +49,7 @@ export function toQgridTool(tool: LanguageModelV3FunctionTool): {
     inputSchema?: unknown;
     parameters?: unknown;
   };
+
   return {
     name: tool.name,
     description: tool.description,
@@ -65,6 +69,7 @@ export function extractToolResultsFromHistory(
 ): ToolCallWithResult[] {
   const calls = new Map<string, { toolName: string; args: string }>();
   const results = new Map<string, string>();
+
   for (const msg of messages) {
     if (msg.role === "assistant") {
       for (const part of msg.content) {
@@ -80,12 +85,14 @@ export function extractToolResultsFromHistory(
         if ("type" in part && part.type === "tool-result") {
           const id = "toolCallId" in part ? part.toolCallId : "";
           const output = part.output;
+
           const text =
             "value" in output
               ? typeof output.value === "string"
                 ? output.value
                 : JSON.stringify(output.value)
               : JSON.stringify(output);
+
           results.set(id, text);
         }
       }
@@ -93,11 +100,13 @@ export function extractToolResultsFromHistory(
   }
 
   const out: ToolCallWithResult[] = [];
+
   for (const [callId, call] of calls) {
     if (results.has(callId)) {
       out.push({ callId, toolName: call.toolName, args: call.args, result: results.get(callId)! });
     }
   }
+
   return out;
 }
 
@@ -116,11 +125,15 @@ export async function* parseSSE(
   const cancel = () => {
     void reader.cancel(signal?.reason).catch(() => undefined);
   };
+
   signal?.addEventListener("abort", cancel, { once: true });
+
   try {
     signal?.throwIfAborted();
+
     for (;;) {
       const { done, value } = await reader.read();
+
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 
@@ -132,15 +145,18 @@ export async function* parseSSE(
           eventType = line.slice(7).trim();
         } else if (line.startsWith("data: ")) {
           const raw = line.slice(6);
+
           try {
             yield { type: eventType || "message", data: JSON.parse(raw) };
           } catch {}
+
           eventType = "";
         }
       }
     }
   } finally {
     signal?.removeEventListener("abort", cancel);
+
     try {
       await reader.cancel();
     } catch {
@@ -177,9 +193,11 @@ export function extractPromptAndHistory(
   if (nonSystem.length === 0) {
     return { prompt: "", system, history: [], droppedImageCount };
   }
+
   if (nonSystem.length === 1 && nonSystem[0].role === "user") {
     const extracted = extractPromptTextParts(nonSystem[0].content);
     droppedImageCount += extracted.droppedImageCount;
+
     return {
       prompt: extracted.text,
       system,
@@ -190,16 +208,20 @@ export function extractPromptAndHistory(
 
   const last = nonSystem[nonSystem.length - 1];
   let prompt = "";
+
   if (last.role === "user") {
     const extracted = extractPromptTextParts(last.content);
     prompt = extracted.text;
     droppedImageCount += extracted.droppedImageCount;
   }
+
   const historyEnd = last.role === "user" ? nonSystem.length - 1 : nonSystem.length;
 
   const history: unknown[] = [];
+
   for (let i = 0; i < historyEnd; i++) {
     const msg = nonSystem[i];
+
     if (msg.role === "user") {
       const extracted = extractPromptTextParts(msg.content);
       droppedImageCount += extracted.droppedImageCount;
@@ -232,12 +254,14 @@ export function extractPromptAndHistory(
       for (const part of msg.content) {
         if ("toolName" in part && part.type === "tool-result") {
           const output = part.output;
+
           const text =
             "value" in output
               ? typeof output.value === "string"
                 ? output.value
                 : JSON.stringify(output.value)
               : JSON.stringify(output);
+
           history.push({
             type: "function_call_output",
             call_id: ("toolCallId" in part ? part.toolCallId : "") ?? "",
@@ -259,8 +283,10 @@ function extractPromptTextParts(content: LanguageModelV3Message["content"]): {
   if (typeof content === "string") {
     return { text: content, parts: [{ type: "input_text", text: content }], droppedImageCount: 0 };
   }
+
   const parts: Array<{ type: "input_text"; text: string }> = [];
   let droppedImageCount = 0;
+
   for (const part of content) {
     if ("text" in part && typeof part.text === "string") {
       parts.push({ type: "input_text", text: part.text });
@@ -268,12 +294,14 @@ function extractPromptTextParts(content: LanguageModelV3Message["content"]): {
       droppedImageCount++;
     }
   }
+
   return { text: parts.map((part) => part.text).join("\n"), parts, droppedImageCount };
 }
 
 function isImagePart(part: unknown): boolean {
   if (!part || typeof part !== "object") return false;
   const record = part as Record<string, unknown>;
+
   return (
     record.type === "image" ||
     (record.type === "file" &&
@@ -286,9 +314,11 @@ export function bytesToBase64(bytes: Uint8Array): string {
   if (typeof Buffer !== "undefined") return Buffer.from(bytes).toString("base64");
   const chunkSize = 0x8000;
   let binary = "";
+
   for (let i = 0; i < bytes.length; i += chunkSize) {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
   }
+
   return btoa(binary);
 }
 
@@ -297,15 +327,18 @@ const MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL = "9M";
 
 export function assertImageInputFitsJsonTransport(imageUrls: string[]): void {
   let totalDataUrlChars = 0;
+
   for (const url of imageUrls) {
     if (!url.toLowerCase().startsWith("data:")) continue;
     totalDataUrlChars += url.length;
+
     if (url.length > MAX_IMAGE_INPUT_DATA_URL_CHARS) {
       throw new Error(
         `qgrid: image input is too large for JSON transport (${url.length} chars). Compress or resize it before passing it to generateImage, for example as WebP/JPEG under ${MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL} total base64 data-url chars.`,
       );
     }
   }
+
   if (totalDataUrlChars > MAX_IMAGE_INPUT_DATA_URL_CHARS) {
     throw new Error(
       `qgrid: image inputs are too large for JSON transport (${totalDataUrlChars} total chars). Compress or resize them before passing them to generateImage, for example as WebP/JPEG under ${MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL} total base64 data-url chars.`,
@@ -318,6 +351,7 @@ export function assertImageInputFitsJsonTransport(imageUrls: string[]): void {
 export function safeStringify(value: unknown): string {
   try {
     const json = JSON.stringify(value);
+
     return json === undefined ? String(value) : json;
   } catch {
     return String(value);
@@ -333,6 +367,7 @@ export function getRecord(value: unknown): Record<string, unknown> | undefined {
 export function extractTextContent(content: unknown): string {
   if (typeof content === "string") return content;
   const parts: string[] = [];
+
   if (Array.isArray(content)) {
     for (const part of content) {
       if (part && typeof part === "object" && "type" in part) {
@@ -342,12 +377,15 @@ export function extractTextContent(content: unknown): string {
       }
     }
   }
+
   return parts.join("\n");
 }
 
 export function getErrorMessage(value: unknown): string {
   if (value instanceof Error) return String(value);
+
   if (value === undefined || value === null) return "unknown error";
+
   if (
     typeof value === "string" ||
     typeof value === "number" ||
@@ -356,6 +394,7 @@ export function getErrorMessage(value: unknown): string {
   ) {
     return String(value);
   }
+
   try {
     return JSON.stringify(value) ?? "unknown error";
   } catch {
@@ -366,21 +405,27 @@ export function getErrorMessage(value: unknown): string {
 export function extractUserPrompt(prompt: unknown, messages: unknown): string {
   if (typeof prompt === "string") return prompt;
   const messageList = Array.isArray(messages) ? messages : Array.isArray(prompt) ? prompt : [];
+
   for (let i = messageList.length - 1; i >= 0; i--) {
     const msg = getRecord(messageList[i]);
+
     if (msg?.role === "user") {
       return extractTextContent(msg.content);
     }
   }
+
   return "";
 }
 
 export function extractSystemPrompt(system: unknown): string | undefined {
   if (typeof system === "string") return system;
+
   if (system && typeof system === "object" && "content" in system) {
     const content = (system as { content: unknown }).content;
+
     if (typeof content === "string") return content;
   }
+
   return undefined;
 }
 
@@ -389,10 +434,13 @@ export function serializeHistory(messages: unknown): string | undefined {
   const lastRecord = getRecord(messages[messages.length - 1]);
   const sliced = lastRecord?.role === "user" ? messages.slice(0, -1) : messages;
   const history: Array<Record<string, unknown>> = [];
+
   for (const msg of sliced) {
     const record = getRecord(msg);
+
     if (record?.role !== "user" && record?.role !== "assistant") continue;
     const text = extractTextContent(record.content);
+
     if (text.length === 0) continue;
     history.push({
       type: "message",
@@ -400,7 +448,9 @@ export function serializeHistory(messages: unknown): string | undefined {
       content: [{ type: record.role === "user" ? "input_text" : "output_text", text }],
     });
   }
+
   if (history.length === 0) return undefined;
+
   return safeStringify(history);
 }
 
@@ -408,7 +458,9 @@ export function filterHistoryForStorage(history: unknown[]): string | undefined 
   const filtered = history.filter((item) => {
     if (!item || typeof item !== "object") return false;
     const record = item as Record<string, unknown>;
+
     return record.type === "message" && (record.role === "user" || record.role === "assistant");
   });
+
   return filtered.length > 0 ? JSON.stringify(filtered) : undefined;
 }

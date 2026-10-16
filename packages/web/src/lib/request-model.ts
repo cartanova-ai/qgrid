@@ -16,13 +16,16 @@ export function requestModelDisplay({
   const loggedImageModel = /^(?:assumed|estimated):(gpt-image-[^:]+):/.exec(
     imageCostMethod ?? "",
   )?.[1];
+
   const imageModel = servedModel?.startsWith("openai/gpt-image-")
     ? servedModel
     : loggedImageModel
       ? `openai/${loggedImageModel}`
       : null;
+
   if (imageModel) {
     const sourceModel = requestedModel ?? servedModel;
+
     return {
       label:
         sourceModel && sourceModel !== imageModel ? `${sourceModel} → ${imageModel}` : imageModel,

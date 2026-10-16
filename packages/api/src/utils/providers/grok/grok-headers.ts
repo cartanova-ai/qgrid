@@ -27,6 +27,7 @@ export function grokPlatform(
   // grok-build ships only these targets; anything else is reported as the nearest shipped one
   // so the User-Agent never carries a value the real binary cannot emit.
   const os = platform === "darwin" ? "macos" : platform === "win32" ? "windows" : "linux";
+
   return { os, arch: arch === "arm64" ? "aarch64" : "x86_64" };
 }
 
@@ -46,24 +47,28 @@ const TRACEPARENT_PATTERN = /^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-01$
 export function generateTraceparent(): string {
   for (;;) {
     const traceparent = `00-${randomBytes(16).toString("hex")}-${randomBytes(8).toString("hex")}-01`;
+
     if (TRACEPARENT_PATTERN.test(traceparent)) return traceparent;
   }
 }
 
 function bearerValue(bearer: string): string {
   if (!bearer || /\s/.test(bearer)) throw new TypeError("Grok bearer token must be non-empty");
+
   return `Bearer ${bearer}`;
 }
 
 function nonNegativeInteger(name: string, value: number): string {
   if (!Number.isSafeInteger(value) || value < 0)
     throw new TypeError(`${name} must be a non-negative integer`);
+
   return String(value);
 }
 
 function requiredValue(name: string, value: string): string {
   if (!value || /[\r\n]/.test(value))
     throw new TypeError(`${name} must be a non-empty header value`);
+
   return value;
 }
 
@@ -87,8 +92,10 @@ export interface GrokChatHeaderOptions {
 /** Headers for `POST {proxy}/responses`, in the order of the 1.0.60 golden capture. */
 export function buildGrokChatHeaders(options: GrokChatHeaderOptions): Record<string, string> {
   const traceparent = options.traceparent ?? generateTraceparent();
+
   if (!TRACEPARENT_PATTERN.test(traceparent))
     throw new TypeError("traceparent must be a W3C 00-<32hex>-<16hex>-01 value");
+
   const headers: Record<string, string> = {
     "content-type": "application/json",
     "user-agent": grokShellUserAgent(options.platform),
@@ -113,6 +120,7 @@ export function buildGrokChatHeaders(options: GrokChatHeaderOptions): Record<str
     "x-grok-agent-id": requiredValue("agentId", options.agentId),
     "x-grok-turn-idx": nonNegativeInteger("turnIdx", options.turnIdx),
   };
+
   // Not present in the capture; grok-build 1.0.45 client.rs:560-605 sends it with the turn
   // index group on retries only.
   if (options.transientRetry !== undefined)
@@ -123,7 +131,9 @@ export function buildGrokChatHeaders(options: GrokChatHeaderOptions): Record<str
   headers.accept = "text/event-stream";
   headers["x-grok-doom-loop-check"] = String(GROK_DOOM_LOOP_CHECK);
   headers["x-grok-exact-repetition-check"] = String(GROK_EXACT_REPETITION_CHECK);
+
   if (options.zstd) headers["content-encoding"] = "zstd";
+
   return headers;
 }
 

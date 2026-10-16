@@ -121,13 +121,16 @@ export class AnthropicDispatcher implements ProviderDispatcher {
   async selectToken(model: string, preferredTokenId?: number): Promise<PooledToken | null> {
     const preferred =
       preferredTokenId === undefined ? undefined : this.tokenPool.get(preferredTokenId);
+
     if (preferredTokenId !== undefined && !preferred) {
       throw new Error(`Preferred anthropic token ${preferredTokenId} is not available`);
     }
 
     const rows = preferred ? [preferred] : [...this.tokenPool.values()];
+
     if (rows.length === 0) return null;
     const { eligible, overThresholdTokens } = await this.filterEligibleTokens(rows, model);
+
     if (eligible.length === 0) {
       logger.warn("quota_threshold gate: all_exceeded", {
         provider: "anthropic",
@@ -136,9 +139,11 @@ export class AnthropicDispatcher implements ProviderDispatcher {
         overThresholdTokens,
         reason: "all_exceeded",
       });
+
       const details = overThresholdTokens
         .map((token) => `${token.tokenName} (threshold ${token.threshold}%)`)
         .join(", ");
+
       throw new QuotaThresholdExceededError(
         details
           ? `All anthropic tokens exceeded quota threshold: ${details}`
@@ -149,7 +154,9 @@ export class AnthropicDispatcher implements ProviderDispatcher {
     if (preferred) return preferred;
 
     const selectedId = this.weightedSelector.select(new Set(eligible.map((token) => token.id)));
+
     if (selectedId === null) return null;
+
     return this.tokenPool.get(selectedId) ?? null;
   }
 
@@ -161,12 +168,15 @@ export class AnthropicDispatcher implements ProviderDispatcher {
     overThresholdTokens: Array<{ tokenName: string; threshold: number }>;
   }> {
     const thresholded = rows.filter((token) => this.hasQuotaThreshold(token));
+
     if (thresholded.length === 0) return { eligible: rows, overThresholdTokens: [] };
 
     const eligibleIds = new Set(
       rows.filter((token) => !this.hasQuotaThreshold(token)).map((token) => token.id),
     );
+
     const overThresholdTokens: Array<{ tokenName: string; threshold: number }> = [];
+
     const checks = await Promise.allSettled(
       thresholded.map(async (token) => ({
         token,
@@ -176,11 +186,14 @@ export class AnthropicDispatcher implements ProviderDispatcher {
 
     checks.forEach((check, index) => {
       const token = check.status === "rejected" ? thresholded[index] : check.value.token;
+
       if (!token) return;
+
       const result =
         check.status === "fulfilled"
           ? check.value.result
           : { kind: "lookup_failed" as const, reason: String(check.reason) };
+
       if (result.kind === "lookup_failed") {
         logger.warn("quota_threshold gate: lookup_fail_open", {
           tokenId: token.id,
@@ -191,6 +204,7 @@ export class AnthropicDispatcher implements ProviderDispatcher {
           lookupReason: result.reason,
         });
         eligibleIds.add(token.id);
+
         return;
       }
 
@@ -205,6 +219,7 @@ export class AnthropicDispatcher implements ProviderDispatcher {
           reason: "over_threshold",
         });
         overThresholdTokens.push({ tokenName: token.name, threshold: token.quotaThreshold });
+
         return;
       }
 
@@ -238,10 +253,12 @@ export class AnthropicDispatcher implements ProviderDispatcher {
     opts?: { includePartialMessages?: boolean },
   ): Promise<GenerateResult> {
     this.inFlight++;
+
     try {
       if (req.imageGeneration) {
         throw new Error("image generation is not supported on the Anthropic route");
       }
+
       assertSupportedOneMillionSuffix(req.model);
       const model = canonicalAnthropicModel(req.model);
       const thinking = resolveAnthropicThinking(model, req.thinking, req.effort);
@@ -249,11 +266,13 @@ export class AnthropicDispatcher implements ProviderDispatcher {
       const jsonSchema = serializeAndValidateDispatchSchema(req.outputSchema, "anthropic");
 
       const token = await this.selectToken(model, req.preferredTokenId);
+
       if (!token) throw new Error("No anthropic tokens available");
 
       // 만료 직전에 갱신하되 실패하면 기존 토큰으로 진행한다.
       let accessToken = token.credentials.accessToken;
       const expiresAt = getExpiresAt(token.credentials);
+
       if (
         expiresAt &&
         expiresAt - Date.now() < REFRESH_SAFETY_MS &&
@@ -274,6 +293,7 @@ export class AnthropicDispatcher implements ProviderDispatcher {
       }
 
       logger.info(`→ ${token.name} (model: ${model})`);
+
       const session = await runClaudeSession(
         {
           tokenId: token.id,
@@ -294,20 +314,25 @@ export class AnthropicDispatcher implements ProviderDispatcher {
 
       if (session.quotaExhausted) {
         invalidateAnthropicQuotaUsage(token.credentials.accessToken);
+
         if (accessToken !== token.credentials.accessToken) {
           invalidateAnthropicQuotaUsage(accessToken);
         }
+
         throw new Error(`quota exhausted (${token.name})`);
       }
+
       if (session.isError) {
         // 종료 사유를 먼저 표시하고 응답 본문은 진단에 필요한 만큼만 남긴다.
         const reason =
           session.subtype ?? session.terminalReason ?? (session.isError ? "is_error" : "unknown");
+
         const body = session.text
           ? session.text.length > 500
             ? `${session.text.slice(0, 500)}…(${session.text.length} chars)`
             : session.text
           : `empty text, outputTokens=${session.usage.outputTokens}`;
+
         const refusal = session.refusal ? ` refusal=${JSON.stringify(session.refusal)}` : "";
         throw new Error(`claude error (${token.name}) [${reason}]: ${body}${refusal}`);
       }

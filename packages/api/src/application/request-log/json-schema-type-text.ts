@@ -19,17 +19,25 @@ function renderKey(key: string): string {
 
 function renderPrimitive(type: unknown): string {
   if (type === "string") return "string";
+
   if (type === "number" || type === "integer") return "number";
+
   if (type === "boolean") return "boolean";
+
   if (type === "null") return "null";
+
   return "unknown";
 }
 
 function renderZodPrimitive(type: unknown): string {
   if (type === "string") return "z.string()";
+
   if (type === "number" || type === "integer") return "z.number()";
+
   if (type === "boolean") return "z.boolean()";
+
   if (type === "null") return "z.null()";
+
   return "z.unknown()";
 }
 
@@ -38,6 +46,7 @@ function renderZodEnum(values: unknown[], enumValueLimit?: number): string {
 
   const visibleValues =
     enumValueLimit === undefined ? values : values.slice(0, Math.max(0, enumValueLimit));
+
   const omittedCount = values.length - visibleValues.length;
   const suffix = omittedCount > 0 ? ` /* +${omittedCount} */` : "";
 
@@ -46,31 +55,39 @@ function renderZodEnum(values: unknown[], enumValueLimit?: number): string {
   }
 
   const literals = visibleValues.map((value) => `z.literal(${JSON.stringify(value)})`);
+
   if (literals.length === 1 && omittedCount === 0) return literals[0] ?? "z.never()";
+
   return `z.union([${literals.join(", ")}${suffix}])`;
 }
 
 function renderZodNode(node: unknown, depth: number, enumValueLimit?: number): string {
   if (node === true) return "z.unknown()";
+
   if (!node || typeof node !== "object" || Array.isArray(node)) return "z.unknown()";
   const schema = node as SchemaNode;
 
   if (Array.isArray(schema.enum)) return renderZodEnum(schema.enum, enumValueLimit);
+
   if (schema.const !== undefined) return `z.literal(${JSON.stringify(schema.const)})`;
 
   const variants = (schema.anyOf ?? schema.oneOf) as unknown;
+
   if (Array.isArray(variants) && variants.length > 0) {
     const rendered = [
       ...new Set(variants.map((variant) => renderZodNode(variant, depth, enumValueLimit))),
     ];
+
     return rendered.length === 1
       ? (rendered[0] ?? "z.unknown()")
       : `z.union([${rendered.join(", ")}])`;
   }
 
   const type = schema.type;
+
   if (Array.isArray(type)) {
     const rendered = [...new Set(type.map(renderZodPrimitive))];
+
     return rendered.length === 1
       ? (rendered[0] ?? "z.unknown()")
       : `z.union([${rendered.join(", ")}])`;
@@ -80,17 +97,21 @@ function renderZodNode(node: unknown, depth: number, enumValueLimit?: number): s
     const properties = (schema.properties ?? {}) as Record<string, unknown>;
     const required = new Set(Array.isArray(schema.required) ? (schema.required as string[]) : []);
     const keys = Object.keys(properties);
+
     if (keys.length === 0) return "z.object({})";
+
     const orderedKeys = [
       ...keys.filter((key) => required.has(key)),
       ...keys.filter((key) => !required.has(key)),
     ];
 
     const inner = "  ".repeat(depth + 1);
+
     const lines = orderedKeys.map((key) => {
       const propertySchema = properties[key];
       const rendered = renderZodNode(propertySchema, depth + 1, enumValueLimit);
       const optional = required.has(key) ? rendered : `${rendered}.optional()`;
+
       const defaultValue =
         propertySchema &&
         typeof propertySchema === "object" &&
@@ -98,9 +119,12 @@ function renderZodNode(node: unknown, depth: number, enumValueLimit?: number): s
         Object.hasOwn(propertySchema, "default")
           ? JSON.stringify((propertySchema as SchemaNode).default)
           : undefined;
+
       const defaultComment = defaultValue === undefined ? "" : ` // default=${defaultValue}`;
+
       return `${inner}${renderKey(key)}: ${optional},${defaultComment}`;
     });
+
     return `z.object({\n${lines.join("\n")}\n${"  ".repeat(depth)}})`;
   }
 
@@ -113,20 +137,24 @@ function renderZodNode(node: unknown, depth: number, enumValueLimit?: number): s
 
 function renderNode(node: unknown, depth: number): string {
   if (node === true) return "unknown";
+
   if (!node || typeof node !== "object" || Array.isArray(node)) return "unknown";
   const schema = node as SchemaNode;
 
   if (Array.isArray(schema.enum)) {
     return schema.enum.map((value) => JSON.stringify(value)).join(" | ");
   }
+
   if (schema.const !== undefined) return JSON.stringify(schema.const);
 
   const variants = (schema.anyOf ?? schema.oneOf) as unknown;
+
   if (Array.isArray(variants) && variants.length > 0) {
     return [...new Set(variants.map((variant) => renderNode(variant, depth)))].join(" | ");
   }
 
   const type = schema.type;
+
   if (Array.isArray(type)) {
     return [...new Set(type.map(renderPrimitive))].join(" | ");
   }
@@ -135,19 +163,24 @@ function renderNode(node: unknown, depth: number): string {
     const properties = (schema.properties ?? {}) as Record<string, unknown>;
     const required = new Set(Array.isArray(schema.required) ? (schema.required as string[]) : []);
     const keys = Object.keys(properties);
+
     if (keys.length === 0) return "Record<string, unknown>";
     const inner = "  ".repeat(depth + 1);
+
     const lines = keys.map(
       (key) =>
         `${inner}${renderKey(key)}${required.has(key) ? "" : "?"}: ${renderNode(properties[key], depth + 1)}`,
     );
+
     return `{\n${lines.join("\n")}\n${"  ".repeat(depth)}}`;
   }
 
   if (type === "array") {
     const item = renderNode(schema.items, depth);
+
     // 유니온 요소는 괄호가 없으면 `A | B[]` 로 잘못 읽힌다.
     if (item.includes(" | ")) return `(${item})[]`;
+
     return `${item}[]`;
   }
 

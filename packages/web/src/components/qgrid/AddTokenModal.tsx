@@ -42,6 +42,7 @@ export function AddTokenProviderOptions({
 }) {
   const secondary =
     "w-full py-2.5 text-sm font-medium rounded-md border border-sand-300 text-sand-700 hover:bg-sand-100 disabled:opacity-50 transition-colors duration-150 flex items-center justify-center gap-2";
+
   return (
     <div className="space-y-2">
       <button

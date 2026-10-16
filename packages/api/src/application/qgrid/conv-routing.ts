@@ -27,8 +27,10 @@ function toolResultsToText(toolResults: QgridToolResultInput[]): string {
   const lines = toolResults.map((tr) => {
     const name = tr.toolName ? ` (${tr.toolName})` : "";
     const errMark = tr.isError ? " [error]" : "";
+
     return `Tool result for call ${tr.toolCallId}${name}${errMark}: ${tr.output}`;
   });
+
   return `${lines.join("\n")}\n\nNow continue answering the user's request using these results.`;
 }
 
@@ -59,12 +61,14 @@ export function decideConvRouting(
   options: ConvRoutingOptions = {},
 ): ConvDecision {
   const directProvider = options.directProvider;
+
   const sysHash = systemHash(
     input.system,
     directProvider === undefined
       ? undefined
       : (options.modelNamespace ?? input.model ?? directProvider),
   );
+
   const history: Array<JsonValue> | undefined = input.history
     ? (JSON.parse(input.history) as Array<JsonValue>)
     : undefined;
@@ -79,6 +83,7 @@ export function decideConvRouting(
     coord.systemHash === sysHash &&
     input.cacheAffinityKey !== undefined &&
     coord.threadId === input.cacheAffinityKey;
+
   // affinity 를 요청하지 않은 one-shot 요청에 임의 키를 붙이면 transport 가 그 소켓을
   // affinity 소켓으로 오인해 재사용되지 않을 연결을 계속 붙들어 둔다 → 키를 비워 둔다.
   const cacheKey = directProvider === undefined ? undefined : input.cacheAffinityKey;
@@ -98,19 +103,25 @@ function buildDeltaInput(input: QueryInput): Array<UserInput> {
   if (input.toolResults && input.toolResults.length > 0) {
     return [{ type: "text", text: toolResultsToText(input.toolResults), text_elements: [] }];
   }
+
   if (input.input && input.input.length > 0) {
     const hasText = input.input.some((part) => part.type === "text");
+
     const parts: Array<UserInput> = input.input.map((part) => {
       if (part.type === "text") {
         return { type: "text", text: part.text, text_elements: part.text_elements };
       }
+
       return { type: "image", url: part.url };
     });
+
     if (!hasText && input.prompt.length > 0) {
       return [{ type: "text", text: input.prompt, text_elements: [] }, ...parts];
     }
+
     return parts;
   }
+
   return [{ type: "text", text: input.prompt, text_elements: [] }];
 }
 
@@ -128,6 +139,7 @@ export function issueConvContext(
       systemHash: decision.systemHash,
     };
   }
+
   return {
     workerId: threadCoord.workerId,
     threadId: threadCoord.threadId,

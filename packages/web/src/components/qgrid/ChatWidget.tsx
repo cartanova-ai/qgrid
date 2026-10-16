@@ -79,6 +79,7 @@ const MODEL_PRESET_GROUPS: { label: string; models: string[] }[] = [
     ],
   },
 ];
+
 const EFFORT_PRESETS = ["low", "medium", "high"];
 
 interface DoneMeta {
@@ -103,6 +104,7 @@ type ChatMessage =
 
 function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
+
   return String(e);
 }
 
@@ -116,12 +118,16 @@ function humanizeError(
   tokens: ChatTokenOption[] | undefined,
 ): string {
   const missing = tokens !== undefined && providerTokenMissing(tokens, provider);
+
   const noTokenError =
     /NO_OPENAI_WORKERS|no ready openai workers|no anthropic tokens available/i.test(message);
+
   if (noTokenError || (missing && /기동 중입니다/.test(message))) {
     const label = provider ? (PROVIDER_LABELS[provider] ?? provider) : "";
+
     return `사용 가능한 ${label} 토큰이 없습니다. Tokens 페이지에서 토큰을 추가해주세요.`;
   }
+
   return message;
 }
 
@@ -142,6 +148,7 @@ async function fileToDataUrl(file: File): Promise<string> {
   canvas.height = Math.max(1, Math.round(bitmap.height * scale));
   canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   bitmap.close();
+
   return canvas.toDataURL("image/jpeg", 0.85);
 }
 
@@ -178,16 +185,19 @@ export function ChatWidget() {
     { orderBy: "ord-asc" },
     { enabled: open },
   );
+
   const tokenOptions = useMemo(
     () => chatTokenOptions(tokensData?.rows ?? [], provider),
     [provider, tokensData?.rows],
   );
+
   const tokenListLoaded = tokensData?.rows !== undefined;
   // SSE handler 는 연결 시점 클로저에 갇히므로 최신 토큰 목록은 ref 로 읽는다.
   const tokensRef = useRef<ChatTokenOption[] | undefined>(undefined);
   useEffect(() => {
     tokensRef.current = tokensData?.rows;
   }, [tokensData?.rows]);
+
   const selectedProviderMissing =
     tokensData?.rows !== undefined && providerTokenMissing(tokensData.rows, provider);
 
@@ -204,9 +214,11 @@ export function ChatWidget() {
   const addAttachments = async (files: FileList | null) => {
     if (!files) return;
     const slots = MAX_ATTACHMENTS - attachments.length;
+
     const converted = await Promise.all(
       [...files].slice(0, slots).map((f) => fileToDataUrl(f).catch(() => null)),
     );
+
     setAttachments((prev) =>
       [...prev, ...converted.filter((url): url is string => url !== null)].slice(
         0,
@@ -218,7 +230,9 @@ export function ChatWidget() {
   const patchLastAssistant = (patch: (m: ChatMessage & { role: "assistant" }) => ChatMessage) => {
     setMessages((prev) => {
       const last = prev[prev.length - 1];
+
       if (!last || last.role !== "assistant") return prev;
+
       return [...prev.slice(0, -1), patch(last)];
     });
   };
@@ -229,6 +243,7 @@ export function ChatWidget() {
       lastConfigRef.current?.model.split("/")[0],
       tokensRef.current,
     );
+
     patchLastAssistant((m) =>
       m.status === "streaming" ? { ...m, status: "error", error: friendly } : m,
     );
@@ -298,6 +313,7 @@ export function ChatWidget() {
 
   const send = async () => {
     const prompt = draft.trim();
+
     if (!prompt || busy) return;
 
     // threadCoord 에는 systemHash 가 박혀 있고 모델 변경은 서버가 검증하지 않으므로,
@@ -305,9 +321,11 @@ export function ChatWidget() {
     const sys = system.trim();
     const selectedTokenName = resolvedTokenName(tokenName, tokenOptions, tokenListLoaded);
     const currentConfig = { model, system: sys, tokenName: selectedTokenName };
+
     if (lastConfigRef.current && chatConfigChanged(lastConfigRef.current, currentConfig)) {
       threadCoordRef.current = undefined;
     }
+
     lastConfigRef.current = currentConfig;
 
     const images = supportsImages ? attachments : [];
@@ -338,6 +356,7 @@ export function ChatWidget() {
         ...(history.length > 0 ? { history: JSON.stringify(history) } : {}),
         ...(threadCoordRef.current ? { runContext: { threadCoord: threadCoordRef.current } } : {}),
       };
+
       if (supportsImages) {
         const result: QueryOutput = await serviceFetch({
           method: "POST",
@@ -345,6 +364,7 @@ export function ChatWidget() {
           data: { args: { ...args, imageGeneration: "auto" } satisfies QueryInput },
           signal: controller.signal,
         });
+
         if (requestAbortRef.current !== controller || controller.signal.aborted) return;
         threadCoordRef.current = result.runContext?.threadCoord;
         patchLastAssistant((m) => ({
@@ -363,9 +383,12 @@ export function ChatWidget() {
         }));
         setBusy(false);
         requestAbortRef.current = null;
+
         return;
       }
+
       const { streamId: id } = await QgridService.prepareStream(args);
+
       if (requestAbortRef.current !== controller || controller.signal.aborted) return;
       setStreamId(id);
     } catch (e) {
@@ -389,8 +412,10 @@ export function ChatWidget() {
   const closePanel = () => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       setOpen(false);
+
       return;
     }
+
     setPanelClosing(true);
   };
 

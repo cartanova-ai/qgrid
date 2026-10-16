@@ -18,6 +18,7 @@ export const MonitLogEntry = z.object({
   category: z.array(z.string()),
   text: z.string(),
 });
+
 export type MonitLogEntry = z.infer<typeof MonitLogEntry>;
 
 // 폴링에 편승하는 라이브 카운트 — 깊은 토큰 진단은 audit 대시보드(별도)의 몫이고,
@@ -45,6 +46,7 @@ export const MonitVitals = z.object({
   // 지금 실행 중인 Claude Code 프로세스 수
   anthropicInFlight: z.number(),
 });
+
 export type MonitVitals = z.infer<typeof MonitVitals>;
 
 export const MonitLogChunk = z.object({
@@ -55,6 +57,7 @@ export const MonitLogChunk = z.object({
   dropped: z.number(),
   vitals: MonitVitals,
 });
+
 export type MonitLogChunk = z.infer<typeof MonitLogChunk>;
 
 // 프로세스 단위 정적 환경 정보 — 어느 서버/DB 를 보고 있는지 한눈에 확인하는 용도.
@@ -68,6 +71,7 @@ export const MonitServerInfo = z.object({
     transport: z.string(),
   }),
 });
+
 export type MonitServerInfo = z.infer<typeof MonitServerInfo>;
 
 // 최근 1시간 provider 별 요청 통계 — request_logs 를 집계한다. vitals 와 달리 DB 를
@@ -79,10 +83,12 @@ export const MonitProviderStats = z.object({
   inputTokens: z.number(),
   cacheReadTokens: z.number(),
 });
+
 export type MonitProviderStats = z.infer<typeof MonitProviderStats>;
 
 export const MonitStats = z.object({
   windowMinutes: z.number(),
   providers: z.array(MonitProviderStats),
 });
+
 export type MonitStats = z.infer<typeof MonitStats>;

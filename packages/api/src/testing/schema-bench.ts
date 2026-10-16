@@ -46,7 +46,9 @@ export interface BenchClassifyOptions {
 export function validateAgainstSchema(node: unknown, schema: unknown): string[] {
   if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return [];
   const validate = compileSchema(schema as Record<string, unknown>);
+
   if (validate(node)) return [];
+
   return (validate.errors ?? []).map(
     (e) =>
       `${e.instancePath || "$"}: ${e.message ?? e.keyword}${e.keyword === "enum" ? ` (${JSON.stringify((e.params as { allowedValues?: unknown[] }).allowedValues?.slice(0, 8))})` : ""}`,
@@ -58,6 +60,7 @@ let ajvInstance: Ajv2020 | undefined;
 
 function compileSchema(schema: Record<string, unknown>): ValidateFunction {
   const cached = compiledSchemas.get(schema);
+
   if (cached) return cached;
   // strict:false — 소비자 스키마의 비표준 어노테이션(description 변형 등)을 컴파일
   // 에러로 만들지 않는다. 검증 시맨틱은 표준 그대로다.
@@ -65,13 +68,16 @@ function compileSchema(schema: Record<string, unknown>): ValidateFunction {
   // $id 가 있는 스키마를 두 번 compile 하면 Ajv 가 중복 등록으로 던진다 — WeakMap 캐시가
   // 같은 객체의 재컴파일을 막고, 다른 객체로 온 같은 $id 는 인스턴스를 새로 만들어 회피한다.
   let validate: ValidateFunction;
+
   try {
     validate = ajvInstance.compile(schema);
   } catch {
     ajvInstance = new Ajv2020({ strict: false, allErrors: true });
     validate = ajvInstance.compile(schema);
   }
+
   compiledSchemas.set(schema, validate);
+
   return validate;
 }
 
@@ -101,6 +107,7 @@ export function classifyBenchText(
 
   if (options.plainText) {
     const reason = options.validate?.(text, text);
+
     return {
       syntax: "ok",
       contract: reason === undefined ? "ok" : "fail",
@@ -111,6 +118,7 @@ export function classifyBenchText(
 
   let parsed: unknown;
   let syntax: "ok" | "fail" = "ok";
+
   try {
     parsed = JSON.parse(text);
   } catch {
@@ -140,11 +148,13 @@ export function classifyBenchText(
     }
 
     contract = "ok";
+
     if (record === undefined) {
       contract = "fail";
       contractDetail = "top-level is not an object";
     } else if (options.schema !== undefined) {
       const violations = validateAgainstSchema(parsed, options.schema);
+
       if (violations.length > 0) {
         contract = "fail";
         contractDetail = `${violations.length} schema violations: ${violations.slice(0, 5).join("; ")}`;
@@ -153,13 +163,16 @@ export function classifyBenchText(
       const missing = (options.requiredTopLevelKeys ?? []).filter(
         (key) => !Object.hasOwn(record, key),
       );
+
       if (missing.length > 0) {
         contract = "fail";
         contractDetail = `missing required keys: ${missing.join(", ")}`;
       }
     }
+
     if (contract === "ok" && options.validate) {
       const reason = options.validate(parsed, text);
+
       if (reason !== undefined) {
         contract = "fail";
         contractDetail = reason;
@@ -201,9 +214,11 @@ export function fingerprintFixture(content: {
 }): string {
   const text = `${content.prompt} ${content.jsonSchema ?? ""} ${JSON.stringify(content.tools ?? null)}`;
   let hash = 5381;
+
   for (let i = 0; i < text.length; i += 1) {
     hash = ((hash << 5) + hash + text.charCodeAt(i)) >>> 0;
   }
+
   return hash.toString(16).padStart(8, "0");
 }
 
@@ -216,8 +231,10 @@ export function checkpointKey(
 /** JSONL checkpoint 파일 파싱. 깨진 줄(중단 시 부분 기록)은 건너뛴다. */
 export function parseCheckpointLines(jsonl: string): Map<string, BenchRecord> {
   const map = new Map<string, BenchRecord>();
+
   for (const line of jsonl.split("\n")) {
     if (!line.trim()) continue;
+
     try {
       const record = JSON.parse(line) as BenchRecord;
       map.set(checkpointKey(record), record);
@@ -225,6 +242,7 @@ export function parseCheckpointLines(jsonl: string): Map<string, BenchRecord> {
       // 부분 기록된 마지막 줄 — resume 시 해당 조합만 재발사된다
     }
   }
+
   return map;
 }
 
@@ -252,9 +270,11 @@ export interface BenchAggregateRow {
 
 export function aggregateBench(records: BenchRecord[]): BenchAggregateRow[] {
   const groups = new Map<string, BenchRecord[]>();
+
   for (const record of records) {
     const key = `${record.model}|${record.fixture}|${record.mode}`;
     const bucket = groups.get(key);
+
     if (bucket) bucket.push(record);
     else groups.set(key, [record]);
   }
@@ -265,6 +285,7 @@ export function aggregateBench(records: BenchRecord[]): BenchAggregateRow[] {
       const transportErrors = bucket.filter((r) => r.transportError !== undefined).length;
       const syntaxFails = bucket.filter((r) => r.classification?.syntax === "fail").length;
       const contractFails = bucket.filter((r) => r.classification?.contract === "fail").length;
+
       // pass = 모든 축이 깨끗한 응답 — 형태 위반(래퍼/펜스/프로즈)과 스트림 델타≠done 도
       // 실패다. syntax/contract 만 보면 "통과인데 펜스가 남은" 응답이 성공으로 집계된다
       // (2차 검토 #7).
@@ -278,6 +299,7 @@ export function aggregateBench(records: BenchRecord[]): BenchAggregateRow[] {
           !r.classification.topLevel.prose &&
           r.deltaDoneMismatch !== true,
       ).length;
+
       const count = (pick: (v: TopLevelViolations) => boolean) =>
         bucket.filter((r) => r.classification !== undefined && pick(r.classification.topLevel))
           .length;
@@ -328,6 +350,7 @@ export function formatAggregateTable(rows: BenchAggregateRow[]): string {
     "outTok",
     "cost$",
   ];
+
   const lines = rows.map((r) =>
     [
       r.model,
@@ -348,5 +371,6 @@ export function formatAggregateTable(rows: BenchAggregateRow[]): string {
       r.totalCostUsd.toFixed(4),
     ].join("\t"),
   );
+
   return [header.join("\t"), ...lines].join("\n");
 }

@@ -42,7 +42,9 @@ export type ProviderFunctionToolDefinition = {
   parameters: JsonValue;
   strict?: boolean;
 };
+
 export type ProviderBuiltinToolDefinition = { type: "web_search" } | { type: "x_search" };
+
 export type ToolDefinition = ProviderFunctionToolDefinition | ProviderBuiltinToolDefinition;
 
 // A native function call returned by the provider (not the qgrid tool-emulation envelope).

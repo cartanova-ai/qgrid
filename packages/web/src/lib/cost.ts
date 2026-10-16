@@ -20,6 +20,7 @@ export function formatRequestCost(row: {
   image_cost_usd: number | null;
 }): string {
   if (row.cost_usd === null && row.image_cost_usd === null) return "—";
+
   return formatUsd(microUsdToUsd((row.cost_usd ?? 0) + (row.image_cost_usd ?? 0)));
 }
 
@@ -31,5 +32,6 @@ export function formatRequestCost(row: {
  */
 export function cacheHitRate(input: { input_tokens: number; cache_read_tokens: number }): string {
   if (input.input_tokens <= 0) return "—";
+
   return `${Math.round((input.cache_read_tokens / input.input_tokens) * 100)}%`;
 }

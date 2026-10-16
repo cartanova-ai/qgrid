@@ -25,6 +25,7 @@ function isGrokEffort(value: string): value is GrokReasoningEffort {
 /** Strips the qgrid route prefix; an empty id means the default model. */
 export function canonicalGrokModelId(modelId: string | undefined): string {
   const stripped = (modelId ?? "").startsWith("grok/") ? (modelId ?? "").slice(5) : (modelId ?? "");
+
   return stripped || GROK_DEFAULT_MODEL;
 }
 
@@ -34,11 +35,13 @@ function fromProxyModel(model: GrokProxyModel): GrokResolvedModel | undefined {
   const efforts: readonly GrokReasoningEffort[] = listed.length ? listed : GROK_REASONING_EFFORTS;
   const flagged = model.reasoning_efforts?.find((entry) => entry.default)?.value;
   const candidates = [flagged, model.reasoning_effort ?? undefined, "high"];
+
   const defaultEffort =
     candidates.find(
       (value): value is GrokReasoningEffort =>
         value !== undefined && isGrokEffort(value) && efforts.includes(value),
     ) ?? efforts[0]!;
+
   return { id: model.id, contextWindow: model.context_window, efforts, defaultEffort, known: true };
 }
 
@@ -81,6 +84,7 @@ export class GrokModelCatalog {
     this.pendingRefresh ??= this.refreshNow(credentials, options).finally(() => {
       this.pendingRefresh = undefined;
     });
+
     return this.pendingRefresh;
   }
 
@@ -98,22 +102,29 @@ export class GrokModelCatalog {
         ...(options.signal ? { signal: options.signal } : {}),
         ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}),
       });
+
       const parsed = GrokModelsResponse.safeParse(json);
+
       if (!parsed.success) {
         return {
           kind: "lookup_failed",
           reason: `unexpected /models shape: ${parsed.error.message}`,
         };
       }
+
       const merged: string[] = [];
+
       for (const entry of parsed.data.data) {
         const model = fromProxyModel(entry);
+
         if (!model) continue;
         this.models.set(model.id, model);
         merged.push(model.id);
       }
+
       this.etag = headers.modelsEtag;
       this.refreshedAt = options.now ?? Date.now();
+
       return { kind: "ok", models: merged, etag: this.etag };
     } catch (error) {
       return {
@@ -125,6 +136,7 @@ export class GrokModelCatalog {
 
   resolve(modelId: string | undefined): GrokResolvedModel {
     const id = canonicalGrokModelId(modelId);
+
     return (
       this.models.get(id) ?? {
         id,
@@ -139,6 +151,7 @@ export class GrokModelCatalog {
   /** The effort if the model accepts it, otherwise undefined. Unlisted ids accept every effort. */
   validateEffort(modelId: string | undefined, effort: string): GrokReasoningEffort | undefined {
     const model = this.resolve(modelId);
+
     return isGrokEffort(effort) && model.efforts.includes(effort) ? effort : undefined;
   }
 }

@@ -145,22 +145,27 @@ function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(abortReason(signal));
+
       return;
     }
+
     const onAbort = () => {
       clearTimeout(timer);
       reject(abortReason(signal!));
     };
+
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
       resolve();
     }, ms);
+
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
 function isTransientPollError(error: unknown): boolean {
   if (error instanceof QgridMediaHttpError) return error.status === 429 || error.status >= 500;
+
   // Network failures from postMediaEndpoint; aborts and schema errors are not transient.
   return error instanceof Error && /transport failed/.test(error.message);
 }
@@ -176,10 +181,12 @@ function pollDeadline(
 ): { signal: AbortSignal; expired: (error: unknown) => boolean; dispose: () => void } {
   const controller = new AbortController();
   const onCallerAbort = () => controller.abort(abortReason(caller!));
+
   if (caller?.aborted) onCallerAbort();
   else caller?.addEventListener("abort", onCallerAbort, { once: true });
   const deadlineReason = new DOMException("The video poll budget elapsed.", "TimeoutError");
   const timer = setTimeout(() => controller.abort(deadlineReason), Math.max(0, ms));
+
   return {
     signal: controller.signal,
     // Only the deadline's own reason counts; a caller abort keeps the caller's error.
@@ -200,12 +207,15 @@ async function pollVideo(
 ): Promise<QgridVideoResult> {
   const interval = options.pollIntervalMs ?? QGRID_VIDEO_DEFAULT_POLL_INTERVAL_MS;
   const timeout = options.pollTimeoutMs ?? QGRID_VIDEO_DEFAULT_POLL_TIMEOUT_MS;
+
   // The server's owner check compares this projectName with the one sent to videoStart.
   const body = serializeMediaBody(
     { jobHandle, ...(config.projectName ? { projectName: config.projectName } : {}) },
     LABEL,
   );
+
   const deadline = pollDeadline(options.abortSignal, timeout);
+
   try {
     return await pollUntilDone(jobHandle, modelId, config, options, extraMetadata, {
       body,
@@ -236,6 +246,7 @@ async function pollUntilDone(
   for (;;) {
     signal.throwIfAborted();
     let polled;
+
     try {
       polled = await postMediaEndpoint({
         serverUrl: config.serverUrl,
@@ -253,12 +264,16 @@ async function pollUntilDone(
 
     if (polled) {
       const status = polled.data;
+
       if (status.status === "failed") throw new QgridVideoGenerationError(jobHandle, status.error);
+
       if (status.status === "done") {
         if (!status.url) {
           throw new QgridVideoGenerationError(jobHandle, "completed without a video URL");
         }
+
         const requestLogId = status.requestLogId ?? extraMetadata.requestLogId;
+
         return {
           // D4: the api.x.ai URL exactly as @ai-sdk/xai returns it; qgrid never proxies the bytes.
           videos: [{ type: "url", url: status.url, mediaType: "video/mp4" }],
@@ -282,6 +297,7 @@ async function pollUntilDone(
     }
 
     const remaining = deadline - Date.now();
+
     if (remaining <= 0) throw new QgridVideoTimeoutError(jobHandle, timeout);
     await sleep(Math.min(interval, remaining), signal);
   }
@@ -298,6 +314,7 @@ export function resumeQgridVideo(
   options: QgridVideoPollOptions & QgridMediaProviderConfig & { modelId?: QgridVideoModel } = {},
 ): Promise<QgridVideoResult> {
   const config = resolveMediaConfig(options);
+
   return pollVideo(jobHandle, options.modelId ?? "grok/video", config, options, {});
 }
 
@@ -318,23 +335,29 @@ export function createQgridVideo(
       if (options.n !== 1) {
         throw new Error(`${LABEL}: one video per call; omit maxVideosPerCall so AI SDK can batch`);
       }
+
       if (!options.prompt?.trim()) {
         throw new Error(`${LABEL}: a non-empty text prompt is required`);
       }
+
       if (
         options.duration !== undefined &&
         (!Number.isInteger(options.duration) || options.duration < 1 || options.duration > 15)
       ) {
         throw new Error(`${LABEL}: duration must be an integer from 1 to 15 seconds`);
       }
+
       const qgridOptions = parseGrokQgridOptions(options.providerOptions.qgrid, LABEL);
+
       const xai = parseXaiMediaOptions(
         options.providerOptions.xai,
         xaiVideoOptionsSchema,
         XAI_VIDEO_HONORED,
         LABEL,
       );
+
       const xaiOptions = xai.options;
+
       if (
         xaiOptions?.mode === "edit-video" ||
         xaiOptions?.mode === "extend-video" ||
@@ -344,12 +367,15 @@ export function createQgridVideo(
           `${LABEL}: video editing and extension (mode edit-video / extend-video, videoUrl) are not supported by qgrid`,
         );
       }
+
       const referenceImages = (xaiOptions?.referenceImageUrls ?? []).map((url) =>
         toImageRefUrl(url, LABEL),
       );
+
       if (referenceImages.length > MAX_REFERENCE_IMAGES) {
         throw new Error(`${LABEL}: at most ${MAX_REFERENCE_IMAGES} reference images are supported`);
       }
+
       if (xaiOptions?.mode === "reference-to-video" && referenceImages.length === 0) {
         throw new Error(
           `${LABEL}: reference-to-video needs providerOptions.xai.referenceImageUrls`,
@@ -357,12 +383,16 @@ export function createQgridVideo(
       }
 
       const warnings: SharedV3Warning[] = [...xai.warnings];
+
       if (options.fps !== undefined) warnings.push({ type: "unsupported", feature: "fps" });
+
       if (options.seed !== undefined) warnings.push({ type: "unsupported", feature: "seed" });
 
       let resolution = xaiOptions?.resolution ?? undefined;
+
       if (resolution === undefined && options.resolution !== undefined) {
         resolution = RESOLUTION_MAP[options.resolution];
+
         if (resolution === undefined) {
           warnings.push({
             type: "unsupported",
@@ -373,6 +403,7 @@ export function createQgridVideo(
       }
 
       let lastFrame: string | undefined;
+
       if (xaiOptions?.lastFrame !== undefined) {
         if (modelId === LAST_FRAME_MODEL) {
           lastFrame = toImageRefUrl(xaiOptions.lastFrame, LABEL);
@@ -384,6 +415,7 @@ export function createQgridVideo(
           });
         }
       }
+
       const image = options.image === undefined ? undefined : toImageRef(options.image, LABEL);
       // Every inline image shares the one request body; the server caps them in total.
       assertInlineMediaFits([image, lastFrame, ...referenceImages], LABEL);
@@ -404,6 +436,7 @@ export function createQgridVideo(
         },
         LABEL,
       );
+
       const started = await postMediaEndpoint({
         serverUrl: resolved.serverUrl,
         endpoint: "videoStart",
@@ -426,6 +459,7 @@ export function createQgridVideo(
         },
         started.data.requestLogId === undefined ? {} : { requestLogId: started.data.requestLogId },
       );
+
       return { ...result, warnings };
     },
   };

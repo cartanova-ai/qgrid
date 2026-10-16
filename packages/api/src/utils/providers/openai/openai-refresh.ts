@@ -37,14 +37,18 @@ interface RefreshResult {
 export async function handleChatgptAuthTokensRefresh(tokenId: number): Promise<RefreshResult> {
   logger.info(`refresh requested for token ${tokenId} (pid=${process.pid})`);
   const existing = inflightRefresh.get(tokenId);
+
   if (existing) {
     logger.info(`refresh dedup for token ${tokenId}`);
+
     return existing;
   }
 
   const lastAt = lastRefreshTime.get(tokenId) ?? 0;
+
   if (Date.now() - lastAt < REFRESH_MIN_INTERVAL_MS) {
     logger.info(`refresh too soon for token ${tokenId}, reading current creds from DB`);
+
     return readCurrentCreds(tokenId);
   }
 
@@ -61,8 +65,10 @@ export async function handleChatgptAuthTokensRefresh(tokenId: number): Promise<R
 
 async function readCurrentCreds(tokenId: number): Promise<RefreshResult> {
   const token = await TokenModel.findOne("A", { id: tokenId });
+
   if (!token || token.provider !== "openai") throw new Error(`token ${tokenId} not found`);
   const creds = token.credentials as OpenAICredentials;
+
   return {
     accessToken: creds.accessToken,
     chatgptAccountId: creds.accountId,
@@ -72,11 +78,13 @@ async function readCurrentCreds(tokenId: number): Promise<RefreshResult> {
 
 async function doRefresh(tokenId: number): Promise<RefreshResult> {
   const token = await TokenModel.findOne("A", { id: tokenId });
+
   if (!token || token.provider !== "openai") {
     throw new Error(`token ${tokenId} not found or not openai`);
   }
 
   const creds = token.credentials as OpenAICredentials;
+
   if (!creds.refreshToken) {
     throw new Error(`token ${tokenId} has no refreshToken`);
   }
@@ -103,20 +111,25 @@ async function doRefresh(tokenId: number): Promise<RefreshResult> {
     //   refresh_token_invalidated → 서버측 revoke
     // 위 3개는 모두 영구 실패. 재등록 외 복구 불가.
     let errorCode: string | undefined;
+
     try {
       const error = (JSON.parse(body) as { error?: unknown }).error;
+
       const code =
         typeof error === "string"
           ? error
           : error && typeof error === "object" && "code" in error
             ? error.code
             : undefined;
+
       if (typeof code === "string" && /^[a-z_]{1,80}$/.test(code)) errorCode = code;
     } catch {}
+
     logger.error(
       `OpenAI refresh FAILED token=${token.name}(id=${tokenId}) status=${resp.status} ` +
         `code=${errorCode ?? "unknown"}`,
     );
+
     // 영구 실패는 errorCode 로만 판정한다 — status 를 함께 요구하면 provider 가
     // 상태코드를 바꿀 때 판정이 조용히 멎는다.
     if (errorCode && PERMANENT_FAILURE_CODES.has(errorCode)) {
@@ -125,6 +138,7 @@ async function doRefresh(tokenId: number): Promise<RefreshResult> {
         `openai:${errorCode}`,
       );
     }
+
     throw new Error(`OpenAI refresh failed: ${resp.status} ${errorCode ?? "unknown"}`);
   }
 
@@ -136,10 +150,12 @@ async function doRefresh(tokenId: number): Promise<RefreshResult> {
   };
 
   const newRefreshToken = data.refresh_token ?? creds.refreshToken;
+
   const rotated =
     data.refresh_token !== null &&
     data.refresh_token !== undefined &&
     data.refresh_token !== creds.refreshToken;
+
   if (rotated) {
     logger.info(`refresh_token rotated for token ${token.name}`);
   }

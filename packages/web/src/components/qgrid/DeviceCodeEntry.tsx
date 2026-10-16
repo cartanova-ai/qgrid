@@ -6,6 +6,7 @@ function formatRemaining(ms: number): string {
   const totalSec = Math.max(Math.ceil(ms / 1000), 0);
   const m = Math.floor(totalSec / 60);
   const s = totalSec % 60;
+
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
@@ -14,8 +15,10 @@ function Countdown({ expiresAt }: { expiresAt: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
+
     return () => clearInterval(id);
   }, []);
+
   return <span className="tabular-nums">{formatRemaining(expiresAt - now)}</span>;
 }
 

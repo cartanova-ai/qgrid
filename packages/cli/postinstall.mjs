@@ -28,6 +28,7 @@ function findProjectRoot(startDir) {
     }
 
     const parent = path.dirname(current);
+
     if (parent === current) return packageJsonRoot ?? path.resolve(startDir);
     current = parent;
   }
@@ -35,15 +36,19 @@ function findProjectRoot(startDir) {
 
 function defaultProjectRoot() {
   if (process.env.QGRID_SKILLS_CWD) return findProjectRoot(process.env.QGRID_SKILLS_CWD);
+
   if (process.env.INIT_CWD) return findProjectRoot(process.env.INIT_CWD);
 
   const cwd = process.cwd();
+
   if (cwd.includes(`${path.sep}node_modules${path.sep}`)) return null;
+
   return findProjectRoot(cwd);
 }
 
 function isInside(parentDir, childDir) {
   const relative = path.relative(path.resolve(parentDir), path.resolve(childDir));
+
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
@@ -55,9 +60,11 @@ function defaultTargets() {
     const codexHome = process.env.CODEX_HOME
       ? path.resolve(process.env.CODEX_HOME)
       : path.join(os.homedir(), ".codex");
+
     const claudeHome = process.env.CLAUDE_HOME
       ? path.resolve(process.env.CLAUDE_HOME)
       : path.join(os.homedir(), ".claude");
+
     return [
       { label: "Codex", target: path.join(codexHome, "skills", "qgrid"), useSymlink: false },
       { label: "Claude Code", target: path.join(claudeHome, "skills", "qgrid"), useSymlink: false },
@@ -65,10 +72,13 @@ function defaultTargets() {
   }
 
   const projectRoot = defaultProjectRoot();
+
   if (!projectRoot) return null;
   const isInstalledPackage = packageDir.split(path.sep).includes("node_modules");
+
   if (!isInstalledPackage && isInside(projectRoot, sourceSkillsDir)) {
     console.log("qgrid skill sync skipped: running inside qgrid repository.");
+
     return [];
   }
 
@@ -89,6 +99,7 @@ function defaultTargets() {
 async function syncSkill({ label, target, useSymlink }) {
   if (!existsSync(path.join(sourceSkillsDir, "SKILL.md"))) {
     console.log("qgrid skill source not found in qgrid CLI package.");
+
     return;
   }
 
@@ -99,6 +110,7 @@ async function syncSkill({ label, target, useSymlink }) {
     try {
       await symlink(sourceSkillsDir, target, "dir");
       console.log(`qgrid skill linked for ${label}: ${target}`);
+
       return;
     } catch (error) {
       console.log(

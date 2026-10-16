@@ -84,6 +84,7 @@ function reproduce(firstRejectedInput: unknown): {
   subtype: string | undefined;
 } {
   const state: ClaudeStreamJsonState = {};
+
   const lines = [
     assistantStructuredOutput(firstRejectedInput),
     structuredOutputResult(true, "Output does not match required schema"),
@@ -99,6 +100,7 @@ function reproduce(firstRejectedInput: unknown): {
   ];
 
   let result: ReturnType<typeof handleStreamJsonLine> = null;
+
   for (const line of lines) {
     result =
       handleStreamJsonLine(line, () => undefined, {
@@ -108,6 +110,7 @@ function reproduce(firstRejectedInput: unknown): {
   }
 
   assert.ok(result, "Claude result event must produce a qgrid result");
+
   return {
     returned: JSON.parse(result.text) as unknown,
     isError: result.isError,
@@ -128,6 +131,7 @@ function replayRawCapture(path: string): void {
       message?: { content?: Array<{ type?: string; name?: string; input?: unknown }> };
       structured_output?: unknown;
     };
+
     if (event.type === "assistant") {
       for (const part of event.message?.content ?? []) {
         if (part.type === "tool_use" && part.name === "StructuredOutput") {
@@ -135,6 +139,7 @@ function replayRawCapture(path: string): void {
         }
       }
     }
+
     if (event.type === "result") finalStructuredOutput = event.structured_output;
 
     result =
@@ -170,13 +175,16 @@ function replayRawCapture(path: string): void {
 }
 
 const capturePath = process.argv[2];
+
 if (capturePath) {
   replayRawCapture(capturePath);
   process.exit(0);
 }
 
 console.log("Claude result: second StructuredOutput accepted, subtype=success");
+
 console.log("Expected qgrid output:", JSON.stringify(finalOutput));
+
 console.log("");
 
 for (const failedAttempt of failedAttempts) {

@@ -245,6 +245,7 @@ export function usdFromGrokTicks(ticks: number): number {
 function grokTokenCosts(input: number, cached: number, output: number): ModelCosts {
   // ticks per token -> USD per 1M tokens.
   const perMillion = (ticks: number) => (ticks * 1_000_000) / GROK_TICKS_PER_USD;
+
   return {
     inputTokens: perMillion(input),
     cachedInputTokens: perMillion(cached),
@@ -282,8 +283,10 @@ export function grokImageCost(
 ): GrokMediaCost | undefined {
   if (reportedTicks !== undefined) return grokReportedCost(reportedTicks);
   const perImage = GROK_IMAGE_PRICE_TICKS[model.split("/").pop() ?? model];
+
   if (perImage === undefined) return undefined;
   const ticks = perImage * imageCount;
+
   return { costUsd: usdFromGrokTicks(ticks), costSource: "pricing_table", ticks };
 }
 
@@ -301,6 +304,7 @@ export function openaiModelMaxEffort(model: string): OpenAIEffort {
 
 export function getModelCosts(model: string): ModelCosts {
   const normalizedModel = (model.split("/").pop() ?? model).replace(/\[1m\]$/i, "");
+
   return (
     OPENAI_COSTS[normalizedModel] ??
     ANTHROPIC_COSTS[normalizedModel] ??
@@ -338,17 +342,22 @@ export function calculateCostUsd(
   const cachedInput = usage.cachedInputTokens ?? 0;
   const cacheCreationInput5m = Math.max(usage.cacheCreationInputTokens5m ?? 0, 0);
   const cacheCreationInput1h = Math.max(usage.cacheCreationInputTokens1h ?? 0, 0);
+
   const cacheCreationInput = Math.max(
     usage.cacheCreationInputTokens ?? 0,
     cacheCreationInput5m + cacheCreationInput1h,
   );
+
   const classifiedCacheCreationInput5m = Math.min(cacheCreationInput5m, cacheCreationInput);
+
   const classifiedCacheCreationInput1h = Math.min(
     cacheCreationInput1h,
     cacheCreationInput - classifiedCacheCreationInput5m,
   );
+
   const unclassifiedCacheCreationInput =
     cacheCreationInput - classifiedCacheCreationInput5m - classifiedCacheCreationInput1h;
+
   const nonCachedInput = Math.max(usage.inputTokens - cachedInput - cacheCreationInput, 0);
 
   // long-context 할증: 전체 입력(input_tokens, cache 포함)이 threshold 초과 시 요청 전체에 배율 적용
@@ -356,15 +365,19 @@ export function calculateCostUsd(
   const isLongContext = lc !== undefined && usage.inputTokens > lc.threshold;
   const inputRate = costs.inputTokens * (isLongContext ? lc.inputMultiplier : 1);
   const cachedRate = costs.cachedInputTokens * (isLongContext ? lc.cachedInputMultiplier : 1);
+
   const cacheCreationFallbackRate =
     (costs.cacheCreationInputTokens ?? costs.inputTokens) *
     (isLongContext ? lc.inputMultiplier : 1);
+
   const cacheCreation5mRate =
     (costs.cacheCreationInputTokens5m ?? costs.cacheCreationInputTokens ?? costs.inputTokens) *
     (isLongContext ? lc.inputMultiplier : 1);
+
   const cacheCreation1hRate =
     (costs.cacheCreationInputTokens1h ?? costs.cacheCreationInputTokens ?? costs.inputTokens) *
     (isLongContext ? lc.inputMultiplier : 1);
+
   const outputRate = costs.outputTokens * (isLongContext ? lc.outputMultiplier : 1);
 
   const standardCost =
@@ -374,7 +387,9 @@ export function calculateCostUsd(
     (unclassifiedCacheCreationInput / 1_000_000) * cacheCreationFallbackRate +
     (classifiedCacheCreationInput5m / 1_000_000) * cacheCreation5mRate +
     (classifiedCacheCreationInput1h / 1_000_000) * cacheCreation1hRate;
+
   const normalizedModel = model.split("/").pop() ?? model;
+
   return (
     standardCost * (serviceTier === "fast" ? (OPENAI_FAST_MULTIPLIERS[normalizedModel] ?? 1) : 1)
   );

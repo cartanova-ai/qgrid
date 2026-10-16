@@ -34,6 +34,7 @@ export interface OpenAIExchangedCredentials {
 
 export function generateOpenAIPKCE(): OpenAIPKCE {
   const codeVerifier = crypto.randomBytes(64).toString("base64url");
+
   return {
     codeVerifier,
     codeChallenge: crypto.createHash("sha256").update(codeVerifier).digest("base64url"),
@@ -59,27 +60,32 @@ export function buildOpenAIAuthUrl(
     state,
     originator: OPENAI_ORIGINATOR,
   }).toString();
+
   return url.toString();
 }
 
 export function parseOpenAITokenClaims(jwt: string): OpenAITokenClaims {
   const parts = jwt.split(".");
   const payloadPart = parts[1];
+
   if (parts.length !== 3 || parts.some((part) => !part) || !payloadPart) {
     throw new Error("invalid OpenAI JWT format");
   }
 
   let payload: unknown;
+
   try {
     payload = JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8"));
   } catch {
     throw new Error("invalid OpenAI JWT payload");
   }
+
   if (!payload || typeof payload !== "object") throw new Error("invalid OpenAI JWT payload");
 
   const claims = payload as Record<string, unknown>;
   const auth = claims[OPENAI_AUTH_CLAIM];
   const nested = auth && typeof auth === "object" ? (auth as Record<string, unknown>) : {};
+
   return {
     expiresAt: typeof claims.exp === "number" ? claims.exp * 1000 : undefined,
     accountId:
@@ -104,6 +110,7 @@ export async function exchangeOpenAICode(
       code_verifier: codeVerifier,
     }),
   });
+
   if (!response.ok) {
     // Token endpoint bodies can echo credentials or provider diagnostics; never expose them.
     await response.body?.cancel().catch(() => undefined);
@@ -116,6 +123,7 @@ export async function exchangeOpenAICode(
     refresh_token?: string;
     expires_in?: number;
   };
+
   if (!tokens.id_token || !tokens.access_token || !tokens.refresh_token) {
     throw new Error("OpenAI token exchange returned incomplete credentials");
   }
@@ -123,6 +131,7 @@ export async function exchangeOpenAICode(
   const idClaims = parseOpenAITokenClaims(tokens.id_token);
   const accessClaims = parseOpenAITokenClaims(tokens.access_token);
   const accountId = idClaims.accountId ?? accessClaims.accountId;
+
   if (!accountId) throw new Error("OpenAI token did not include a ChatGPT account id");
 
   return {

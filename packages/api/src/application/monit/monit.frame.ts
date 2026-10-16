@@ -36,6 +36,7 @@ class MonitFrameClass extends BaseFrameClass {
     const host = process.env.HOST ?? "localhost";
     const port = process.env.PORT ?? "44900";
     const conn = activeDbConnection();
+
     return {
       serverUrl: `http://${host}:${port}`,
       dbHost: conn.host ?? "localhost",
@@ -49,12 +50,14 @@ class MonitFrameClass extends BaseFrameClass {
   async monitStats(): Promise<MonitStats> {
     const windowMinutes = 60;
     const since = new Date(Date.now() - windowMinutes * 60_000);
+
     return { windowMinutes, providers: await RequestLogModel.providerStatsSince(since) };
   }
 }
 
 function currentVitals(): MonitVitals {
   const anthropic = QgridDispatcher.anthropicDispatcher;
+
   return {
     openaiInFlight: QgridDispatcher.openaiDispatcher?.inFlight ?? 0,
     openaiQuotaByToken: QgridDispatcher.openaiDispatcher?.getQuotaSnapshot() ?? [],
@@ -71,12 +74,14 @@ function currentVitals(): MonitVitals {
 function activeDbConnection(): { host?: string; database?: string } {
   try {
     const connection = DB.getDBConfig("w").connection;
+
     if (typeof connection === "object" && connection !== null) {
       return connection as { host?: string; database?: string };
     }
   } catch {
     // DB config 미초기화 — env 폴백으로 진행
   }
+
   return { host: process.env.SONAMU_DB_HOST, database: process.env.SONAMU_DB_NAME };
 }
 

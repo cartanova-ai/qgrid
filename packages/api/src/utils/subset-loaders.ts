@@ -4,6 +4,7 @@ export function getSubsetLoaders(subsets: string[], subsetQueries: Record<string
   return subsets.reduce(
     (acc, subset) => {
       acc[subset] = subsetQueries[subset]?.loaders ?? [];
+
       return acc;
     },
     {} as Record<string, SubsetQuery["loaders"]>,

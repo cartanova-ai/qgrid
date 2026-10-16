@@ -19,10 +19,12 @@ export const HistoryItems = z.array(
     output: z.string().optional(),
   }),
 );
+
 export type HistoryItems = z.infer<typeof HistoryItems>;
 
 // 요청에 장착된 tool 정의 목록 — 저장 형태는 QgridTool 계약을 그대로 따른다.
 export const ToolDefinitions = z.array(QgridTool);
+
 export type ToolDefinitions = z.infer<typeof ToolDefinitions>;
 
 // request-log detail 화면이 소비하는 tool 계약 projection. API 반환 타입은 Sonamu
@@ -34,6 +36,7 @@ export const ToolView = z.object({
   inputZod: z.string(),
   fullInputZod: z.string().optional(),
 });
+
 export type ToolView = z.infer<typeof ToolView>;
 
 // RequestLog - ListParams
@@ -42,6 +45,7 @@ export const RequestLogListParams = RequestLogBaseListParams.extend({
   project_name_is_null: z.boolean().optional(),
   project_name_is_not_null: z.boolean().optional(),
 });
+
 export type RequestLogListParams = z.infer<typeof RequestLogListParams>;
 
 // RequestLog - SaveParams
@@ -52,4 +56,5 @@ export const RequestLogSaveParams = RequestLogBaseSchema.partial({
   status: true,
   error_message: true,
 });
+
 export type RequestLogSaveParams = z.infer<typeof RequestLogSaveParams>;

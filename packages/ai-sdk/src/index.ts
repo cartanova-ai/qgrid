@@ -98,17 +98,24 @@ function sniffImageMediaType(bytes: Uint8Array): string | undefined {
 // URL. Returns undefined for non-image parts and for images the backend cannot fetch.
 function grokImageUrl(part: LanguageModelV3FilePart): string | undefined {
   const mediaType = part.mediaType.toLowerCase();
+
   if (!mediaType.startsWith("image/")) return undefined;
   const { data } = part;
+
   if (data instanceof URL) {
     return data.protocol === "https:" || data.protocol === "data:" ? data.href : undefined;
   }
+
   if (typeof data === "string") {
     if (/^(https:|data:)/i.test(data)) return data;
+
     if (mediaType === "image/*") return undefined;
+
     return `data:${mediaType};base64,${data}`;
   }
+
   const resolved = mediaType === "image/*" ? sniffImageMediaType(data) : mediaType;
+
   return resolved ? `data:${resolved};base64,${bytesToBase64(data)}` : undefined;
 }
 
@@ -117,14 +124,17 @@ type GrokUserPart = { type: "text"; text: string } | { type: "image"; url: strin
 function grokUserParts(content: LanguageModelV3Message["content"]): GrokUserPart[] {
   if (typeof content === "string") return [{ type: "text", text: content }];
   const parts: GrokUserPart[] = [];
+
   for (const part of content) {
     if (part.type === "text") {
       parts.push({ type: "text", text: part.text });
     } else if (part.type === "file") {
       const url = grokImageUrl(part);
+
       if (url !== undefined) parts.push({ type: "image", url });
     }
   }
+
   return parts;
 }
 
@@ -139,8 +149,10 @@ type PreparedPrompt = {
 // carry Responses-style `input_image` parts in history. Other providers drop images with a warning.
 function preparePrompt(modelId: string, messages: LanguageModelV3Message[]): PreparedPrompt {
   const extracted = extractPromptAndHistory(messages);
+
   if (!isGrokModel(modelId)) {
     warnDroppedImages(extracted.droppedImageCount);
+
     return extracted;
   }
 
@@ -151,6 +163,7 @@ function preparePrompt(modelId: string, messages: LanguageModelV3Message[]): Pre
 
   let keptImageCount = 0;
   const imageUrls: string[] = [];
+
   const countImages = (parts: GrokUserPart[]) => {
     for (const part of parts) {
       if (part.type === "image") {
@@ -161,13 +174,17 @@ function preparePrompt(modelId: string, messages: LanguageModelV3Message[]): Pre
   };
 
   let historyUserIndex = 0;
+
   const history = extracted.history.map((item) => {
     if (!isUserHistoryMessage(item)) return item;
     const source = historyUserMessages[historyUserIndex++];
+
     if (!source) return item;
     const parts = grokUserParts(source.content);
+
     if (!parts.some((part) => part.type === "image")) return item;
     countImages(parts);
+
     return {
       type: "message",
       role: "user",
@@ -180,8 +197,10 @@ function preparePrompt(modelId: string, messages: LanguageModelV3Message[]): Pre
   });
 
   let input: QgridInputPart[] | undefined;
+
   if (promptMessage) {
     const parts = grokUserParts(promptMessage.content);
+
     if (parts.some((part) => part.type === "image")) {
       countImages(parts);
       input = parts.map((part) =>
@@ -194,6 +213,7 @@ function preparePrompt(modelId: string, messages: LanguageModelV3Message[]): Pre
 
   assertImageInputFitsJsonTransport(imageUrls);
   warnDroppedImages(extracted.droppedImageCount - keptImageCount);
+
   return {
     prompt: extracted.prompt,
     system: extracted.system,
@@ -224,6 +244,7 @@ function resolveXaiOptions(
   options: LanguageModelV3CallOptions,
 ): ResolvedXaiOptions {
   const raw = options.providerOptions?.xai;
+
   if (!isGrokModel(modelId)) {
     return raw === undefined
       ? { warnings: [] }
@@ -237,8 +258,10 @@ function resolveXaiOptions(
           ],
         };
   }
+
   const mapped = mapXaiProviderOptions(raw, modelId);
   const { effort, promptCacheKey } = mapped.request;
+
   return {
     warnings: mapped.warnings.map((warning) => ({
       type: "unsupported",
@@ -263,36 +286,47 @@ function serializeObjectResponseFormat(
   responseFormat: LanguageModelV3CallOptions["responseFormat"],
 ): string | undefined {
   const rawSchema = responseFormat?.type === "json" ? responseFormat.schema : undefined;
+
   if (rawSchema === undefined) return undefined;
 
   const schemaType = (rawSchema as { type?: string }).type;
+
   if (schemaType !== "object") {
     console.warn(
       `[qgrid] responseFormat.schema top-level type is "${schemaType ?? "unknown"}". ${TOP_LEVEL_SCHEMA_WARNING}`,
     );
+
     return undefined;
   }
+
   return JSON.stringify(rawSchema);
 }
 
 function getThreadCoord(sessionKey: string): QgridThreadCoord | undefined {
   const entry = threadCoordStore.get(sessionKey);
+
   if (!entry) return undefined;
+
   if (entry.expiresAt <= Date.now()) {
     threadCoordStore.delete(sessionKey);
+
     return undefined;
   }
+
   return entry.coord;
 }
 
 function setThreadCoord(sessionKey: string, coord: QgridThreadCoord): void {
   const now = Date.now();
+
   for (const [key, entry] of threadCoordStore) {
     if (entry.expiresAt <= now) threadCoordStore.delete(key);
   }
+
   // Keep the most recently issued coordinates; the full history still works after eviction.
   threadCoordStore.delete(sessionKey);
   threadCoordStore.set(sessionKey, { coord, expiresAt: now + THREAD_COORD_TTL_MS });
+
   if (threadCoordStore.size > MAX_THREAD_COORDS) {
     threadCoordStore.delete(threadCoordStore.keys().next().value!);
   }
@@ -313,6 +347,7 @@ function providerWarnings(
               "fallbackModels is deprecated and ignored; qgrid does not implement model fallback routing.",
           },
         ];
+
   return [...warnings, ...xaiWarnings];
 }
 
@@ -323,11 +358,13 @@ async function deriveCacheAffinityKey(
   if (!sessionKey || modelId.startsWith("anthropic/")) return undefined;
   const bytes = new TextEncoder().encode(`${CACHE_AFFINITY_NAMESPACE}\0${modelId}\0${sessionKey}`);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
+
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function qgridProviderMetadata(data: QueryOutput): SharedV3ProviderMetadata {
   const xai = xaiResponseMetadataSchema.safeParse(data);
+
   const xaiMetadata = xai.success
     ? {
         ...(xai.data.providerMetadata.xai.costInUsdTicks === undefined
@@ -338,6 +375,7 @@ function qgridProviderMetadata(data: QueryOutput): SharedV3ProviderMetadata {
           : { contextWindow: xai.data.providerMetadata.xai.contextWindow }),
       }
     : undefined;
+
   return {
     ...(xaiMetadata && Object.keys(xaiMetadata).length > 0 ? { xai: xaiMetadata } : {}),
     qgrid: {
@@ -360,14 +398,17 @@ function getQgridProviderOptions(
 ): QgridResolvedProviderOptions {
   const qgridOptions =
     (options.providerOptions?.qgrid as QgridResolvedProviderOptions | undefined) ?? {};
+
   if ("imageGeneration" in qgridOptions || "imageGenerationOptions" in qgridOptions) {
     throw new Error(
       "qgrid: imageGeneration and imageGenerationOptions were removed from language-model options. Use generateImage with qgrid.image().",
     );
   }
+
   if (qgridOptions.tokenName !== undefined && qgridOptions.tokenName.trim() === "") {
     throw new Error("qgrid: tokenName must not be empty");
   }
+
   return qgridOptions;
 }
 
@@ -375,6 +416,7 @@ function toAiSdkUsage(usage: QueryOutput["usage"]) {
   const cacheRead = usage.cache_read_input_tokens;
   const cacheWrite = usage.cache_creation_input_tokens;
   const reasoning = usage.reasoning_tokens ?? 0;
+
   return {
     inputTokens: {
       total: usage.input_tokens,
@@ -406,16 +448,20 @@ export function qgrid(
   config?: QgridProviderConfig | QgridGrokProviderConfig,
 ): LanguageModelV3 {
   const serverUrl = config?.serverUrl ?? process.env.QGRID_URL ?? DEFAULT_QGRID_SERVER_URL;
+
   // Grok keeps the catalog default effort unless the caller chooses one.
   const effort: string | undefined =
     config?.defaultEffort ?? (isGrokModel(modelId) ? undefined : DEFAULT_QGRID_EFFORT);
+
   const projectName = config?.projectName ?? process.env.QGRID_PROJECT_NAME;
 
   type ClientRunContext = NonNullable<QueryOutput["runContext"]>;
+
   type ClientRunState = {
     runContext?: ClientRunContext;
     pendingToolCallIds: Set<string>;
   };
+
   type MatchedClientRun = {
     key: string;
     runContext?: ClientRunContext;
@@ -427,11 +473,15 @@ export function qgrid(
 
   function clientRunKey(runContext?: ClientRunContext): string {
     if (runContext?.requestLogId !== undefined) return `request:${runContext.requestLogId}`;
+
     if (runContext?.threadCoord) {
       const { workerId, epoch, threadId } = runContext.threadCoord;
+
       return `thread:${workerId}:${epoch}:${threadId}`;
     }
+
     anonymousClientRunId++;
+
     return `anonymous:${anonymousClientRunId}`;
   }
 
@@ -445,9 +495,11 @@ export function qgrid(
 
   function matchClientRun(messages: LanguageModelV3CallOptions["prompt"]): MatchedClientRun | null {
     const toolResults = extractToolResultsFromHistory(messages);
+
     if (toolResults.length === 0) return null;
 
     const resultIds = new Set(toolResults.map((r) => r.callId));
+
     for (const [key, run] of clientRuns) {
       if (
         run.pendingToolCallIds.size > 0 &&
@@ -464,6 +516,7 @@ export function qgrid(
     }
 
     if (clientRuns.size > 0) console.warn(PENDING_TOOL_RESULTS_WARNING);
+
     return null;
   }
 
@@ -477,14 +530,17 @@ export function qgrid(
       const tools = options.tools?.filter(
         (t): t is LanguageModelV3FunctionTool => t.type === "function",
       );
+
       const hasTools = tools && tools.length > 0;
       const qgridOptions = getQgridProviderOptions(options);
       const xaiOptions = resolveXaiOptions(modelId, options);
       const { prompt, system, history, input } = preparePrompt(modelId, options.prompt);
+
       const effectiveEffort =
         qgridOptions.thinking === false
           ? undefined
           : (qgridOptions.effort ?? xaiOptions.effort ?? effort);
+
       const verbosity = qgridOptions.verbosity;
       const reasoningSummary = qgridOptions.reasoningSummary;
       const serviceTier = qgridOptions.serviceTier;
@@ -502,11 +558,13 @@ export function qgrid(
 
       // follow-up 판단 + toolResults 구성
       let runContext: ClientRunContext | undefined;
+
       let toolResultsPayload:
         | Array<{ toolCallId: string; output: string; isError?: boolean }>
         | undefined;
 
       const matchedClientRun = matchClientRun(options.prompt);
+
       if (matchedClientRun) {
         // follow-up (tool-call 루프)
         runContext = matchedClientRun.runContext;
@@ -516,11 +574,13 @@ export function qgrid(
       // 비-tool 멀티턴: sessionKey 로 저장된 좌표를 회송.
       // locally matched tool-result follow-up에는 stale session 좌표를 새로 섞지 않는다.
       const storedCoord = cacheAffinityKey ? getThreadCoord(cacheAffinityKey) : undefined;
+
       if (!matchedClientRun && storedCoord) {
         runContext = { threadCoord: storedCoord };
       }
 
       const transport = createQgridRequestTransport(modelId, timeoutMs);
+
       const data = await qgridFetch(
         `${serverUrl}/api/qgrid/query`,
         {
@@ -563,6 +623,7 @@ export function qgrid(
             const text = await res.text().catch(() => "");
             throw new Error(`qgrid ${res.status}: ${text}`);
           }
+
           return (await res.json()) as QueryOutput;
         })
         .finally(() => closeQgridRequestTransport(transport));
@@ -570,6 +631,7 @@ export function qgrid(
       // 응답 변환
       const content: LanguageModelV3Content[] = [];
       let finishReason: LanguageModelV3FinishReason = { unified: "stop", raw: "stop" };
+
       if (data.content) {
         for (const item of data.content) {
           // 명시 분기: 미지의 variant 를 tool-call 로 오인하지 않는다.
@@ -584,6 +646,7 @@ export function qgrid(
             });
           }
         }
+
         if (data.finishReason === "tool-calls")
           finishReason = { unified: "tool-calls", raw: "tool_call" };
       } else {
@@ -592,6 +655,7 @@ export function qgrid(
 
       // client run state 업데이트
       if (matchedClientRun) clientRuns.delete(matchedClientRun.key);
+
       if (finishReason.unified === "tool-calls") {
         rememberClientRun(
           data.runContext,
@@ -623,13 +687,16 @@ export function qgrid(
       const tools = options.tools?.filter(
         (t): t is LanguageModelV3FunctionTool => t.type === "function",
       );
+
       const hasTools = tools && tools.length > 0;
       const qgridOptions = getQgridProviderOptions(options);
       const xaiOptions = resolveXaiOptions(modelId, options);
+
       const effectiveEffort =
         qgridOptions.thinking === false
           ? undefined
           : (qgridOptions.effort ?? xaiOptions.effort ?? effort);
+
       const verbosity = qgridOptions.verbosity;
       const reasoningSummary = qgridOptions.reasoningSummary;
       const serviceTier = qgridOptions.serviceTier;
@@ -644,11 +711,13 @@ export function qgrid(
 
       // follow-up 판단
       let runContext: ClientRunContext | undefined;
+
       let toolResultsPayload:
         | Array<{ toolCallId: string; output: string; isError?: boolean }>
         | undefined;
 
       const matchedClientRun = matchClientRun(options.prompt);
+
       if (matchedClientRun) {
         runContext = matchedClientRun.runContext;
         toolResultsPayload = matchedClientRun.toolResultsPayload;
@@ -657,14 +726,17 @@ export function qgrid(
       // 비-tool 멀티턴: sessionKey 로 저장된 좌표를 회송. locally matched tool
       // follow-up에는 stale session 좌표를 새로 섞지 않는다.
       const storedCoord = cacheAffinityKey ? getThreadCoord(cacheAffinityKey) : undefined;
+
       if (!matchedClientRun && storedCoord) {
         runContext = { threadCoord: storedCoord };
       }
 
       const abortController = new AbortController();
+
       const signal = options.abortSignal
         ? AbortSignal.any([options.abortSignal, abortController.signal])
         : abortController.signal;
+
       const prepRes = await fetch(`${serverUrl}/api/qgrid/prepareStream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -693,15 +765,18 @@ export function qgrid(
         }),
         signal,
       });
+
       if (!prepRes.ok) {
         const text = await prepRes.text().catch(() => "");
         throw new Error(`qgrid prepareStream ${prepRes.status}: ${text}`);
       }
+
       const { streamId } = (await prepRes.json()) as { streamId: string };
 
       const streamRes = await fetch(`${serverUrl}/api/qgrid/queryStream?streamId=${streamId}`, {
         signal,
       });
+
       if (!streamRes.ok || !streamRes.body) {
         const text = await streamRes.text().catch(() => "");
         throw new Error(`qgrid stream ${streamRes.status}: ${text}`);
@@ -720,6 +795,7 @@ export function qgrid(
 
       let cancelled = false;
       let processing: Promise<void>;
+
       const stream = new ReadableStream<LanguageModelV3StreamPart>({
         start(controller) {
           processing = processEvents(controller);
@@ -740,17 +816,21 @@ export function qgrid(
             warnings: providerWarnings(qgridOptions, xaiOptions.warnings),
           });
           let streamCompleted = false;
+
           for await (const event of parseSSE(streamRes.body!, signal)) {
             if (cancelled) return;
             signal.throwIfAborted();
+
             if (event.type === "delta") {
               const raw = (event.data as { text: string }).text;
               const text = envelopeParser ? envelopeParser.push(raw) : raw;
+
               if (text !== "") {
                 if (!textStarted) {
                   controller.enqueue({ type: "text-start", id: textId });
                   textStarted = true;
                 }
+
                 controller.enqueue({
                   type: "text-delta",
                   id: textId,
@@ -763,10 +843,12 @@ export function qgrid(
                 controller.enqueue({ type: "text-end", id: textId });
                 textStarted = false;
               }
+
               const done = event.data as QueryOutput;
 
               // client run state 업데이트
               if (matchedClientRun) clientRuns.delete(matchedClientRun.key);
+
               if (done.finishReason === "tool-calls") {
                 rememberClientRun(
                   done.runContext,
@@ -795,6 +877,7 @@ export function qgrid(
                     const tid = `${TEXT_STREAM_ID_PREFIX}_${Math.random()
                       .toString(36)
                       .slice(2, 10)}`;
+
                     controller.enqueue({ type: "text-start", id: tid });
                     controller.enqueue({ type: "text-delta", id: tid, delta: item.text });
                     controller.enqueue({ type: "text-end", id: tid });
@@ -835,13 +918,16 @@ export function qgrid(
               });
               streamCompleted = true;
               controller.close();
+
               return;
             } else if (event.type === "error") {
               streamCompleted = true;
               controller.error(new Error((event.data as { message: string }).message));
+
               return;
             }
           }
+
           if (!streamCompleted && !cancelled) {
             signal.throwIfAborted();
             controller.error(new Error("qgrid stream ended unexpectedly"));
@@ -857,8 +943,11 @@ export function qgrid(
 }
 
 qgrid.image = createQgridImage;
+
 qgrid.video = createQgridVideo;
+
 qgrid.transcription = createQgridTranscription;
+
 qgrid.speech = createQgridSpeech;
 
 export {
@@ -868,6 +957,7 @@ export {
   type QgridMediaProviderConfig,
   type QgridXaiImageProviderOptions,
 } from "./image-model";
+
 export {
   QgridVideoGenerationError,
   QgridVideoTimeoutError,
@@ -876,9 +966,13 @@ export {
   type QgridVideoResult,
   type QgridXaiVideoProviderOptions,
 } from "./video-model";
+
 export { type QgridXaiTranscriptionProviderOptions } from "./transcription-model";
+
 export { createQgridLogger } from "./logger";
+
 export { QgridXaiOptionsError, type QgridGrokEffort } from "./grok-options";
+
 export type {
   QgridImageGenerationMetadata,
   QgridImageModel,
@@ -902,4 +996,5 @@ export type {
   QgridVideoModel,
   QgridXaiProviderOptions,
 } from "./index.types";
+
 export default qgrid;

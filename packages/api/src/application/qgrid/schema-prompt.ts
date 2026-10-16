@@ -27,7 +27,9 @@ export function composeSystemWithSchemaContract(
   input: Pick<QueryInput, "tools" | "jsonSchema">,
 ): string | undefined {
   const contract = renderSchemaContractPrompt(input);
+
   if (contract === undefined) return system;
+
   return system ? `${system}\n\n${contract}` : contract;
 }
 
@@ -38,9 +40,11 @@ export function renderSchemaContractPrompt(
   if (input.tools?.length) {
     return renderToolEnvelopePrompt(input.tools, input.jsonSchema);
   }
+
   if (input.jsonSchema !== undefined) {
     return renderOutputSchemaPrompt(input.jsonSchema);
   }
+
   return undefined;
 }
 
@@ -74,6 +78,7 @@ export function buildEnvelopeExamples(tools: QgridTool[]): {
 } {
   const firstTool = tools[0];
   const args = firstTool ? exampleValueForSchema(firstTool.inputSchema) : { ok: true, value: {} };
+
   return {
     ...(args.ok
       ? {
@@ -107,6 +112,7 @@ const EXAMPLE_ANNOTATION_KEYWORDS = new Set([
   "readOnly",
   "writeOnly",
 ]);
+
 const EXAMPLE_HANDLED_KEYWORDS = new Set([
   "type",
   "enum",
@@ -134,6 +140,7 @@ const EXAMPLE_HANDLED_KEYWORDS = new Set([
  */
 function exampleValueForSchema(schema: unknown): ExampleResult {
   if (schema === true || schema === undefined) return { ok: true, value: {} };
+
   if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return { ok: false };
   const node = schema as Record<string, unknown>;
 
@@ -144,6 +151,7 @@ function exampleValueForSchema(schema: unknown): ExampleResult {
   }
 
   if (Array.isArray(node.enum) && node.enum.length > 0) return { ok: true, value: node.enum[0] };
+
   if ("const" in node) return { ok: true, value: node.const };
 
   for (const kw of ["anyOf", "oneOf"] as const) {
@@ -151,71 +159,98 @@ function exampleValueForSchema(schema: unknown): ExampleResult {
       // oneOf 는 "정확히 하나"라 첫 브랜치 값이 다른 브랜치에도 매칭될 수 있다 —
       // 검증기 없이 확신할 수 없으므로 브랜치가 하나일 때만 생성한다.
       const list = node[kw] as unknown[];
+
       if (kw === "oneOf" && list.length > 1) return { ok: false };
+
       for (const branch of list) {
         const result = exampleValueForSchema(branch);
+
         if (result.ok) return result;
       }
+
       return { ok: false };
     }
   }
 
   const type = Array.isArray(node.type) ? node.type[0] : node.type;
+
   switch (type) {
     case "string": {
       const min = typeof node.minLength === "number" ? node.minLength : 0;
+
       if (min > 64) return { ok: false };
       const base = "example";
       const value = base.length >= min ? base : base.padEnd(min, "x");
+
       if (typeof node.maxLength === "number" && value.length > node.maxLength) {
         if (node.maxLength < min) return { ok: false };
+
         return { ok: true, value: value.slice(0, node.maxLength) };
       }
+
       return { ok: true, value };
     }
+
     case "number":
     case "integer": {
       let value = 0;
+
       if (typeof node.minimum === "number") value = node.minimum;
       else if (typeof node.exclusiveMinimum === "number") value = node.exclusiveMinimum + 1;
+
       if (typeof node.maximum === "number" && value > node.maximum) return { ok: false };
+
       if (typeof node.exclusiveMaximum === "number" && value >= node.exclusiveMaximum) {
         return { ok: false };
       }
+
       return { ok: true, value };
     }
+
     case "boolean":
       return { ok: true, value: false };
     case "null":
       return { ok: true, value: null };
     case "array": {
       const min = typeof node.minItems === "number" ? node.minItems : 0;
+
       if (min > 8) return { ok: false };
+
       if (typeof node.maxItems === "number" && node.maxItems < min) return { ok: false };
+
       if (min === 0) return { ok: true, value: [] };
       const item = exampleValueForSchema(node.items);
+
       if (!item.ok) return { ok: false };
+
       // 같은 값 반복이라 uniqueItems 와 충돌하지만, uniqueItems 는 지원 집합 밖이라
       // 위의 keyword 검사에서 이미 fail-closed 된다.
       return { ok: true, value: Array.from({ length: min }, () => item.value) };
     }
+
     case undefined:
     case "object": {
       const properties =
         node.properties && typeof node.properties === "object" && !Array.isArray(node.properties)
           ? (node.properties as Record<string, unknown>)
           : {};
+
       const required = Array.isArray(node.required)
         ? node.required.filter((k): k is string => typeof k === "string")
         : [];
+
       const entries: Array<[string, unknown]> = [];
+
       for (const key of required) {
         const child = exampleValueForSchema(properties[key]);
+
         if (!child.ok) return { ok: false };
         entries.push([key, child.value]);
       }
+
       return { ok: true, value: Object.fromEntries(entries) };
     }
+
     default:
       return { ok: false };
   }
@@ -230,6 +265,7 @@ export function renderToolEnvelopePrompt(tools: QgridTool[], jsonSchema?: string
   const toolList = tools
     .map((tool) => {
       const description = tool.description ? ` — ${tool.description}` : "";
+
       return `- ${tool.name}${description}\n  inputSchema: ${JSON.stringify(tool.inputSchema)}`;
     })
     .join("\n");

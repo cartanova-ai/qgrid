@@ -45,7 +45,9 @@ export const UNKNOWN_MEDIA_COST_PREDICATE =
 
 function decodeStoredTools(value: unknown): ToolDefinitions | null {
   if (!value) return null;
+
   if (typeof value !== "string") return value as ToolDefinitions;
+
   try {
     return JSON.parse(value) as ToolDefinitions;
   } catch {
@@ -88,8 +90,10 @@ const STEP_AGGREGATE_SELECT = {
 function aggregateGenerateStepRows(rows: Array<Record<string, unknown>>): RequestLogStepAggregate {
   const sum = (field: string): number =>
     rows.reduce((total, row) => total + Number(row[field] ?? 0), 0);
+
   const optionalSum = (field: string): number | undefined =>
     rows.some((row) => row[field] !== null && row[field] !== undefined) ? sum(field) : undefined;
+
   const collapse = (field: string): string | undefined => {
     const values = [
       ...new Set(
@@ -98,9 +102,12 @@ function aggregateGenerateStepRows(rows: Array<Record<string, unknown>>): Reques
           .filter((value): value is string => typeof value === "string" && value.length > 0),
       ),
     ];
+
     if (values.length === 0) return undefined;
+
     return values.length === 1 ? values[0] : "mixed";
   };
+
   return {
     input_tokens: sum("input_tokens"),
     output_tokens: sum("output_tokens"),
@@ -140,6 +147,7 @@ function isAnthropicUsageRow(row: Pick<RequestLogUsageRow, "token_name" | "model
 export function providerOfModelName(modelName: string | null | undefined): ProviderId | "unknown" {
   const slash = modelName?.indexOf("/") ?? -1;
   const prefix = slash > 0 ? modelName?.slice(0, slash) : undefined;
+
   return isProviderId(prefix) ? prefix : "unknown";
 }
 
@@ -159,8 +167,10 @@ function normalizedUsageForCost(row: RequestLogUsageRow): {
   const cacheRead = row.cache_read_tokens;
   const cacheCreation = row.cache_creation_tokens;
   const storedInput = row.input_tokens;
+
   const legacyAnthropicSplitInput =
     isAnthropicUsageRow(row) && storedInput < cacheRead + cacheCreation;
+
   return {
     model: row.model_name ? canonicalModelName(row.model_name) : null,
     inputTokens: legacyAnthropicSplitInput ? storedInput + cacheRead + cacheCreation : storedInput,
@@ -180,11 +190,14 @@ function normalizeLegacyAnthropicRow<T extends RequestLogUsageRow>(row: T): T {
   // 새 row 는 당시의 provider/가격표 비용을 확정 저장한다. 현재 가격표로 덮어쓰지 않는다.
   if (row.cost_source) return row;
   const usage = normalizedUsageForCost(row);
+
   if (usage.inputTokens === row.input_tokens) return row;
   const normalized = { ...row, input_tokens: usage.inputTokens };
+
   if (usage.model) {
     normalized.cost_usd = Math.round(calculateCostUsd(usage.model, usage) * MICRO_USD);
   }
+
   return normalized;
 }
 
@@ -218,9 +231,12 @@ function applyOrderBy(
 
   if (!column) {
     qb.orderBy("request_logs.id", "desc");
+
     return;
   }
+
   qb.orderBy(column, direction);
+
   // 동점 행의 순서가 페이지마다 흔들리지 않게 고유 컬럼으로 tie-break 한다.
   if (key !== "id") qb.orderBy("request_logs.id", "desc");
 }
@@ -249,6 +265,7 @@ class RequestLogModelClass extends BaseModelClass<
       page: 1,
       queryMode: "list",
     });
+
     if (!rows[0]) {
       throw new NotFoundException(SD("error.entityNotFound")("RequestLog", id));
     }
@@ -377,6 +394,7 @@ class RequestLogModelClass extends BaseModelClass<
     }>
   > {
     const rdb = this.getPuri("r");
+
     const rows = (await rdb
       .from("request_logs")
       .select({
@@ -396,20 +414,25 @@ class RequestLogModelClass extends BaseModelClass<
       string,
       { requests: number; errors: number; inputTokens: number; cacheReadTokens: number }
     >();
+
     rows.forEach((row) => {
       const provider = providerOfModelName(row.requested_model_name);
+
       const agg = byProvider.get(provider) ?? {
         requests: 0,
         errors: 0,
         inputTokens: 0,
         cacheReadTokens: 0,
       };
+
       agg.requests += 1;
+
       if (row.status === "error") agg.errors += 1;
       agg.inputTokens += row.input_tokens;
       agg.cacheReadTokens += row.cache_read_tokens;
       byProvider.set(provider, agg);
     });
+
     return [...byProvider.entries()]
       .map(([provider, agg]) => ({ provider, ...agg }))
       .toSorted((a, b) => a.provider.localeCompare(b.provider));
@@ -427,20 +450,26 @@ class RequestLogModelClass extends BaseModelClass<
     zod: string | null;
   }> {
     const rdb = this.getPuri("r");
+
     const rows = (await rdb
       .from("request_logs")
       .select({ json_schema: "request_logs.json_schema" })
       .where("request_logs.id", id)) as unknown as Array<{ json_schema: string | null }>;
+
     const schema = rows[0]?.json_schema;
+
     if (!schema) return { typescript: null, zod: null };
 
     let parsed: unknown;
+
     try {
       parsed = JSON.parse(schema);
     } catch {
       return { typescript: null, zod: null };
     }
+
     let zod: string | null = null;
+
     try {
       zod = formatZodCode(
         jsonSchemaToZod(parsed as Parameters<typeof jsonSchemaToZod>[0], { module: "none" }),
@@ -448,6 +477,7 @@ class RequestLogModelClass extends BaseModelClass<
     } catch {
       zod = null;
     }
+
     return { typescript: renderParsedJsonSchemaTypeText(parsed), zod };
   }
 
@@ -467,13 +497,16 @@ class RequestLogModelClass extends BaseModelClass<
       .select({ tools: "request_logs.tools" })
       .where("request_logs.id", id)
       .first()) as { tools: unknown } | undefined;
+
     const tools = decodeStoredTools(row?.tools);
+
     if (!tools) return [];
 
     return tools.map((tool) => {
       const inputSchema = (tool.inputSchema ?? {}) as {
         properties?: Record<string, unknown>;
       };
+
       const inputZod = renderJsonSchemaZodShapeText(inputSchema, TOOL_ENUM_VALUE_LIMIT);
       const fullInputZod = renderJsonSchemaZodShapeText(inputSchema);
 
@@ -528,8 +561,10 @@ class RequestLogModelClass extends BaseModelClass<
       ...(params.history === undefined ? {} : { history: params.history as { type: string }[] }),
       ...(params.tools === undefined ? {} : { tools: params.tools }),
     });
+
     return wdb.transaction(async (trx) => {
       const ids = await trx.ubUpsert("request_logs");
+
       return ids[0]!;
     });
   }
@@ -537,11 +572,14 @@ class RequestLogModelClass extends BaseModelClass<
   async appendStep(requestLogId: number, step: Record<string, unknown>): Promise<number> {
     const wdb = this.getPuri("w");
     wdb.ubRegister("request_log_steps", { request_log_id: requestLogId, ...step });
+
     return wdb.transaction(async (trx) => {
       const ids = await trx.ubUpsert("request_log_steps");
+
       if (step.type === "tool_call") {
         await trx.from("request_logs").where("id", requestLogId).increment("tool_call_count", 1);
       }
+
       return ids[0]!;
     });
   }
@@ -577,7 +615,9 @@ class RequestLogModelClass extends BaseModelClass<
     if (params.status === "succeeded" && !params.token_name) {
       throw new Error("tokenName is required for succeeded runs");
     }
+
     const update: Record<string, unknown> = { id: requestLogId, status: params.status };
+
     const fields = [
       "response",
       "token_name",
@@ -601,9 +641,11 @@ class RequestLogModelClass extends BaseModelClass<
       "is_image_generation",
       "response_json_ok",
     ] as const;
+
     fields.forEach((key) => {
       if (params[key] !== undefined) update[key] = params[key];
     });
+
     if (params.history !== undefined) update.history = params.history;
     update.ttft_ms = (await this.firstGenerateStepTtft(requestLogId)) ?? 0;
 
@@ -619,9 +661,12 @@ class RequestLogModelClass extends BaseModelClass<
         .select({ model_name: "model_name" })
         .where("id", requestLogId)
         .first();
+
       const effectiveModelName = params.model_name ?? row?.model_name;
+
       if (effectiveModelName) {
         const model = canonicalModelName(effectiveModelName);
+
         const usage = normalizedUsageForCost({
           token_name: params.token_name,
           model_name: effectiveModelName,
@@ -632,6 +677,7 @@ class RequestLogModelClass extends BaseModelClass<
           cache_creation_5m_tokens: params.cache_creation_5m_tokens,
           cache_creation_1h_tokens: params.cache_creation_1h_tokens,
         });
+
         update.cost_usd = Math.round(
           calculateCostUsd(model, {
             inputTokens: usage.inputTokens,
@@ -663,6 +709,7 @@ class RequestLogModelClass extends BaseModelClass<
       .orderBy("step_index", "asc")
       .orderBy("id", "asc")
       .first();
+
     return row?.ttft_ms === null || row?.ttft_ms === undefined ? null : Number(row.ttft_ms);
   }
 
@@ -672,6 +719,7 @@ class RequestLogModelClass extends BaseModelClass<
       .select(STEP_AGGREGATE_SELECT)
       .where("request_log_id", requestLogId)
       .where("type", "generate");
+
     return aggregateGenerateStepRows(rows as Array<Record<string, unknown>>);
   }
 
@@ -688,11 +736,13 @@ class RequestLogModelClass extends BaseModelClass<
     const threshold = new Date(Date.now() - thresholdMs);
     const candidateIds = await this.findStaleToolWaitingRunCandidates(threshold, limit);
     const expiredIds: number[] = [];
+
     for (const requestLogId of candidateIds) {
       if (await this.tryExpireStaleToolWaitingRun(requestLogId, threshold, errorMessage)) {
         expiredIds.push(requestLogId);
       }
     }
+
     return expiredIds;
   }
 
@@ -708,6 +758,7 @@ class RequestLogModelClass extends BaseModelClass<
       .where("request_log_steps.tool_result", null)
       .where("request_log_steps.error", null)
       .limit(limit);
+
     return rows.map(({ id }) => id);
   }
 
@@ -718,10 +769,12 @@ class RequestLogModelClass extends BaseModelClass<
     errorMessage: string,
   ): Promise<boolean> {
     const wdb = this.getPuri("w");
+
     const lockResult = (await wdb.knex.raw("SELECT pg_try_advisory_xact_lock(?, ?) AS acquired", [
       REQUEST_LOG_RUN_LOCK_CLASS_ID,
       requestLogId,
     ])) as { rows?: Array<{ acquired?: boolean }> };
+
     if (lockResult.rows?.[0]?.acquired !== true) return false;
 
     // The follow-up path uses the same writer transaction lock. Recheck after
@@ -735,6 +788,7 @@ class RequestLogModelClass extends BaseModelClass<
       .where("tool_result", null)
       .where("error", null)
       .first();
+
     if (!unresolved) return false;
 
     const stepRows = await wdb
@@ -742,7 +796,9 @@ class RequestLogModelClass extends BaseModelClass<
       .select(STEP_AGGREGATE_SELECT)
       .where("request_log_id", requestLogId)
       .where("type", "generate");
+
     const aggregate = aggregateGenerateStepRows(stepRows as Array<Record<string, unknown>>);
+
     const firstTtft = await wdb
       .from("request_log_steps")
       .select({ ttft_ms: "ttft_ms" })
@@ -779,6 +835,7 @@ class RequestLogModelClass extends BaseModelClass<
             ? 0
             : Number(firstTtft.ttft_ms),
       });
+
     return updated > 0;
   }
 
@@ -802,7 +859,9 @@ class RequestLogModelClass extends BaseModelClass<
       .select({ status: "status" })
       .where("id", requestLogId)
       .first();
+
     if (!run) throw new Error(`request log run ${requestLogId} not found`);
+
     if (run.status !== "running") {
       throw new Error(`request log run ${requestLogId} is already ${run.status}`);
     }
@@ -821,6 +880,7 @@ class RequestLogModelClass extends BaseModelClass<
       .select({ max_step: Puri.max("step_index") })
       .where("request_log_id", requestLogId)
       .first();
+
     return (row?.max_step ?? -1) + 1;
   }
 
@@ -849,10 +909,13 @@ class RequestLogModelClass extends BaseModelClass<
 
     const { qb: totalQb } = this.getSubsetQueries("C");
     this.applyListFilters(totalQb, params);
+
     const sonamuFilter = params.sonamuFilter
       ? normalizeFilterQuery(params.sonamuFilter)
       : undefined;
+
     this.applySonamuFilters(totalQb, sonamuFilter);
+
     // subset qb 는 컬럼 목록이 이미 SELECT 에 박혀 있어 집계를 얹으면 GROUP BY 에러가 난다.
     // executeCountQuery 와 같은 방식으로 select 를 비우고 집계만 남긴다.
     const stored = await totalQb
@@ -872,6 +935,7 @@ class RequestLogModelClass extends BaseModelClass<
     const { qb: legacyQb } = this.getSubsetQueries("C");
     this.applyListFilters(legacyQb, params);
     this.applySonamuFilters(legacyQb, sonamuFilter);
+
     const legacyRows = await legacyQb
       .whereRaw("request_logs.cost_source IS NULL OR request_logs.cost_usd IS NULL")
       .clear("select")
@@ -893,7 +957,9 @@ class RequestLogModelClass extends BaseModelClass<
     const usd = legacyRows.reduce((sum, row) => {
       const alreadySummed = Math.max(row.cost_usd ?? 0, 0) / MICRO_USD;
       const usage = normalizedUsageForCost(row);
+
       if (!usage.model) return sum;
+
       return (
         sum +
         calculateCostUsd(usage.model, {
@@ -907,6 +973,7 @@ class RequestLogModelClass extends BaseModelClass<
         alreadySummed
       );
     }, storedTotal);
+
     return {
       usd,
       unknownImageCostCount: Number(stored?.unknownImageCostCount ?? 0),
@@ -923,6 +990,7 @@ class RequestLogModelClass extends BaseModelClass<
       .select({
         project_name: "project_name",
       });
+
     return rows.map((r) => r.project_name!);
   }
 
@@ -935,6 +1003,7 @@ class RequestLogModelClass extends BaseModelClass<
       .select({
         model_name: "model_name",
       });
+
     return rows.map((r) => r.model_name!);
   }
 
@@ -948,6 +1017,7 @@ class RequestLogModelClass extends BaseModelClass<
         .table("request_log_steps")
         .whereIn("request_log_steps.request_log_id", ids)
         .delete();
+
       return trx.table("request_logs").whereIn("request_logs.id", ids).delete();
     });
 

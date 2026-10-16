@@ -6,6 +6,7 @@ import { vi } from "vitest";
 // GlobalMock: fs/promises (사용 예시 - 필요시 활성화)
 vi.mock("fs/promises", async (importOriginal) => {
   const actual = (await importOriginal()) as typeof import("fs/promises");
+
   return {
     ...actual,
     access: vi.fn((path: PathLike, mode?: number) => {

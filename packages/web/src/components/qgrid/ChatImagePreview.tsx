@@ -14,6 +14,7 @@ export function ChatImagePreview({ url, onClose }: { url: string; onClose: () =>
   useEffect(() => {
     const dialog = dialogRef.current;
     dialog?.showModal();
+
     return () => dialog?.close();
   }, []);
 
@@ -28,6 +29,7 @@ export function ChatImagePreview({ url, onClose }: { url: string; onClose: () =>
       onClick={(event) => {
         if (event.target !== event.currentTarget) return;
         const rect = event.currentTarget.getBoundingClientRect();
+
         if (
           event.clientX < rect.left ||
           event.clientX > rect.right ||

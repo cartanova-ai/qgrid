@@ -112,11 +112,13 @@ export function resetGrokDiscoveryCache(): void {
 // third party, so only https endpoints on x.ai hosts are accepted; anything else falls back.
 function isTrustedEndpoint(value: string): boolean {
   let url: URL;
+
   try {
     url = new URL(value);
   } catch {
     return false;
   }
+
   return (
     url.protocol === "https:" &&
     !url.username &&
@@ -138,6 +140,7 @@ export async function getGrokOAuthEndpoints(io: GrokOAuthIo = {}): Promise<GrokO
   const fetchImpl = io.fetch ?? globalThis.fetch;
   const now = io.now ?? Date.now;
   const cached = discoveryCache;
+
   if (cached && now() - cached.fetchedAt < GROK_DISCOVERY_TTL_MS) return cached.endpoints;
 
   try {
@@ -146,8 +149,10 @@ export async function getGrokOAuthEndpoints(io: GrokOAuthIo = {}): Promise<GrokO
       headers: { accept: "application/json", "user-agent": grokShellUserAgent() },
       signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
     });
+
     if (response.ok) {
       const document = DiscoveryDocument.safeParse(await response.json());
+
       if (
         document.success &&
         isTrustedEndpoint(document.data.authorization_endpoint) &&
@@ -158,7 +163,9 @@ export async function getGrokOAuthEndpoints(io: GrokOAuthIo = {}): Promise<GrokO
           tokenEndpoint: document.data.token_endpoint,
           source: "discovery",
         };
+
         discoveryCache = { endpoints, fetchedAt: now() };
+
         return endpoints;
       }
     } else {
@@ -167,6 +174,7 @@ export async function getGrokOAuthEndpoints(io: GrokOAuthIo = {}): Promise<GrokO
   } catch {
     // Network failure, timeout, or a non-JSON body: fall through to the fixed endpoints.
   }
+
   return {
     authorizationEndpoint: GROK_FALLBACK_AUTHORIZATION_ENDPOINT,
     tokenEndpoint: GROK_FALLBACK_TOKEN_ENDPOINT,
@@ -186,6 +194,7 @@ export interface GrokPkce {
 /** S256 over a base64url verifier of 32 random bytes (oidc/protocol.rs:314-320). */
 export function generateGrokPkce(): GrokPkce {
   const codeVerifier = randomBytes(32).toString("base64url");
+
   return {
     codeVerifier,
     codeChallenge: createHash("sha256").update(codeVerifier).digest("base64url"),
@@ -223,13 +232,16 @@ export function buildGrokAuthorizeUrl(input: GrokAuthorizeUrlInput): string {
     ["nonce", input.nonce],
     ["referrer", GROK_OAUTH_REFERRER],
   ];
+
   const search = query.map(([key, value]) => `${key}=${encodeQueryValue(value)}`).join("&");
+
   return `${input.authorizationEndpoint}?${search}`;
 }
 
 export function grokLoopbackRedirectUri(port: number): string {
   if (!Number.isInteger(port) || port < 1 || port > 65_535)
     throw new RangeError("redirect port must be an integer in 1..65535");
+
   return `http://127.0.0.1:${port}/callback`;
 }
 
@@ -250,6 +262,7 @@ export async function startGrokOAuth(input: StartGrokOAuthInput): Promise<StartG
   const endpoints = await getGrokOAuthEndpoints(input);
   const pkce = generateGrokPkce();
   const redirectUri = grokLoopbackRedirectUri(input.redirectPort ?? randomInt(49_152, 65_536));
+
   return {
     authorizeUrl: buildGrokAuthorizeUrl({
       authorizationEndpoint: endpoints.authorizationEndpoint,
@@ -282,18 +295,23 @@ function safeOAuthErrorCode(value: unknown): string | undefined {
 /** Accepts the full callback URL or a bare authorization code (oidc/login.rs:30-60). */
 export function parseGrokCallbackInput(input: string): GrokCallbackInput {
   const trimmed = input.trim();
+
   if (!trimmed) throw new GrokOAuthError("invalid_callback_input", "empty callback input");
 
   let url: URL | undefined;
+
   try {
     url = new URL(trimmed);
   } catch {
     url = undefined;
   }
+
   if (url) {
     const code = url.searchParams.get("code");
+
     if (code) return { code, state: url.searchParams.get("state") ?? "" };
     const error = url.searchParams.get("error");
+
     if (error) {
       const oauthError = safeOAuthErrorCode(error);
       throw new GrokOAuthError(
@@ -302,16 +320,20 @@ export function parseGrokCallbackInput(input: string): GrokCallbackInput {
         oauthError === undefined ? {} : { oauthError },
       );
     }
+
     throw new GrokOAuthError("invalid_callback_input", "callback URL has no code parameter");
   }
+
   if (/\s/.test(trimmed))
     throw new GrokOAuthError("invalid_callback_input", "authorization code contains whitespace");
+
   return { code: trimmed, state: "" };
 }
 
 function statesEqual(expected: string, received: string): boolean {
   const a = Buffer.from(expected);
   const b = Buffer.from(received);
+
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
@@ -327,6 +349,7 @@ export const GrokTokenResponse = z.looseObject({
   scope: z.string().nullish(),
   token_type: z.string().nullish(),
 });
+
 export type GrokTokenResponse = z.infer<typeof GrokTokenResponse>;
 
 const OAuthErrorBody = z.looseObject({ error: z.string() });
@@ -334,8 +357,10 @@ const OAuthErrorBody = z.looseObject({ error: z.string() });
 /** Reads the OAuth `error` code from a failed response without retaining the body. */
 export async function readGrokOAuthErrorCode(response: Response): Promise<string | undefined> {
   const text = await response.text().catch(() => "");
+
   try {
     const parsed = OAuthErrorBody.safeParse(JSON.parse(text));
+
     return parsed.success ? safeOAuthErrorCode(parsed.data.error) : undefined;
   } catch {
     return undefined;
@@ -353,19 +378,24 @@ function formHeaders(extra: Record<string, string> = {}): Record<string, string>
 
 async function parseTokenResponse(response: Response): Promise<GrokTokenResponse> {
   let body: unknown;
+
   try {
     body = await response.json();
   } catch {
     throw new GrokOAuthError("invalid_token_response", "token response is not JSON");
   }
+
   const parsed = GrokTokenResponse.safeParse(body);
+
   if (!parsed.success)
     throw new GrokOAuthError("invalid_token_response", "token response failed validation");
+
   return parsed.data;
 }
 
 function networkError(code: GrokOAuthErrorCode, what: string, error: unknown): GrokOAuthError {
   const reason = error instanceof Error ? error.name : "unknown";
+
   return new GrokOAuthError(code, `${what} request failed (${reason})`, { retryable: true });
 }
 
@@ -388,15 +418,18 @@ export async function finishGrokLogin(input: FinishGrokLoginInput): Promise<Grok
       "invalid_access_token",
       `access token is not an at+jwt issued by ${GROK_AUTH_ISSUER}`,
     );
+
   if (!tokens.refresh_token)
     throw new GrokOAuthError("missing_refresh_token", "token response has no refresh token");
 
   const decoded = decodeGrokJwt(tokens.access_token);
   const subject = decoded?.payload.sub;
+
   if (!subject)
     throw new GrokOAuthError("user_id_unresolved", "access token has no subject (sub) claim");
 
   let response: Response;
+
   try {
     response = await fetchImpl(`${GROK_CHAT_PROXY_URL}/user?include=subscription`, {
       method: "GET",
@@ -406,6 +439,7 @@ export async function finishGrokLogin(input: FinishGrokLoginInput): Promise<Grok
   } catch (error) {
     throw networkError("user_lookup_failed", "user lookup", error);
   }
+
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
     throw new GrokOAuthError("user_lookup_failed", `user lookup failed: HTTP ${response.status}`, {
@@ -413,27 +447,34 @@ export async function finishGrokLogin(input: FinishGrokLoginInput): Promise<Grok
       retryable: response.status >= 500 || response.status === 429,
     });
   }
+
   let userBody: unknown;
+
   try {
     userBody = await response.json();
   } catch {
     throw new GrokOAuthError("user_id_unresolved", "user lookup returned non-JSON");
   }
+
   const user = GrokUserSubscription.safeParse(userBody);
+
   if (!user.success)
     throw new GrokOAuthError("user_id_unresolved", "user lookup did not return a valid userId");
 
   const issuedAt = now();
+
   const expiresAtMs =
     typeof tokens.expires_in === "number"
       ? issuedAt + tokens.expires_in * 1000
       : typeof decoded?.payload.exp === "number"
         ? decoded.payload.exp * 1000
         : undefined;
+
   if (expiresAtMs === undefined || !Number.isFinite(expiresAtMs))
     throw new GrokOAuthError("missing_expiry", "token response has no expiry");
 
   const grantedScopes = tokens.scope?.split(" ").filter(Boolean);
+
   const candidate = {
     authMode: "oauth" as const,
     accessToken: tokens.access_token,
@@ -450,9 +491,12 @@ export async function finishGrokLogin(input: FinishGrokLoginInput): Promise<Grok
     agentId: randomUUID(),
     ...(user.data.subscriptionTier ? { subscriptionTier: user.data.subscriptionTier } : {}),
   };
+
   const credentials = GrokCredentials.safeParse(candidate);
+
   if (!credentials.success)
     throw new GrokOAuthError("invalid_credentials", "credentials failed validation");
+
   return credentials.data;
 }
 
@@ -467,12 +511,14 @@ export interface CompleteGrokOAuthInput extends GrokOAuthIo {
 export async function completeGrokOAuth(input: CompleteGrokOAuthInput): Promise<GrokCredentials> {
   const fetchImpl = input.fetch ?? globalThis.fetch;
   const callback = parseGrokCallbackInput(input.codeOrUrl);
+
   // A bare code carries no state; the caller binds it to the pending login (oidc/login.rs:452-455).
   if (callback.state && !statesEqual(input.state, callback.state))
     throw new GrokOAuthError("state_mismatch", "OAuth state mismatch");
 
   const endpoints = await getGrokOAuthEndpoints(input);
   let response: Response;
+
   try {
     response = await fetchImpl(endpoints.tokenEndpoint, {
       method: "POST",
@@ -490,6 +536,7 @@ export async function completeGrokOAuth(input: CompleteGrokOAuthInput): Promise<
   } catch (error) {
     throw networkError("token_exchange_failed", "token exchange", error);
   }
+
   if (!response.ok) {
     const oauthError = await readGrokOAuthErrorCode(response);
     throw new GrokOAuthError(
@@ -502,6 +549,7 @@ export async function completeGrokOAuth(input: CompleteGrokOAuthInput): Promise<
       },
     );
   }
+
   return finishGrokLogin({
     ...input,
     fetch: fetchImpl,
@@ -517,6 +565,7 @@ export async function completeGrokOAuth(input: CompleteGrokOAuthInput): Promise<
 export const GROK_DEVICE_DEFAULT_INTERVAL_S = 5;
 export const GROK_DEVICE_SLOW_DOWN_INCREMENT_S = 5;
 const DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
+
 // The dashboard renders the URL and code to a human (device_code.rs:266-271 → `ui`).
 const DEVICE_CLIENT_SURFACE = "ui";
 
@@ -525,12 +574,15 @@ function isAllowedVerificationUri(value: string): boolean {
   if ([...value].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f))
     return false;
   let url: URL;
+
   try {
     url = new URL(value);
   } catch {
     return false;
   }
+
   if (url.protocol === "https:") return true;
+
   return url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
 }
 
@@ -564,6 +616,7 @@ function deviceHeaders(): Record<string, string> {
 export async function startGrokDeviceCode(io: GrokOAuthIo = {}): Promise<GrokDeviceCode> {
   const fetchImpl = io.fetch ?? globalThis.fetch;
   let response: Response;
+
   try {
     response = await fetchImpl(GROK_DEVICE_CODE_URL, {
       method: "POST",
@@ -578,8 +631,10 @@ export async function startGrokDeviceCode(io: GrokOAuthIo = {}): Promise<GrokDev
   } catch (error) {
     throw networkError("device_code_failed", "device code", error);
   }
+
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
+
     if (response.status === 404)
       throw new GrokOAuthError("device_flow_not_enabled", "device-code login is not available", {
         status: 404,
@@ -590,19 +645,24 @@ export async function startGrokDeviceCode(io: GrokOAuthIo = {}): Promise<GrokDev
       { status: response.status, retryable: response.status >= 500 || response.status === 429 },
     );
   }
+
   let body: unknown;
+
   try {
     body = await response.json();
   } catch {
     throw new GrokOAuthError("invalid_device_code_response", "device code response is not JSON");
   }
+
   const parsed = DeviceCodeResponse.safeParse(body);
+
   if (!parsed.success)
     throw new GrokOAuthError(
       "invalid_device_code_response",
       "device code response failed validation",
     );
   const data = parsed.data;
+
   return {
     deviceCode: data.device_code,
     userCode: data.user_code,
@@ -635,6 +695,7 @@ export async function pollGrokDeviceCode(
   const fetchImpl = input.fetch ?? globalThis.fetch;
   const interval = Math.max(1, Math.ceil(input.interval));
   let response: Response;
+
   try {
     response = await fetchImpl(GROK_DEVICE_TOKEN_URL, {
       method: "POST",
@@ -649,6 +710,7 @@ export async function pollGrokDeviceCode(
   } catch (error) {
     throw networkError("device_token_failed", "device token", error);
   }
+
   if (response.ok)
     return {
       status: "complete",
@@ -660,6 +722,7 @@ export async function pollGrokDeviceCode(
     };
 
   const oauthError = await readGrokOAuthErrorCode(response);
+
   switch (oauthError) {
     case "authorization_pending":
       return { status: "pending", interval };

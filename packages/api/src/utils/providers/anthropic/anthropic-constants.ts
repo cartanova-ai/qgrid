@@ -11,12 +11,16 @@
 // claude-api 스킬 확인: Sonnet 4.6 official id = "claude-sonnet-4-6" (날짜 suffix 없음).
 // model-cost 테이블에도 "claude-sonnet-4-6" 키 존재
 export const ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-6";
+
 // OpenAI provider 기본값(openai-dispatcher DEFAULT_EFFORT)과 맞춘다. 클라가 effort 미지정 시 안전망.
 export const ANTHROPIC_DEFAULT_EFFORT = "low";
+
 // project scope cwd (settings.json 격리). 토큰별 격리는 CLAUDE_CONFIG_DIR 로 한다.
 export const ANTHROPIC_CLAUDE_CWD = "/tmp/qgrid-anthropic";
+
 // per-token CLAUDE_CONFIG_DIR 의 베이스. 실제 경로는 `${BASE}/${tokenId}` (R10 격리).
 export const ANTHROPIC_CONFIG_DIR_BASE = "/tmp/qgrid-anthropic-config";
+
 // CC 가 자동 활성화하는 deferred 도구 — 토큰 최적화 위해 dispatcher 경로에서 차단.
 export const ANTHROPIC_DISALLOWED_TOOLS = ["Monitor", "PushNotification", "RemoteTrigger"] as const;
 const ONE_MILLION_SUFFIX_RE = /\[1m\]$/i;
@@ -35,6 +39,7 @@ export function anthropicConfigDir(tokenId: number): string {
 export function canonicalAnthropicModel(model?: string): string {
   const raw = model || ANTHROPIC_DEFAULT_MODEL;
   const withoutProvider = raw.includes("/") ? raw.split("/").pop()! : raw;
+
   return withoutProvider.replace(ONE_MILLION_SUFFIX_RE, "");
 }
 
@@ -58,6 +63,7 @@ const ONE_MILLION_CONTEXT_MODELS = new Set([
 ]);
 
 const CLI_ONE_MILLION_SUFFIX_MODELS = new Set(["claude-sonnet-4-6", "claude-opus-4-6"]);
+
 // Preserve these defaults when thinking is omitted. This is not an off-capability list:
 // explicit false supports Opus 5, and native extra-body delivery supports Haiku 5.5
 // (disabled) and Sonnet 5.5 (between_tools). See anthropic-thinking.ts.
@@ -84,6 +90,7 @@ for (const model of CLI_ONE_MILLION_SUFFIX_MODELS) {
     throw new Error(`[invariant] CLI 1M suffix model not in context set: ${model}`);
   }
 }
+
 // Fable 계열은 공식 사양상 1M 기본 컨텍스트 + adaptive thinking 필수다. 새 Fable 버전을 계열 Set
 // 에만 넣고 나머지를 빠뜨리는 실수를 같은 방식으로 모듈 로드 시점에 잡는다.
 for (const model of FABLE_FAMILY_MODELS) {
@@ -114,6 +121,7 @@ export function isFableFamilyModel(model?: string): boolean {
 export function assertSupportedOneMillionSuffix(model?: string): void {
   if (!hasOneMillionSuffix(model)) return;
   const canonical = canonicalAnthropicModel(model);
+
   if (!supports1MContext(canonical)) {
     throw new Error(`Unsupported Anthropic 1M model suffix: ${model}`);
   }

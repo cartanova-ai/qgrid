@@ -25,6 +25,7 @@ import { handleChatgptAuthTokensRefresh } from "./openai-refresh";
 import { type OpenAITransportKind, resolveOpenAITransportKind } from "./openai-transport-config";
 
 const logger = getLogger(["qgrid", "openai-dispatcher"]);
+
 // Verified with the subscription Responses backend; public API support is not sufficient.
 const THINKING_OFF_MODELS = new Set([
   "gpt-6-sol",
@@ -34,6 +35,7 @@ const THINKING_OFF_MODELS = new Set([
   "gpt-5.6-luna",
   "gpt-5.5",
 ]);
+
 const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
 const IMAGE_TOOL = "generate_image";
 
@@ -88,16 +90,19 @@ export interface OpenAIDispatcherDependencies {
 
 function abortError(signal: AbortSignal): Error {
   const reason = signal.reason;
+
   return reason instanceof Error ? reason : new DOMException("Aborted", "AbortError");
 }
 
 function activeSignal(signal?: AbortSignal, timeoutMs?: number): AbortSignal {
   const timeout = AbortSignal.timeout(timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
 function quotaMessage(entries: Array<{ name: string; threshold: number }>): string {
   const detail = entries.map((e) => `${e.name} (threshold ${e.threshold}%)`).join(", ");
+
   return detail
     ? `All openai tokens exceeded quota threshold: ${detail}`
     : "All openai tokens exceeded quota threshold";
@@ -105,12 +110,17 @@ function quotaMessage(entries: Array<{ name: string; threshold: number }>): stri
 
 function inputItems(req: GenerateRequest): OpenAIResponseItem[] {
   const history = (req.coldHistory ?? []) as OpenAIResponseItem[];
+
   const content: OpenAIResponseItem[] = req.coldInput.map((input) => {
     if (input.type === "text") return { type: "input_text", text: input.text };
+
     if (input.type === "image") return { type: "input_image", image_url: input.url };
+
     if (input.type === "localImage") return { type: "input_image", image_url: input.path };
+
     return { type: "input_text", text: `${input.name}: ${input.path}` };
   });
+
   return [...history, { type: "message", role: "user", content }];
 }
 
@@ -124,7 +134,9 @@ function imageReferences(req: GenerateRequest): OpenAIResponseItem[] {
         },
       ];
     }
+
     if (!Array.isArray(item.content)) return [];
+
     return item.content.filter(
       (part): part is OpenAIResponseItem =>
         part !== null &&
@@ -136,11 +148,15 @@ function imageReferences(req: GenerateRequest): OpenAIResponseItem[] {
 
 function asReasoning(req: GenerateRequest): OpenAIResponsesOptions["reasoning"] | undefined {
   if (req.thinking === false) return { effort: "none" };
+
   const summary =
     req.reasoningSummary && req.reasoningSummary !== "none" ? req.reasoningSummary : undefined;
+
   const effort =
     resolveOpenAIEffort(req.model ?? "", req.effort) ?? (req.thinking === true ? "low" : undefined);
+
   if (!effort && !summary) return undefined;
+
   return {
     ...(effort ? { effort } : {}),
     ...(summary
@@ -154,15 +170,18 @@ function asReasoning(req: GenerateRequest): OpenAIResponsesOptions["reasoning"] 
 function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
   const { outputFormat, ...imageControls } = req.imageGenerationOptions ?? {};
   const auto = req.imageGeneration === "auto";
+
   if (auto && req.outputSchema) {
     throw new ImageGenerationError(
       "gate",
       "Automatic image generation does not support structured output or external tools",
     );
   }
+
   if (auto && outputFormat && outputFormat !== "png") {
     throw new ImageGenerationError("gate", "Automatic image generation only supports PNG output");
   }
+
   return {
     model: req.model ?? "",
     ...(req.systemPrompt ? { instructions: req.systemPrompt } : {}),
@@ -311,12 +330,14 @@ export class OpenAIDispatcher implements ProviderDispatcher {
 
   onTokenDeactivated(id: number): void {
     const token = this.tokenMetadata.get(id);
+
     if (token) token.active = false;
     this.selector.resetScores();
   }
 
   onTokenActivated(id: number): void {
     const token = this.tokenMetadata.get(id);
+
     if (token) token.active = true;
     this.selector.resetScores();
   }
@@ -331,7 +352,9 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     }>,
   ): Promise<void> {
     const ids = new Set(rows.map((r) => r.id));
+
     for (const id of this.tokenMetadata.keys()) if (!ids.has(id)) await this.onTokenRemoved(id);
+
     for (const row of rows)
       await this.onTokenUpdated(row.id, row.name, row.credentials, row.quotaThreshold, row.weight);
   }
@@ -346,6 +369,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
         "gate",
         "image generation is not supported on the streaming path",
       );
+
     try {
       cb.onComplete(await this.run(req, cb.onDelta));
     } catch (error) {
@@ -357,26 +381,34 @@ export class OpenAIDispatcher implements ProviderDispatcher {
   async run(req: GenerateRequest, onDelta?: (text: string) => void): Promise<GenerateResult> {
     if (req.thinking === false) {
       const model = req.model ?? "";
+
       if (!THINKING_OFF_MODELS.has(model)) {
         const reason =
           model === "gpt-6-astra" || model === "gpt-6.1-sol"
             ? "the subscription backend requires thinking"
             : "thinking-off support has not been verified on the subscription backend";
+
         throw new ThinkingValidationError(
           `thinking:false is unavailable for OpenAI model ${model || "<default>"}: ${reason}`,
         );
       }
     }
+
     const signal = activeSignal(req.abortSignal, req.timeoutMs);
+
     if (signal.aborted) throw abortError(signal);
+
     const selection = await this.selectToken(
       req.preferredTokenId,
       req.requirePreferredToken ?? false,
       signal,
     );
+
     this.inFlight++;
+
     try {
       if (signal.aborted) throw abortError(signal);
+
       return await this.runDirect(selection, { ...req, abortSignal: signal }, onDelta);
     } finally {
       this.inFlight--;
@@ -394,6 +426,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     let outputMessageAccepted = false;
     const messagePhases = new Map<string, string>();
     const streamedMessageIds = new Set<string>();
+
     let usage = {
       totalTokens: 0,
       inputTokens: 0,
@@ -401,6 +434,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
       cachedInputTokens: 0,
       reasoningOutputTokens: 0,
     };
+
     const images: GeneratedImage[] = [];
     let imageAttempted = false;
     const auto = req.imageGeneration === "auto";
@@ -410,6 +444,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     let driverCompleted = false;
     let servingModel = req.model ?? "";
     const metadata = selection.metadata;
+
     const driverResult = (): GenerateResult => ({
       text,
       tokenName: metadata.name,
@@ -420,7 +455,9 @@ export class OpenAIDispatcher implements ProviderDispatcher {
       ...(servingModel !== req.model ? { requestedModel: req.model } : {}),
       threadCoord: { workerId: selection.tokenId, threadId: req.promptCacheKey ?? "", epoch: -1 },
     });
+
     const clientEntry = this.acquireClient(selection);
+
     try {
       for await (const event of clientEntry.client.responses(
         requestOptions(req),
@@ -435,14 +472,17 @@ export class OpenAIDispatcher implements ProviderDispatcher {
         ) {
           messagePhases.set(event.item.id, event.item.phase);
         }
+
         if (event.type === "text-delta") {
           if (outputMessageAccepted) continue;
+
           if (req.stopAfterOutputMessage && event.itemId) {
             // Buffer commentary/unclassified messages until their completed item.
             // Known final answers retain incremental streaming.
             if (messagePhases.get(event.itemId) !== "final_answer") continue;
             streamedMessageIds.add(event.itemId);
           }
+
           firstDeltaAt ??= Date.now();
           text += event.text;
           onDelta?.(event.text);
@@ -458,10 +498,13 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             .filter((part) => part?.type === "output_text" && typeof part.text === "string")
             .map((part) => part.text)
             .join("");
+
           // A valid client tool request ends this application turn. Later answers cannot
           // know its result yet. Never split/repair malformed JSON within a message.
           const phase = typeof event.item.phase === "string" ? event.item.phase : undefined;
+
           if (messageText) outputMessageAccepted = req.stopAfterOutputMessage(messageText, phase);
+
           if (
             typeof event.item.id === "string" &&
             !streamedMessageIds.has(event.item.id) &&
@@ -491,16 +534,20 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           if (event.item.name !== IMAGE_TOOL) {
             throw new ImageGenerationError("incomplete", "Unexpected automatic image tool call");
           }
+
           imageToolAttempted = true;
           imageCallIds.add(event.item.call_id);
+
           if (!event.completed) continue;
           const id = event.item.call_id;
           let args: unknown;
+
           try {
             args = JSON.parse(String(event.item.arguments));
           } catch {
             throw new ImageGenerationError("incomplete", "Invalid image tool arguments");
           }
+
           if (
             typeof id !== "string" ||
             !id ||
@@ -521,7 +568,9 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           ) {
             throw new ImageGenerationError("incomplete", "Invalid image tool arguments");
           }
+
           const previous = imageCalls.get(id);
+
           if (
             previous &&
             (previous.prompt !== args.prompt ||
@@ -530,6 +579,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           ) {
             throw new ImageGenerationError("incomplete", "Conflicting image tool calls");
           }
+
           imageCalls.set(id, {
             prompt: args.prompt,
             transparent_background: args.transparent_background,
@@ -537,6 +587,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           });
         } else if (event.type === "completed") {
           const imageUsage = event.imageGeneration?.usage;
+
           // The backend also reports all-zero image usage for text-only responses.
           if (
             auto &&
@@ -548,6 +599,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             throw new ImageGenerationError("incomplete", "Unexpected hosted image generation");
           driverCompleted = true;
           servingModel = event.model ?? servingModel;
+
           if (event.usage) {
             usage = {
               totalTokens: event.usage.totalTokens,
@@ -557,10 +609,12 @@ export class OpenAIDispatcher implements ProviderDispatcher {
               reasoningOutputTokens: event.usage.reasoningTokens,
             };
           }
+
           if (event.imageGeneration) {
             const hostedImages = images.filter(
               (image) => image.generation?.route === "codex-responses",
             );
+
             for (const [index, image] of hostedImages.entries()) {
               image.generation = {
                 route: "codex-responses",
@@ -579,21 +633,26 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           throw event.error;
         }
       }
+
       if (auto && imageToolAttempted) {
         if (!driverCompleted || imageCalls.size !== 1 || imageCallIds.size !== 1) {
           throw new ImageGenerationError("incomplete", "Expected one completed image tool call");
         }
+
         if (req.abortSignal?.aborted) throw abortError(req.abortSignal);
         const args = [...imageCalls.values()][0]!;
         const referenceCount = args.num_last_images_to_include;
         const references = referenceCount ? imageReferences(req) : [];
+
         if (referenceCount > references.length) {
           throw new ImageGenerationError(
             "incomplete",
             "Requested image references are unavailable",
           );
         }
+
         let imageCompleted = false;
+
         for await (const event of clientEntry.client.responses(
           {
             model: "gpt-image-2",
@@ -629,13 +688,18 @@ export class OpenAIDispatcher implements ProviderDispatcher {
               cause: event.error,
             });
         }
+
         imageAttempted = true;
+
         if (!imageCompleted)
           throw new ImageGenerationError("incomplete", "Image generation did not complete");
       }
+
       if (auto && imageAttempted && !driverCompleted)
         throw new ImageGenerationError("incomplete", "Image generation response did not complete");
+
       if (req.abortSignal?.aborted) throw abortError(req.abortSignal);
+
       if ((req.imageGeneration === true || (auto && imageAttempted)) && images.length === 0) {
         throw new ImageGenerationError(
           imageAttempted ? "incomplete" : "not_called",
@@ -654,15 +718,18 @@ export class OpenAIDispatcher implements ProviderDispatcher {
                 error instanceof Error ? error.message : String(error),
                 { cause: error },
               );
+
         if (error instanceof Error) failure.name = error.name;
         // Only the completed chat stage is chargeable here; discard partial image output.
         failure.completedDriver = driverResult();
         throw failure;
       }
+
       throw error;
     } finally {
       this.releaseClient(clientEntry);
     }
+
     return {
       ...driverResult(),
       ...(images.length ? { images } : {}),
@@ -673,10 +740,12 @@ export class OpenAIDispatcher implements ProviderDispatcher {
   acquireClient(selection: TokenSelection): ClientEntry {
     const metadata = selection.metadata;
     let entry = this.clients.get(selection.tokenId);
+
     if (entry && entry.generation !== metadata.generation) {
       this.retireClient(selection.tokenId);
       entry = undefined;
     }
+
     if (!entry) {
       const client = this.clientFactory(
         {
@@ -690,15 +759,19 @@ export class OpenAIDispatcher implements ProviderDispatcher {
         },
         selection.tokenId,
       );
+
       entry = { generation: metadata.generation, client, inFlight: 0, retired: false };
       this.clients.set(selection.tokenId, entry);
     }
+
     entry.inFlight++;
+
     return entry;
   }
 
   releaseClient(entry: ClientEntry): void {
     entry.inFlight = Math.max(0, entry.inFlight - 1);
+
     if (entry.retired && entry.inFlight === 0) {
       this.retiredClients.delete(entry);
       entry.client.close?.();
@@ -707,9 +780,11 @@ export class OpenAIDispatcher implements ProviderDispatcher {
 
   retireClient(tokenId: number): void {
     const entry = this.clients.get(tokenId);
+
     if (!entry) return;
     this.clients.delete(tokenId);
     entry.retired = true;
+
     if (entry.inFlight === 0) entry.client.close?.();
     else this.retiredClients.add(entry);
   }
@@ -722,14 +797,18 @@ export class OpenAIDispatcher implements ProviderDispatcher {
   ): Promise<TokenSelection> {
     if (preferredTokenId !== undefined) {
       const preferred = this.tokenMetadata.get(preferredTokenId);
+
       if (preferred?.active && (await this.isQuotaEligible(preferredTokenId, preferred, signal))) {
         return { tokenId: preferredTokenId, metadata: preferred };
       }
+
       if (requirePreferredToken) {
         if (!preferred?.active) {
           throw new Error(`Preferred openai token ${preferredTokenId} is not available`);
         }
+
         const threshold = preferred.quotaThreshold;
+
         if (threshold !== null && threshold !== undefined) {
           throw new QuotaThresholdExceededError(
             quotaMessage([{ name: preferred.name, threshold }]),
@@ -748,7 +827,9 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           eligible: await this.isQuotaEligible(id, token, signal),
         })),
     );
+
     const eligible = new Set(checks.filter((c) => c.eligible).map((c) => c.id));
+
     if (eligible.size === 0) {
       const over = checks
         .filter(
@@ -756,6 +837,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             !c.eligible && c.token.quotaThreshold !== null && c.token.quotaThreshold !== undefined,
         )
         .map((c) => ({ name: c.token.name, threshold: c.token.quotaThreshold as number }));
+
       if (over.length) {
         logger.warn("quota_threshold gate: all_exceeded", {
           provider: "openai",
@@ -763,11 +845,15 @@ export class OpenAIDispatcher implements ProviderDispatcher {
         });
         throw new QuotaThresholdExceededError(quotaMessage(over));
       }
+
       throw new Error("NO_OPENAI_WORKERS");
     }
+
     const selected = this.selector.select(eligible);
     const metadata = selected !== null ? this.tokenMetadata.get(selected) : undefined;
+
     if (selected === null || !metadata) throw new Error("NO_OPENAI_WORKERS");
+
     return { tokenId: selected, metadata };
   }
 
@@ -780,6 +866,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     active: boolean,
   ): void {
     const old = this.tokenMetadata.get(id);
+
     if (old) {
       Object.assign(old, {
         name,
@@ -799,6 +886,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
         generation: 1,
       });
     }
+
     this.selector.setToken(id, weight);
     this.invalidateRateLimitsCache(id);
     this.quotaBlocked.delete(id);
@@ -809,9 +897,11 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     signal?: AbortSignal,
   ): Promise<OpenAIRateLimitsWithMeta> {
     const token = this.tokenMetadata.get(tokenId);
+
     if (!token) throw new Error(`openai token ${tokenId} not found`);
     const generation = token.generation;
     const cached = this.rateLimitsCache.get(tokenId);
+
     if (
       cached &&
       cached.generation === token.generation &&
@@ -821,7 +911,9 @@ export class OpenAIDispatcher implements ProviderDispatcher {
 
     // TTL 만료 시 조회를 공유한다. 최초 호출자의 abort로 실패해도 isQuotaEligible은 fail-open한다.
     const pending = this.pendingRateLimits.get(tokenId);
+
     if (pending?.token === token && pending.generation === generation) return pending.promise;
+
     const fetchPromise = (async () => {
       const result = await readOpenAIQuotaUsage({
         credentials: token.credentials,
@@ -829,19 +921,25 @@ export class OpenAIDispatcher implements ProviderDispatcher {
         fetch: this.fetchImpl,
         ...(signal ? { signal } : {}),
       });
+
       if (result.kind === "lookup_failed") throw new Error(result.reason);
+
       if (!result.raw) throw new Error("OpenAI quota response missing raw rate limits");
       const entry = { data: result.raw, cachedAt: Date.now(), generation };
+
       if (this.tokenMetadata.get(tokenId) === token && token.generation === generation) {
         this.rateLimitsCache.set(tokenId, entry);
       }
+
       return entry;
     })().finally(() => {
       if (this.pendingRateLimits.get(tokenId)?.promise === fetchPromise) {
         this.pendingRateLimits.delete(tokenId);
       }
     });
+
     this.pendingRateLimits.set(tokenId, { token, generation, promise: fetchPromise });
+
     return fetchPromise;
   }
 
@@ -849,12 +947,16 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     const previous = this.tokenMetadata.get(tokenId);
     const generation = previous?.generation;
     const refreshed = await handleChatgptAuthTokensRefresh(tokenId);
+
     const credentials = {
       accessToken: refreshed.accessToken,
       accountId: refreshed.chatgptAccountId,
     };
+
     const current = this.tokenMetadata.get(tokenId);
+
     if (!current?.active) throw new Error(`openai token ${tokenId} is no longer active`);
+
     // A subscriber update may already contain newer credentials. Never overwrite it
     // with the result of a refresh that started against an older generation.
     if (current === previous && current.generation === generation) {
@@ -862,6 +964,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
       this.retireClient(tokenId);
       this.invalidateRateLimitsCache(tokenId);
     }
+
     return {
       accessToken: current.credentials.accessToken,
       accountId: current.credentials.accountId,
@@ -872,7 +975,9 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     if (token.quotaThreshold === null || token.quotaThreshold === undefined) return true;
     const generation = token.generation;
     const result = await readOpenAIQuotaUsage(async () => this.getRateLimitsByTokenId(id, signal));
+
     if (this.tokenMetadata.get(id) !== token || token.generation !== generation) return false;
+
     if (result.kind === "lookup_failed") {
       this.quotaBlocked.delete(id);
       logger.warn("quota_threshold gate: lookup_fail_open", {
@@ -880,20 +985,25 @@ export class OpenAIDispatcher implements ProviderDispatcher {
         tokenName: token.name,
         lookupReason: result.reason,
       });
+
       return true;
     }
+
     if (result.utilizationPct >= token.quotaThreshold) {
       if (!this.quotaBlocked.has(id))
         logger.info(
           `quota_threshold gate: over_threshold ${token.name}[${id}] (${result.utilizationPct}% >= ${token.quotaThreshold}%)`,
         );
       this.quotaBlocked.add(id);
+
       return false;
     }
+
     if (this.quotaBlocked.delete(id))
       logger.info(
         `quota_threshold gate: recovered ${token.name}[${id}] (${result.utilizationPct}% < ${token.quotaThreshold}%)`,
       );
+
     return true;
   }
 
@@ -914,14 +1024,18 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     resetsAt: number | null;
   }> {
     const now = Date.now();
+
     return [...this.tokenMetadata.entries()]
       .map(([id, t]) => {
         const cached = this.rateLimitsCache.get(id);
+
         const fresh =
           cached !== undefined &&
           cached.generation === t.generation &&
           now - cached.cachedAt < OpenAIDispatcher.RATE_LIMITS_CACHE_TTL;
+
         const primary = fresh ? cached.data.rateLimits?.primary : undefined;
+
         return {
           name: t.name,
           usedPercent: primary?.usedPercent ?? null,

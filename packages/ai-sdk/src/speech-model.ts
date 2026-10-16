@@ -18,6 +18,7 @@ const MAX_TEXT_CHARS = 15_000;
 
 /** Codecs of `@ai-sdk/xai` `XaiSpeechCodec`, equal to the qgrid server's `format` enum. */
 const SPEECH_FORMATS = ["mp3", "wav", "pcm", "mulaw", "alaw"] as const;
+
 type SpeechFormat = (typeof SPEECH_FORMATS)[number];
 
 function isSpeechFormat(value: string): value is SpeechFormat {
@@ -65,7 +66,9 @@ function base64ToBytes(data: string): Uint8Array {
   if (typeof Buffer !== "undefined") return new Uint8Array(Buffer.from(data, "base64"));
   const binary = atob(data);
   const bytes = new Uint8Array(binary.length);
+
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
   return bytes;
 }
 
@@ -88,19 +91,24 @@ export function createQgridSpeech(
 
     async doGenerate(options) {
       if (!options.text.trim()) throw new Error(`${LABEL}: text must not be empty`);
+
       if (options.text.length > MAX_TEXT_CHARS) {
         throw new Error(`${LABEL}: text is limited to ${MAX_TEXT_CHARS} characters`);
       }
+
       const qgridOptions = parseGrokQgridOptions(options.providerOptions?.qgrid, LABEL);
+
       const xai = parseXaiMediaOptions(
         options.providerOptions?.xai,
         xaiSpeechOptionsSchema,
         new Set<string>(),
         LABEL,
       );
+
       const warnings: SharedV3Warning[] = [];
       // Same fallback as @ai-sdk/xai: an unknown codec becomes mp3 with a warning.
       let format: SpeechFormat | undefined;
+
       if (options.outputFormat !== undefined) {
         if (isSpeechFormat(options.outputFormat)) {
           format = options.outputFormat;
@@ -113,9 +121,11 @@ export function createQgridSpeech(
           });
         }
       }
+
       if (options.instructions !== undefined) {
         warnings.push({ type: "unsupported", feature: "instructions" });
       }
+
       if (options.speed !== undefined) warnings.push({ type: "unsupported", feature: "speed" });
       warnings.push(...xai.warnings);
 
@@ -128,8 +138,10 @@ export function createQgridSpeech(
         ...(projectName ? { projectName } : {}),
         ...qgridOptions,
       };
+
       const body = serializeMediaBody(params, LABEL);
       const timestamp = new Date();
+
       const { data, headers } = await postMediaEndpoint({
         serverUrl,
         endpoint: "speak",
@@ -139,6 +151,7 @@ export function createQgridSpeech(
         signal: options.abortSignal,
         headers: options.headers,
       });
+
       return {
         audio: base64ToBytes(data.audio),
         warnings,

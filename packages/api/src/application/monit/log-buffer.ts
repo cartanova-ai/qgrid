@@ -32,7 +32,9 @@ function flattenMessage(message: readonly unknown[]): string {
 
 function renderValue(value: unknown): string {
   if (typeof value === "string") return value;
+
   if (value instanceof Error) return value.message;
+
   try {
     return JSON.stringify(value) ?? String(value);
   } catch {
@@ -53,9 +55,11 @@ export class MonitLogBuffer {
   push(record: LogRecord): void {
     try {
       let text = flattenMessage(record.message);
+
       if (text.length > this.maxTextLength) {
         text = `${text.slice(0, this.maxTextLength)}…`;
       }
+
       this.entries.push({
         seq: this.nextSeq++,
         timestamp: record.timestamp,
@@ -63,6 +67,7 @@ export class MonitLogBuffer {
         category: [...record.category],
         text,
       });
+
       if (this.entries.length > this.capacity) {
         this.entries.splice(0, this.entries.length - this.capacity);
       }
@@ -75,8 +80,10 @@ export class MonitLogBuffer {
   after(cursor: number | undefined, limit: number): MonitLogChunk {
     const latestSeq = this.nextSeq - 1;
     const oldestSeq = this.entries[0]?.seq ?? this.nextSeq;
+
     if (cursor === undefined) {
       const entries = this.entries.slice(-limit);
+
       return {
         entries,
         nextCursor: entries.at(-1)?.seq ?? latestSeq,
@@ -92,6 +99,7 @@ export class MonitLogBuffer {
     const dropped = Math.max(oldestSeq - cursor - 1, 0);
     const startIndex = this.entries.findIndex((entry) => entry.seq > cursor);
     const entries = startIndex === -1 ? [] : this.entries.slice(startIndex, startIndex + limit);
+
     return {
       entries,
       nextCursor: entries.at(-1)?.seq ?? cursor + dropped,

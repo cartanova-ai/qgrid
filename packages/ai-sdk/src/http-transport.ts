@@ -38,6 +38,7 @@ export function anthropicTransportOptions(timeoutMs?: number): {
     Number.isFinite(timeoutMs) && timeoutMs !== undefined && timeoutMs > 0
       ? timeoutMs
       : DEFAULT_ANTHROPIC_TIMEOUT_MS;
+
   const transportTimeoutMs = providerTimeoutMs + TRANSPORT_RESPONSE_GRACE_MS;
 
   return {
@@ -53,6 +54,7 @@ export function createQgridRequestTransport(
   if (!modelId.startsWith("anthropic/")) return undefined;
 
   const options = anthropicTransportOptions(timeoutMs);
+
   return {
     dispatcher: new Agent(options),
     timeoutMs: options.headersTimeout,
@@ -86,6 +88,7 @@ export function toQgridTransportError(error: unknown, context: QgridTransportErr
 
   if (code === "UND_ERR_HEADERS_TIMEOUT") {
     const budget = context.transportTimeoutMs ? ` after ${context.transportTimeoutMs}ms` : "";
+
     return new Error(`${prefix}: response headers timed out${budget} (${code})`, {
       cause: error,
     });
@@ -93,6 +96,7 @@ export function toQgridTransportError(error: unknown, context: QgridTransportErr
 
   if (code === "UND_ERR_BODY_TIMEOUT") {
     const budget = context.transportTimeoutMs ? ` after ${context.transportTimeoutMs}ms` : "";
+
     return new Error(`${prefix}: response body timed out${budget} (${code})`, {
       cause: error,
     });
@@ -106,6 +110,7 @@ export function toQgridTransportError(error: unknown, context: QgridTransportErr
   }
 
   const detail = findDeepestMessage(error) ?? "unknown network error";
+
   return new Error(`${prefix}: ${detail}${code ? ` (${code})` : ""}`, {
     cause: error,
   });
@@ -122,11 +127,13 @@ function findErrorCode(error: unknown, seen = new Set<unknown>()): string | unde
   if (typeof error.code === "string") return error.code;
 
   const causeCode = findErrorCode(error.cause, seen);
+
   if (causeCode) return causeCode;
 
   if (Array.isArray(error.errors)) {
     for (const nested of error.errors) {
       const nestedCode = findErrorCode(nested, seen);
+
       if (nestedCode) return nestedCode;
     }
   }
@@ -139,11 +146,13 @@ function findDeepestMessage(error: unknown, seen = new Set<unknown>()): string |
   seen.add(error);
 
   const causeMessage = findDeepestMessage(error.cause, seen);
+
   if (causeMessage) return causeMessage;
 
   if (Array.isArray(error.errors)) {
     for (const nested of error.errors) {
       const nestedMessage = findDeepestMessage(nested, seen);
+
       if (nestedMessage) return nestedMessage;
     }
   }

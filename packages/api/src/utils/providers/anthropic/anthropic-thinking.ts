@@ -27,6 +27,7 @@ let extraBodyRuntimeSupported: boolean | undefined;
 /** These modes were verified through native extra-body delivery on Claude Code 2.1.295. */
 export function assertAnthropicThinkingRuntime(extraBody: string | undefined): void {
   if (!extraBody) return;
+
   if (extraBodyRuntimeSupported === undefined) {
     try {
       const version = execFileSync("claude", ["--version"], {
@@ -35,6 +36,7 @@ export function assertAnthropicThinkingRuntime(extraBody: string | undefined): v
         stdio: ["ignore", "pipe", "pipe"],
         env: { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR },
       }).match(/^(\d+)\.(\d+)\.(\d+)/);
+
       const [major, minor, patch] = version?.slice(1).map(Number) ?? [];
       extraBodyRuntimeSupported =
         major !== undefined &&
@@ -45,6 +47,7 @@ export function assertAnthropicThinkingRuntime(extraBody: string | undefined): v
       extraBodyRuntimeSupported = false;
     }
   }
+
   if (!extraBodyRuntimeSupported) {
     throw new ThinkingValidationError(
       "thinking:false for Haiku 5.5 and Sonnet 5.5 requires Claude Code 2.1.295 or later; runtime version could not be verified",
@@ -54,14 +57,17 @@ export function assertAnthropicThinkingRuntime(extraBody: string | undefined): v
 
 export function resolveAnthropicThinking(model: string, thinking?: boolean, effort?: string) {
   const canonical = canonicalAnthropicModel(model);
+
   if (thinking === false && !THINKING_OFF_MODELS.has(canonical)) {
     const reason = usesAdaptiveThinking(canonical)
       ? "this model requires thinking"
       : "thinking-off support has not been verified for this model";
+
     throw new ThinkingValidationError(
       `thinking:false is not supported for anthropic/${canonical}: ${reason}`,
     );
   }
+
   return {
     // Never accept caller-provided extra body data or inherit it from the host environment.
     extraBody:

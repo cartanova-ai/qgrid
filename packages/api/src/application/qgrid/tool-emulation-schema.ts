@@ -44,6 +44,7 @@ export function buildToolCallSchema(tools: QgridTool[], answerSchema?: JsonValue
   const toolDescriptions = tools
     .map((tool) => {
       const schema = JSON.stringify(tool.inputSchema);
+
       return `- ${tool.name}: ${tool.description ?? ""}\n  inputSchema: ${schema}`;
     })
     .join("\n");
@@ -143,12 +144,14 @@ function rewriteSchemaNode(value: JsonValue, path: string): JsonValue {
 
   if ("$ref" in source) {
     const ref = source.$ref;
+
     if (typeof ref !== "string" || (ref !== "#" && !ref.startsWith("#/"))) {
       throw new ToolSchemaCompositionError(
         "only root-relative JSON Pointer $ref values are supported",
         `${path}.$ref`,
       );
     }
+
     result.$ref = `${USER_OUTPUT_REF}${ref.slice(1)}`;
   }
 

@@ -11,6 +11,7 @@ export type AnthropicUsageRaw = {
   seven_day?: { utilization: number | null; resets_at: string | null } | null;
   seven_day_overage_included?: { utilization: number | null; resets_at: string | null } | null;
 };
+
 export type AnthropicUsageWithMeta = {
   data: AnthropicUsageRaw;
   cachedAt: number;
@@ -21,6 +22,7 @@ const logger = getLogger(["qgrid", "oauth"]);
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+
 // client 허용 목록에 있는 콘솔 콜백. 인증 후 콘솔 페이지가 `code#state`를 표시하고
 // 사용자가 붙여넣는 코드 플로우(Claude Code CLI와 동일)에 사용한다.
 export const CONSOLE_CALLBACK_URL = "https://console.anthropic.com/oauth/code/callback";
@@ -52,6 +54,7 @@ export function generatePKCE(): { codeVerifier: string; codeChallenge: string; s
   const codeVerifier = base64URLEncode(randomBytes(32));
   const codeChallenge = base64URLEncode(createHash("sha256").update(codeVerifier).digest());
   const state = base64URLEncode(randomBytes(32));
+
   return { codeVerifier, codeChallenge, state };
 }
 
@@ -65,6 +68,7 @@ export function buildAuthUrl(codeChallenge: string, state: string, redirectUri: 
   url.searchParams.append("code_challenge", codeChallenge);
   url.searchParams.append("code_challenge_method", "S256");
   url.searchParams.append("state", state);
+
   return url.toString();
 }
 
@@ -95,6 +99,7 @@ export async function exchangeCodeForTokens(
       state,
     }),
   });
+
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Token exchange failed (${res.status}): ${text}`);
@@ -148,10 +153,12 @@ export async function refreshAccessToken(refreshToken: string): Promise<OAuthTok
       scope: REFRESH_SCOPES.join(" "),
     }),
   });
+
   if (!res.ok) {
     const text = await res.text();
     throw new RefreshFailedError(res.status, text);
   }
+
   const data = (await res.json()) as {
     access_token: string;
     refresh_token: string;
@@ -181,6 +188,7 @@ export async function fetchUsage(accessToken: string): Promise<AnthropicUsageRaw
 export async function fetchUsageWithMeta(accessToken: string): Promise<AnthropicUsageWithMeta> {
   const cacheKey = accessToken.slice(-10);
   const cached = usageCache[cacheKey];
+
   if (cached && Date.now() - cached.cachedAt < USAGE_API_CACHE_TTL) {
     return cached;
   }
@@ -193,11 +201,13 @@ export async function fetchUsageWithMeta(accessToken: string): Promise<Anthropic
     },
     signal: AbortSignal.timeout(5000),
   });
+
   if (!res.ok) {
     const text = await res.text();
 
     // 파싱 시도해서 에러 메시지 추출
     let errorMessage = `Error ${res.status}`;
+
     try {
       const parsed = JSON.parse(text);
       errorMessage = parsed.error?.message ?? errorMessage;
@@ -214,6 +224,7 @@ export async function fetchUsageWithMeta(accessToken: string): Promise<Anthropic
     const errorResult = { error: errorMessage };
     const entry = { data: errorResult, cachedAt: Date.now() };
     usageCache[cacheKey] = entry;
+
     return entry;
   }
 
@@ -221,5 +232,6 @@ export async function fetchUsageWithMeta(accessToken: string): Promise<Anthropic
   // cache invalidate
   const entry = { data, cachedAt: Date.now() };
   usageCache[cacheKey] = entry;
+
   return entry;
 }

@@ -139,9 +139,11 @@ type PendingOAuth = {
   redirectUri: string;
   provider: "anthropic" | "openai" | "grok";
 };
+
 const OAUTH_STATE_PREFIX = "oauth:state:";
 const OAUTH_STATE_TTL = "5m";
 const OAUTH_STATE_TTL_MS = 5 * 60_000;
+
 // A bare pasted Grok code carries no state, so it binds to the newest pending Grok login.
 const GROK_LATEST_STATE_KEY = "oauth:grok:latest";
 const GROK_DEVICE_PREFIX = "oauth:grok:device:";
@@ -154,6 +156,7 @@ function unixSecondsToIso(seconds: number | null | undefined): string | null {
 
 async function setOAuthState(state: string, data: PendingOAuth): Promise<void> {
   const cache = getCacheManagerRef();
+
   if (!cache) throw new Error("CacheManager not initialized");
   await cache.set({
     key: `${OAUTH_STATE_PREFIX}${state}`,
@@ -164,32 +167,40 @@ async function setOAuthState(state: string, data: PendingOAuth): Promise<void> {
 
 async function getOAuthState(state: string): Promise<PendingOAuth | undefined> {
   const cache = getCacheManagerRef();
+
   if (!cache) throw new Error("CacheManager not initialized");
   const raw = await cache.get<string>({ key: `${OAUTH_STATE_PREFIX}${state}` });
+
   if (!raw) return undefined;
+
   return JSON.parse(raw) as PendingOAuth;
 }
 
 async function deleteOAuthState(state: string): Promise<void> {
   const cache = getCacheManagerRef();
+
   if (!cache) return;
   await cache.delete({ key: `${OAUTH_STATE_PREFIX}${state}` });
 }
 
 async function setGrokLatestState(state: string): Promise<void> {
   const cache = getCacheManagerRef();
+
   if (!cache) throw new Error("CacheManager not initialized");
   await cache.set({ key: GROK_LATEST_STATE_KEY, value: state, ttl: OAUTH_STATE_TTL });
 }
 
 async function getGrokLatestState(): Promise<string | undefined> {
   const cache = getCacheManagerRef();
+
   if (!cache) throw new Error("CacheManager not initialized");
+
   return (await cache.get<string>({ key: GROK_LATEST_STATE_KEY })) ?? undefined;
 }
 
 async function setGrokDeviceState(deviceCode: string, data: PendingGrokDevice): Promise<void> {
   const cache = getCacheManagerRef();
+
   if (!cache) throw new Error("CacheManager not initialized");
   const ttlSec = Math.max(1, Math.ceil((data.expiresAtMs - Date.now()) / 1000));
   await cache.set({
@@ -201,15 +212,19 @@ async function setGrokDeviceState(deviceCode: string, data: PendingGrokDevice): 
 
 async function getGrokDeviceState(deviceCode: string): Promise<PendingGrokDevice | undefined> {
   const cache = getCacheManagerRef();
+
   if (!cache) throw new Error("CacheManager not initialized");
   const raw = await cache.get<string>({ key: `${GROK_DEVICE_PREFIX}${deviceCode}` });
+
   if (!raw) return undefined;
   const data = JSON.parse(raw) as PendingGrokDevice;
+
   return data.expiresAtMs > Date.now() ? data : undefined;
 }
 
 async function deleteGrokDeviceState(deviceCode: string): Promise<void> {
   const cache = getCacheManagerRef();
+
   if (!cache) return;
   await cache.delete({ key: `${GROK_DEVICE_PREFIX}${deviceCode}` });
 }
@@ -218,16 +233,20 @@ function grokOAuthBadRequest(error: unknown): never {
   if (error instanceof GrokOAuthError) {
     throw new BadRequestException(SD("qgrid.grokLoginFailed")(error.message));
   }
+
   throw error;
 }
 
 // GrokProviderDispatcher (the routing port) does not expose observability; GrokDispatcher does.
 type GrokSnapshotSource = { tokenStates(): GrokTokenStateSnapshot[] };
+
 function grokTokenSnapshot(tokenId: number): GrokTokenStateSnapshot | undefined {
   const dispatcher: unknown = QgridDispatcher.grokDispatcher;
+
   if (!dispatcher || typeof (dispatcher as GrokSnapshotSource).tokenStates !== "function") {
     return undefined;
   }
+
   return (dispatcher as GrokSnapshotSource).tokenStates().find((state) => state.id === tokenId);
 }
 
@@ -257,11 +276,14 @@ function isRemoteOAuthRequest(): boolean {
     const origin = typeof headers.origin === "string" ? headers.origin : undefined;
     const forwarded = headers["x-forwarded-host"];
     const rawHost = Array.isArray(forwarded) ? forwarded[0] : (forwarded ?? headers.host);
+
     const host = origin
       ? new URL(origin).hostname
       : new URL(`http://${rawHost ?? "localhost"}`).hostname;
+
     return !new Set(["localhost", "127.0.0.1", "::1", "[::1]"]).has(host);
   } catch {}
+
   return false;
 }
 
@@ -271,21 +293,25 @@ function resolveOAuthRedirect(): { redirectUri: string; mode: "redirect" | "code
   if (isRemoteOAuthRequest()) {
     return { redirectUri: CONSOLE_CALLBACK_URL, mode: "code" };
   }
+
   return { redirectUri: `${trustedLoopbackBase()}/callback`, mode: "redirect" };
 }
 
 function parsePastedOAuthResult(input: string): { code: string; state: string } | null {
   const trimmed = input.trim();
+
   try {
     const callback = new URL(trimmed);
     const code = callback.searchParams.get("code")?.trim() ?? "";
     const state = callback.searchParams.get("state")?.trim() ?? "";
+
     if (code && state) return { code, state };
   } catch {}
 
   const separatorAt = trimmed.indexOf("#");
   const code = separatorAt > 0 ? trimmed.slice(0, separatorAt).trim() : "";
   const state = separatorAt > 0 ? trimmed.slice(separatorAt + 1).trim() : "";
+
   return code && state ? { code, state } : null;
 }
 
@@ -298,17 +324,21 @@ function rejectImageGenerationStream(args: QueryInput): void {
 
 function rejectInvalidImageQuery(args: QueryInput): void {
   const standalone = args.model === `openai/${CODEX_IMAGE_GENERATION_MODEL}`;
+
   if (!standalone && args.imageGeneration !== "auto") return;
+
   if (standalone && args.imageGeneration !== true) {
     throw new BadRequestException(
       "qgrid: the image model requires imageGeneration: true; use qgrid.image() with generateImage." as LocalizedString,
     );
   }
+
   if (args.tools?.length || args.jsonSchema !== undefined) {
     throw new BadRequestException(
       "qgrid: automatic and standalone image generation do not support caller tools or structured output." as LocalizedString,
     );
   }
+
   if (
     args.imageGenerationOptions?.outputFormat &&
     args.imageGenerationOptions.outputFormat !== "png"
@@ -333,6 +363,7 @@ function rejectInvalidCallerSchemas(args: QueryInput): void {
     ) {
       throw new BadRequestException(error.message as LocalizedString);
     }
+
     // 잘못된 keyword 형태(anyOf 를 객체로 보내는 등)는 파이프라인에서 untyped 오류로 나오므로,
     // 타입 좁히기 대신 Error 전체를 caller-fault 400 으로 매핑한다(계약 테스트로 고정됨).
     if (error instanceof Error) {
@@ -340,6 +371,7 @@ function rejectInvalidCallerSchemas(args: QueryInput): void {
         `qgrid: caller schema cannot be normalized: ${error.message}` as LocalizedString,
       );
     }
+
     throw error;
   }
 }
@@ -349,9 +381,11 @@ async function resolveTokenName(args: QueryInput): Promise<InternalQueryInput> {
 
   const tokenProvider = args.tokenName.split("/", 1)[0];
   const modelProvider = args.model?.split("/", 1)[0];
+
   if (!isProviderId(tokenProvider)) {
     throw new BadRequestException(`Invalid token name: ${args.tokenName}` as LocalizedString);
   }
+
   if (modelProvider !== tokenProvider) {
     throw new BadRequestException(
       "Token provider does not match model provider" as LocalizedString,
@@ -359,9 +393,11 @@ async function resolveTokenName(args: QueryInput): Promise<InternalQueryInput> {
   }
 
   const token = await TokenModel.findActiveByProviderAndName("A", tokenProvider, args.tokenName);
+
   if (!token) {
     throw new BadRequestException(`Active token not found: ${args.tokenName}` as LocalizedString);
   }
+
   return { ...args, preferredTokenId: token.id, requirePreferredToken: true };
 }
 
@@ -376,12 +412,14 @@ function createHttpDisconnectHandle(): {
   try {
     const ctx = Sonamu.getContext();
     requestRaw = ctx.request?.raw;
+
     if (ctx.transport === "http") responseRaw = ctx.reply.raw;
   } catch {
     // Direct frame calls (for example unit tests) do not have an HTTP context.
   }
 
   const abort = () => abortController.abort();
+
   const abortOnIncompleteResponseClose = () => {
     if (!responseRaw?.writableEnded) abort();
   };
@@ -413,6 +451,7 @@ const inflightAnthropicRefresh = new Map<number, Promise<string>>();
 const mediaLogger = getLogger(["qgrid", "media"]);
 
 type MediaKind = "image" | "video" | "stt" | "tts";
+
 const MEDIA_TOOL_NAMES: Record<MediaKind, string> = {
   image: "image_generation",
   video: "video_generation",
@@ -454,13 +493,17 @@ function grokNotReady(): Error {
 
 function grokMedia(): MediaDispatcher {
   const dispatcher: unknown = QgridDispatcher.grokDispatcher;
+
   if (!isGrokMediaDispatcher(dispatcher)) throw grokNotReady();
+
   return dispatcher;
 }
 
 function grokVoice(): VoiceDispatcher {
   const dispatcher: unknown = QgridDispatcher.grokDispatcher;
+
   if (!isGrokVoiceDispatcher(dispatcher)) throw grokNotReady();
+
   return dispatcher;
 }
 
@@ -476,14 +519,18 @@ class TooManyRequestsException extends SoException {
  */
 function grokRateLimited(error: GrokRateLimitedError): TooManyRequestsException {
   let reply: FastifyReply | undefined;
+
   try {
     const ctx = Sonamu.getContext();
+
     if (ctx.transport === "http") reply = ctx.reply;
   } catch {
     // Direct frame calls (for example unit tests) have no HTTP context and no header to set.
   }
+
   // An SSE stream has already sent its headers; the error event then carries the delay alone.
   if (reply && !reply.raw.headersSent) reply.header("Retry-After", String(error.retryAfterSec));
+
   return new TooManyRequestsException(SD("qgrid.grokRateLimited")(error.retryAfterSec));
 }
 
@@ -497,29 +544,37 @@ function mapGrokCallerError(error: unknown): unknown {
   if (error instanceof GrokInvalidRequestError) {
     return new BadRequestException(SD("qgrid.grokInvalidRequest")(error.message));
   }
+
   if (error instanceof GrokContentPolicyError) {
     return new BadRequestException(SD("qgrid.grokContentPolicy")(error.message));
   }
+
   if (error instanceof GrokCapabilityUnavailableError) {
     return new ServiceUnavailableException(SD("qgrid.grokCapabilityUnavailable")(error.message));
   }
+
   if (error instanceof GrokOnDemandExcludedError) {
     return new ServiceUnavailableException(
       SD("qgrid.grokOnDemandExcluded")(error.tokenNames.join(", ")),
     );
   }
+
   if (error instanceof GrokZdrVideoUnavailableError) {
     return new ServiceUnavailableException(
       SD("qgrid.grokZdrVideoUnavailable")(error.tokenNames.join(", ")),
     );
   }
+
   if (error instanceof GrokCapacityError) {
     return new ServiceUnavailableException(SD("qgrid.grokCapacity"));
   }
+
   if (error instanceof GrokRateLimitedError) return grokRateLimited(error);
+
   if (error instanceof GrokNoWorkersError) {
     return new ServiceUnavailableException(SD("qgrid.grokNoWorkers")(error.message));
   }
+
   return error;
 }
 
@@ -542,6 +597,7 @@ export function mapRequestBodyTooLarge(error: Error): Error {
       SD("qgrid.requestBodyTooLarge")(REQUEST_BODY_LIMIT_BYTES / MiB),
     );
   }
+
   return error;
 }
 
@@ -549,12 +605,15 @@ export function mapRequestBodyTooLarge(error: Error): Error {
 // endpoints re-validate with the full schema.
 function parseMediaInput<S extends z.ZodType>(schema: S, value: unknown): z.infer<S> {
   const parsed = schema.safeParse(value);
+
   if (!parsed.success) {
     const detail = parsed.error.issues
       .map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`)
       .join("; ");
+
     throw new BadRequestException(SD("qgrid.invalidInput")(detail));
   }
+
   return parsed.data;
 }
 
@@ -562,20 +621,25 @@ async function resolveGrokTokenSelection(
   tokenName: string | undefined,
 ): Promise<MediaTokenSelection> {
   if (!tokenName) return {};
+
   if (!tokenName.startsWith("grok/")) {
     throw new BadRequestException(
       "Token provider does not match model provider" as LocalizedString,
     );
   }
+
   const token = await TokenModel.findActiveByProviderAndName("A", "grok", tokenName);
+
   if (!token) {
     throw new BadRequestException(`Active token not found: ${tokenName}` as LocalizedString);
   }
+
   return { preferredTokenId: token.id, requirePreferredToken: true };
 }
 
 function routeModelId(model: string | undefined, fallback: string): { id: string; route: string } {
   const id = model ? model.slice("grok/".length) : fallback;
+
   return { id, route: `grok/${id}` };
 }
 
@@ -587,8 +651,10 @@ function microUsd(usd: number | undefined): number | undefined {
 function describeImageRefs(refs: string[], withData: boolean): Array<Record<string, unknown>> {
   return refs.map((ref) => {
     const match = /^data:([^;,]+);base64,(.*)$/.exec(ref);
+
     if (!match) return { url: ref };
     const byteSize = Buffer.byteLength(match[2]!, "base64");
+
     return withData
       ? { mediaType: match[1], data: match[2], byteSize }
       : { mediaType: match[1], byteSize };
@@ -597,6 +663,7 @@ function describeImageRefs(refs: string[], withData: boolean): Array<Record<stri
 
 function imageTagForLog(b64: string, mimeType: string, alt: string | undefined): string {
   const safeAlt = (alt ?? "generated image").replace(/[&"<>]/g, (ch) => `&#${ch.charCodeAt(0)};`);
+
   return `<img src="data:${mimeType};base64,${b64}" alt="${safeAlt}" />`;
 }
 
@@ -608,6 +675,7 @@ async function startMediaRun(
   start: MediaLogStart,
 ): Promise<number | undefined> {
   if (loggerEnabled === false) return undefined;
+
   return RequestLogModel.createRun({
     user_prompt: start.prompt,
     requested_model_name: start.model,
@@ -655,6 +723,7 @@ function mediaCostFields(kind: MediaKind, model: string, cost: GrokMediaCost | u
         : null,
     };
   }
+
   return { cost_usd: microUsd(cost?.costUsd) ?? null, cost_source: cost?.costSource ?? null };
 }
 
@@ -680,10 +749,12 @@ async function finishMediaRun(
   success: MediaLogSuccess,
 ): Promise<void> {
   if (requestLogId === undefined) return;
+
   try {
     for (const step of mediaToolSteps(success.kind, success.steps, success.durationMs)) {
       await RequestLogModel.appendStep(requestLogId, step);
     }
+
     await RequestLogModel.finishRun(requestLogId, mediaFinishFields(success));
   } catch (e) {
     mediaLogger.error(`${success.kind} request log failed: ${(e as Error).message}`);
@@ -696,6 +767,7 @@ async function failMediaRun(
   aborted: boolean,
 ): Promise<void> {
   if (requestLogId === undefined) return;
+
   try {
     await RequestLogModel.finishRun(requestLogId, {
       status: aborted ? "aborted" : "error",
@@ -715,6 +787,7 @@ async function dispatchMediaCall<T>(
   call: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const disconnect = createHttpDisconnectHandle();
+
   try {
     return await call(disconnect.signal);
   } catch (e) {
@@ -740,15 +813,18 @@ async function runMediaEndpoint<T>(
 ): Promise<T> {
   const requestLogId = await startMediaRun(start.logger, start);
   const startedAt = Date.now();
+
   const { output, log } = await dispatchMediaCall(requestLogId, (signal) =>
     dispatch(signal, requestLogId),
   );
+
   await finishMediaRun(requestLogId, {
     ...log,
     kind: start.kind,
     model: start.model,
     durationMs: Date.now() - startedAt,
   });
+
   return output;
 }
 
@@ -790,6 +866,7 @@ async function finishVideoRun(
   cost: GrokMediaCost | undefined,
 ): Promise<void> {
   if (job.requestLogId === undefined) return;
+
   try {
     await RequestLogModel.continueToolRun(job.requestLogId, [
       {
@@ -804,6 +881,7 @@ async function finishVideoRun(
         isError: final.status === "failed",
       },
     ]);
+
     const fields = mediaFinishFields({
       kind: "video",
       model: job.model,
@@ -812,6 +890,7 @@ async function finishVideoRun(
       response: final.url ?? "",
       cost,
     });
+
     await RequestLogModel.finishRun(
       job.requestLogId,
       final.status === "done"
@@ -836,6 +915,7 @@ class QgridFrameClass extends BaseFrameClass {
     rejectInvalidCallerSchemas(args);
     const resolvedArgs = await resolveTokenName(args);
     const disconnect = createHttpDisconnectHandle();
+
     try {
       if (resolvedArgs.logger === false) {
         try {
@@ -847,13 +927,16 @@ class QgridFrameClass extends BaseFrameClass {
 
       const { requestLogId, stepIndex } = await beforeQuery(resolvedArgs);
       let result: QueryOutput;
+
       try {
         result = await QgridDispatcher.query(resolvedArgs, disconnect.signal);
       } catch (e) {
         const completedDriver = completedDriverFromImageFailure(e, resolvedArgs.serviceTier);
+
         const completedStep = completedDriver
           ? ([{ stepIndex, result: completedDriver }] as const)
           : ([] as const);
+
         if (disconnect.signal.aborted) {
           await finishRunAborted(requestLogId, resolvedArgs, ...completedStep);
         } else {
@@ -864,28 +947,35 @@ class QgridFrameClass extends BaseFrameClass {
             ...completedStep,
           );
         }
+
         throw mapGrokCallerError(e);
       }
 
       try {
         const lifecycle = await afterQuery(requestLogId, stepIndex, resolvedArgs, result);
+
         if (disconnect.signal.aborted) {
           await finishRunAborted(requestLogId, resolvedArgs);
         }
+
         // tool-call requestLogId와 provider threadCoord는 서로 독립적으로 유지한다.
         const threadCoord = result.runContext?.threadCoord;
+
         const runContext =
           lifecycle.runContext || threadCoord
             ? { ...lifecycle.runContext, ...(threadCoord ? { threadCoord } : {}) }
             : undefined;
+
         return { ...result, requestLogId, runContext };
       } catch (e) {
         logger.error(`query afterQuery failed: ${(e as Error).message}`);
+
         if (disconnect.signal.aborted) {
           await finishRunAborted(requestLogId, resolvedArgs);
         } else {
           await finishRunWithError(requestLogId, (e as Error).message, resolvedArgs);
         }
+
         // provider 응답은 성공했으므로 로깅 장애가 생성 결과를 덮어쓰지 않는다.
         return { ...result, requestLogId };
       }
@@ -903,6 +993,7 @@ class QgridFrameClass extends BaseFrameClass {
     pendingStreams.set(streamId, resolvedArgs);
     const expiry = setTimeout(() => pendingStreams.delete(streamId), 30_000);
     expiry.unref?.();
+
     return { streamId };
   }
 
@@ -910,6 +1001,7 @@ class QgridFrameClass extends BaseFrameClass {
   async queryStream(streamId: string): Promise<void> {
     const args = pendingStreams.get(streamId);
     pendingStreams.delete(streamId);
+
     if (!args) throw new Error("invalid or expired streamId");
     rejectImageGenerationStream(args);
 
@@ -926,6 +1018,7 @@ class QgridFrameClass extends BaseFrameClass {
     });
 
     let runInfo: { requestLogId: number; stepIndex: number } | undefined;
+
     if (args.logger !== false) {
       // provider 실행 전 running row 생성에 실패하면 logged 요청으로 진행하지 않는다.
       runInfo = await beforeQuery(args);
@@ -935,6 +1028,7 @@ class QgridFrameClass extends BaseFrameClass {
     if (clientClosed || sse.closed) {
       if (runInfo) await finishRunAborted(runInfo.requestLogId, args);
       await sse.end();
+
       return;
     }
 
@@ -962,6 +1056,7 @@ class QgridFrameClass extends BaseFrameClass {
     if (clientClosed && !streamResult) {
       if (runInfo) await finishRunAborted(runInfo.requestLogId, args);
       await sse.end();
+
       return;
     }
 
@@ -969,8 +1064,10 @@ class QgridFrameClass extends BaseFrameClass {
     if (streamResult) {
       // dispatcher 가 실은 thread 재사용 좌표는 logger 설정과 무관하게 회송한다.
       const threadCoord = streamResult.runContext?.threadCoord;
+
       let runContext: QgridRunContext | undefined =
         threadCoord === undefined ? undefined : { threadCoord };
+
       if (runInfo) {
         try {
           // close 후 도착한 결과도 step/usage는 남기되, 아래에서 최종 status를 aborted로 덮어쓴다.
@@ -980,6 +1077,7 @@ class QgridFrameClass extends BaseFrameClass {
             args,
             streamResult,
           );
+
           runContext =
             lifecycle.runContext || threadCoord
               ? { ...lifecycle.runContext, ...(threadCoord ? { threadCoord } : {}) }
@@ -989,6 +1087,7 @@ class QgridFrameClass extends BaseFrameClass {
           if (clientClosed) {
             await finishRunAborted(runInfo.requestLogId, args);
             await sse.end();
+
             return;
           }
         } catch (e) {
@@ -998,10 +1097,12 @@ class QgridFrameClass extends BaseFrameClass {
           if (clientClosed) {
             await finishRunAborted(runInfo.requestLogId, args);
             await sse.end();
+
             return;
           }
         }
       }
+
       if (!clientClosed && !sse.closed) {
         sse.publish("done", {
           ...streamResult,
@@ -1011,6 +1112,7 @@ class QgridFrameClass extends BaseFrameClass {
       }
     } else if (streamError) {
       if (runInfo) await finishRunWithError(runInfo.requestLogId, streamError.message, args);
+
       if (!clientClosed && !sse.closed) sse.publish("error", { message: streamError.message });
     } else if ((clientClosed || sse.closed) && runInfo) {
       await finishRunAborted(runInfo.requestLogId, args);
@@ -1031,6 +1133,7 @@ class QgridFrameClass extends BaseFrameClass {
       is_structured: input.isStructured,
       json_schema: input.jsonSchema,
     });
+
     return { requestLogId };
   }
 
@@ -1063,6 +1166,7 @@ class QgridFrameClass extends BaseFrameClass {
       tool_duration_ms: input.toolDurationMs,
       error: input.error,
     });
+
     return { stepId };
   }
 
@@ -1088,6 +1192,7 @@ class QgridFrameClass extends BaseFrameClass {
       error_message: input.errorMessage,
       response_json_ok: input.responseJsonOk,
     });
+
     return { ok: true };
   }
 
@@ -1128,6 +1233,7 @@ class QgridFrameClass extends BaseFrameClass {
         name,
       },
     ]);
+
     return { added: true };
   }
 
@@ -1148,6 +1254,7 @@ class QgridFrameClass extends BaseFrameClass {
         "quotaThreshold must be an integer between 1 and 100, or null" as LocalizedString,
       );
     }
+
     if (weight !== undefined && (!Number.isInteger(weight) || weight < 1 || weight > 100)) {
       throw new BadRequestException(
         "weight must be an integer between 1 and 100" as LocalizedString,
@@ -1155,21 +1262,29 @@ class QgridFrameClass extends BaseFrameClass {
     }
 
     const patch: TokenUpdateFields = {};
+
     if (name !== undefined) patch.name = name;
+
     if (quotaThreshold !== undefined) patch.quota_threshold = quotaThreshold;
+
     if (weight !== undefined) patch.weight = weight;
+
     if (keepaliveEnabled !== undefined) patch.keepalive_enabled = keepaliveEnabled;
+
     if (Object.keys(patch).length === 0) return { updated: false };
 
     const updated = await TokenModel.updateFields(id, patch);
+
     return { updated: updated > 0 };
   }
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async removeToken(id: number): Promise<{ removed: boolean }> {
     const entry = await TokenModel.findOne("A", { id });
+
     if (!entry) return { removed: false };
     await TokenModel.del([entry.id]);
+
     return { removed: true };
   }
 
@@ -1179,10 +1294,13 @@ class QgridFrameClass extends BaseFrameClass {
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async toggleToken(id: number): Promise<{ active: boolean }> {
     const result = await TokenModel.toggleActive(id);
+
     if (!result) return { active: false };
+
     if (result.reauthRequired) {
       throw new BadRequestException("Re-login required" as LocalizedString);
     }
+
     return { active: result.active };
   }
 
@@ -1202,27 +1320,34 @@ class QgridFrameClass extends BaseFrameClass {
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async oauthComplete(pastedCode: string): Promise<{ added: boolean; name: string }> {
     const result = parsePastedOAuthResult(pastedCode);
+
     if (!result) {
       // Grok accepts a bare authorization code, which carries no state (grok-build login.rs).
       const grokState = await getGrokLatestState();
       const grokPending = grokState ? await getOAuthState(grokState) : undefined;
+
       if (grokState && grokPending?.provider === "grok" && pastedCode.trim()) {
         await deleteOAuthState(grokState);
         await this.completeGrokLogin(pastedCode, grokState, grokPending);
+
         return { added: true, name: grokPending.name };
       }
+
       throw new BadRequestException(
         "expected the callback URL or code shown after login, in code#state form" as LocalizedString,
       );
     }
+
     const { code, state } = result;
 
     const pending = await getOAuthState(state);
+
     if (!pending) {
       throw new BadRequestException(
         "login session not found or expired — start the login again" as LocalizedString,
       );
     }
+
     await deleteOAuthState(state);
 
     if (pending.provider === "openai") {
@@ -1273,6 +1398,7 @@ class QgridFrameClass extends BaseFrameClass {
 
   async completeGrokLogin(codeOrUrl: string, state: string, pending: PendingOAuth): Promise<void> {
     let credentials: StrictGrokCredentials;
+
     try {
       credentials = await completeGrokOAuth({
         codeOrUrl,
@@ -1283,15 +1409,18 @@ class QgridFrameClass extends BaseFrameClass {
     } catch (error) {
       grokOAuthBadRequest(error);
     }
+
     await this.saveGrokToken(credentials, pending.name);
   }
 
   // Registration rejects anything that is not an xAI OAuth at+jwt (API keys, opaque tokens).
   async saveGrokToken(candidate: StrictGrokCredentials, name: string): Promise<void> {
     const parsed = StrictGrokCredentials.safeParse(candidate);
+
     if (!parsed.success) {
       throw new BadRequestException(SD("qgrid.grokNotOAuthToken"));
     }
+
     await TokenModel.replaceByAccount("grok", parsed.data.userId, {
       provider: "grok",
       credentials: parsed.data,
@@ -1303,10 +1432,13 @@ class QgridFrameClass extends BaseFrameClass {
 
   async handleOAuthCallback(code: string, state: string, reply: FastifyReply): Promise<void> {
     const pending = await getOAuthState(state);
+
     if (!pending) {
       logger.warn("oauth callback: invalid_state");
+
       return reply.redirect("/?oauth=error&reason=invalid_state");
     }
+
     await deleteOAuthState(state);
 
     try {
@@ -1317,12 +1449,14 @@ class QgridFrameClass extends BaseFrameClass {
       } else {
         await this.completeAnthropicLogin(code, state, pending);
       }
+
       return reply.redirect(`/?oauth=success&name=${encodeURIComponent(pending.name)}`);
     } catch {
       logger.warn("oauth callback failed", {
         provider: pending.provider,
         reason: "exchange_failed",
       });
+
       return reply.redirect("/?oauth=error&reason=exchange_failed");
     }
   }
@@ -1332,6 +1466,7 @@ class QgridFrameClass extends BaseFrameClass {
     const { codeVerifier, codeChallenge, state } = generateOpenAIPKCE();
     const mode = isRemoteOAuthRequest() ? "code" : "redirect";
     let redirectUri: string;
+
     if (mode === "code") {
       // OpenAI accepts only the Codex CLI's registered loopback URI. On a remote dashboard the
       // browser cannot reach the server's loopback, so the user pastes the resulting callback URL.
@@ -1345,8 +1480,10 @@ class QgridFrameClass extends BaseFrameClass {
         );
       }
     }
+
     const authUrl = buildOpenAIAuthUrl(codeChallenge, state, redirectUri);
     await setOAuthState(state, { codeVerifier, name, redirectUri, provider: "openai" });
+
     return { authUrl, mode };
   }
 
@@ -1356,11 +1493,13 @@ class QgridFrameClass extends BaseFrameClass {
   async oauthStartGrok(name: string): Promise<OAuthStartResult> {
     const state = crypto.randomBytes(32).toString("base64url");
     let started;
+
     try {
       started = await startGrokOAuth({ state });
     } catch (error) {
       grokOAuthBadRequest(error);
     }
+
     await setOAuthState(state, {
       codeVerifier: started.verifier,
       name,
@@ -1368,22 +1507,26 @@ class QgridFrameClass extends BaseFrameClass {
       provider: "grok",
     });
     await setGrokLatestState(state);
+
     return { authUrl: started.authorizeUrl, mode: "code" };
   }
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async oauthStartGrokDevice(name: string): Promise<GrokDeviceCodeStart> {
     let device;
+
     try {
       device = await startGrokDeviceCode();
     } catch (error) {
       grokOAuthBadRequest(error);
     }
+
     await setGrokDeviceState(device.deviceCode, {
       name,
       interval: device.interval,
       expiresAtMs: Date.now() + device.expiresIn * 1000,
     });
+
     return device;
   }
 
@@ -1391,27 +1534,36 @@ class QgridFrameClass extends BaseFrameClass {
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async oauthPollGrokDevice(deviceCode: string): Promise<GrokDevicePollResult> {
     const pending = await getGrokDeviceState(deviceCode);
+
     if (!pending) {
       throw new BadRequestException(
         "login session not found or expired — start the login again" as LocalizedString,
       );
     }
+
     let result;
+
     try {
       result = await pollGrokDeviceCode({ deviceCode, interval: pending.interval });
     } catch (error) {
       if (error instanceof GrokOAuthError && !error.options.retryable) {
         await deleteGrokDeviceState(deviceCode);
       }
+
       grokOAuthBadRequest(error);
     }
+
     if (result.status === "pending") {
       const slowDown = result.interval > pending.interval;
+
       if (slowDown) await setGrokDeviceState(deviceCode, { ...pending, interval: result.interval });
+
       return { status: slowDown ? "slow_down" : "pending", intervalSec: result.interval };
     }
+
     await deleteGrokDeviceState(deviceCode);
     await this.saveGrokToken(result.credentials, pending.name);
+
     return { status: "added", name: pending.name };
   }
 
@@ -1424,6 +1576,7 @@ class QgridFrameClass extends BaseFrameClass {
     const selection = await resolveGrokTokenSelection(input.tokenName);
     const { id, route } = routeModelId(input.model, GROK_IMAGE_DEFAULT_MODEL);
     const refs = input.referenceImages ?? [];
+
     const start = {
       kind: "image",
       model: route,
@@ -1431,6 +1584,7 @@ class QgridFrameClass extends BaseFrameClass {
       projectName: input.projectName,
       logger: input.logger,
     } as const;
+
     return runMediaEndpoint(start, async (signal, requestLogId) => {
       const request = {
         model: id,
@@ -1443,11 +1597,14 @@ class QgridFrameClass extends BaseFrameClass {
         signal,
         ...selection,
       };
+
       const dispatched = refs.length
         ? await media.editImages({ ...request, images: refs })
         : await media.generateImages(request);
+
       const decoded = decodeGrokImages(dispatched.result);
       const cost = grokImageCost(id, decoded.images.length, decoded.costInUsdTicks);
+
       const output: GenerateImagesOutput = {
         model: route,
         tokenName: dispatched.tokenName,
@@ -1465,6 +1622,7 @@ class QgridFrameClass extends BaseFrameClass {
         ...(cost ? { costUsd: cost.costUsd, costSource: cost.costSource } : {}),
         ...(requestLogId === undefined ? {} : { requestLogId }),
       };
+
       const log: MediaRunLog = {
         tokenName: output.tokenName,
         cost,
@@ -1492,6 +1650,7 @@ class QgridFrameClass extends BaseFrameClass {
           result: imageTagForLog(image.b64, image.mimeType, image.revisedPrompt),
         })),
       };
+
       return { output, log };
     });
   }
@@ -1505,6 +1664,7 @@ class QgridFrameClass extends BaseFrameClass {
     const media = grokMedia();
     const selection = await resolveGrokTokenSelection(input.tokenName);
     const { id, route } = routeModelId(input.model, GROK_VIDEO_DEFAULT_MODEL);
+
     const requestLogId = await startMediaRun(input.logger, {
       kind: "video",
       model: route,
@@ -1513,6 +1673,7 @@ class QgridFrameClass extends BaseFrameClass {
     });
 
     const startedAt = Date.now();
+
     const started = await dispatchMediaCall(requestLogId, (signal) =>
       media.startVideo({
         model: id,
@@ -1532,6 +1693,7 @@ class QgridFrameClass extends BaseFrameClass {
     const now = Date.now();
     pruneVideoJobs(now);
     const jobHandle = crypto.randomBytes(16).toString("base64url");
+
     const job: VideoJob = {
       tokenId: started.tokenId,
       tokenName: started.tokenName,
@@ -1541,6 +1703,7 @@ class QgridFrameClass extends BaseFrameClass {
       createdAt: now,
       ...(requestLogId === undefined ? {} : { requestLogId }),
     };
+
     videoJobs.set(jobHandle, job);
 
     if (requestLogId !== undefined) {
@@ -1550,6 +1713,7 @@ class QgridFrameClass extends BaseFrameClass {
         ...(input.lastFrame ? [input.lastFrame] : []),
         ...(input.referenceImages ?? []),
       ];
+
       const [step] = mediaToolSteps(
         "video",
         [
@@ -1571,12 +1735,14 @@ class QgridFrameClass extends BaseFrameClass {
         ],
         now - startedAt,
       );
+
       try {
         await RequestLogModel.appendStep(requestLogId, step!);
       } catch (e) {
         mediaLogger.error(`video request log failed: ${(e as Error).message}`);
       }
     }
+
     return { jobHandle, model: route, ...(requestLogId === undefined ? {} : { requestLogId }) };
   }
 
@@ -1586,16 +1752,19 @@ class QgridFrameClass extends BaseFrameClass {
     const input = parseMediaInput(VideoStatusInput, params);
     pruneVideoJobs(Date.now());
     const job = videoJobs.get(input.jobHandle);
+
     // A foreign owner gets the same 404 as an unknown handle, so handles cannot be probed.
     if (!job || job.owner !== (input.projectName ?? null)) {
       throw new NotFoundException(SD("qgrid.videoJobNotFound"));
     }
+
     if (job.final) return job.final;
 
     const media = grokMedia();
     const disconnect = createHttpDisconnectHandle();
     let summary: ReturnType<typeof summarizeGrokVideoStatus>;
     let durationSec: number | undefined;
+
     try {
       const polled = await media.getVideo(job.tokenId, job.requestId, disconnect.signal);
       summary = summarizeGrokVideoStatus(polled.result);
@@ -1611,9 +1780,11 @@ class QgridFrameClass extends BaseFrameClass {
       mimeType: "video/mp4" as const,
       ...(job.requestLogId === undefined ? {} : { requestLogId: job.requestLogId }),
     };
+
     if (summary.status === "pending") return { status: "pending", ...base };
 
     const cost = grokReportedCost(summary.usageTicks);
+
     const final: VideoStatusOutput = {
       status: summary.status,
       ...base,
@@ -1622,9 +1793,11 @@ class QgridFrameClass extends BaseFrameClass {
       ...(cost ? { costInUsdTicks: cost.ticks, costUsd: cost.costUsd } : {}),
       ...(summary.error ? { error: summary.error } : {}),
     };
+
     // Set before any await: concurrent polls return this result instead of logging again.
     job.final = final;
     await finishVideoRun(job, final, cost);
+
     return final;
   }
 
@@ -1635,6 +1808,7 @@ class QgridFrameClass extends BaseFrameClass {
     const selection = await resolveGrokTokenSelection(input.tokenName);
     const { id, route } = routeModelId(input.model, GROK_STT_DEFAULT_MODEL);
     const audio = new Uint8Array(Buffer.from(input.audio, "base64"));
+
     const start = {
       kind: "stt",
       model: route,
@@ -1642,6 +1816,7 @@ class QgridFrameClass extends BaseFrameClass {
       projectName: input.projectName,
       logger: input.logger,
     } as const;
+
     return runMediaEndpoint(start, async (signal, requestLogId) => {
       const dispatched = await voice.transcribe({
         audio,
@@ -1651,7 +1826,9 @@ class QgridFrameClass extends BaseFrameClass {
         signal,
         ...selection,
       });
+
       const { text, language, duration } = dispatched.result;
+
       const output: TranscribeOutput = {
         text,
         ...(language ? { language } : {}),
@@ -1660,6 +1837,7 @@ class QgridFrameClass extends BaseFrameClass {
         tokenName: dispatched.tokenName,
         ...(requestLogId === undefined ? {} : { requestLogId }),
       };
+
       const log: MediaRunLog = {
         tokenName: output.tokenName,
         response: output.text,
@@ -1682,6 +1860,7 @@ class QgridFrameClass extends BaseFrameClass {
           },
         ],
       };
+
       return { output, log };
     });
   }
@@ -1693,12 +1872,14 @@ class QgridFrameClass extends BaseFrameClass {
     const voice = grokVoice();
     const selection = await resolveGrokTokenSelection(input.tokenName);
     const route = input.model ?? GROK_TTS_LOG_MODEL;
+
     const request = {
       text: input.text,
       voice: input.voice ?? GROK_TTS_DEFAULT_VOICE,
       language: input.language ?? GROK_TTS_DEFAULT_LANGUAGE,
       format: input.format ?? GROK_TTS_DEFAULT_FORMAT,
     };
+
     const start = {
       kind: "tts",
       model: route,
@@ -1706,15 +1887,18 @@ class QgridFrameClass extends BaseFrameClass {
       projectName: input.projectName,
       logger: input.logger,
     } as const;
+
     return runMediaEndpoint(start, async (signal, requestLogId) => {
       const dispatched = await voice.speak({ ...request, signal, ...selection });
       const audioBytes = dispatched.result.audio.byteLength;
+
       const output: SpeakOutput = {
         audio: Buffer.from(dispatched.result.audio).toString("base64"),
         mimeType: dispatched.result.mediaType,
         tokenName: dispatched.tokenName,
         ...(requestLogId === undefined ? {} : { requestLogId }),
       };
+
       const log: MediaRunLog = {
         tokenName: output.tokenName,
         response: `[audio ${output.mimeType} ${audioBytes} bytes]`,
@@ -1733,6 +1917,7 @@ class QgridFrameClass extends BaseFrameClass {
           },
         ],
       };
+
       return { output, log };
     });
   }
@@ -1740,11 +1925,13 @@ class QgridFrameClass extends BaseFrameClass {
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
   async usage(tokenId?: number): Promise<UsageResponse> {
     const { rows: allTokens } = await TokenModel.findMany("A");
+
     const entry = tokenId
       ? allTokens.find((e) => e.id === tokenId)
       : allTokens.findLast((e) => e.active && e.provider === "anthropic");
 
     if (!entry) return { error: "NOT_FOUND" };
+
     if (entry.reauth_required) return { error: "re-login required" };
 
     if (entry.provider === "openai") {
@@ -1755,6 +1942,7 @@ class QgridFrameClass extends BaseFrameClass {
       try {
         const raw = await QgridDispatcher.openaiDispatcher?.getRateLimitsByTokenId(entry.id);
         const rl = raw?.data.rateLimits;
+
         return {
           provider: "openai",
           fiveHour: rl?.primary
@@ -1782,6 +1970,7 @@ class QgridFrameClass extends BaseFrameClass {
       const snapshot = entry.active ? grokTokenSnapshot(entry.id) : undefined;
       const billing = snapshot?.lastBilling;
       const storedTier = StoredGrokCredentials.safeParse(entry.credentials).data?.subscriptionTier;
+
       return {
         provider: "grok",
         fiveHour: null,
@@ -1808,23 +1997,30 @@ class QgridFrameClass extends BaseFrameClass {
         accessToken = await this.refreshToken(entry);
       } catch (e) {
         oauthLogger.warn(`refresh failed for ${entry.name}: ${(e as Error).message}`);
+
         return { error: "Token refresh failed; usage is unavailable" };
       }
     }
 
     const raw = await fetchUsage(accessToken);
+
     if (raw.error && getRefreshToken(entry.credentials)) {
       try {
         accessToken = await this.refreshToken(entry);
         const retried = await fetchUsage(accessToken);
+
         if (retried.error) return { error: retried.error };
+
         return convertAnthropicUsage(retried);
       } catch (e) {
         oauthLogger.warn(`refresh failed for ${entry.name}: ${(e as Error).message}`);
+
         return { error: "Token refresh failed; usage is unavailable" };
       }
     }
+
     if (raw.error) return { error: raw.error };
+
     return convertAnthropicUsage(raw);
   }
 
@@ -1833,10 +2029,12 @@ class QgridFrameClass extends BaseFrameClass {
   async refreshToken(token: TokenSubsetA): Promise<string> {
     if (token.provider === "grok") return this.refreshGrokToken(token);
     const inflight = inflightAnthropicRefresh.get(token.id);
+
     if (inflight) return inflight;
 
     const promise = this.doRefreshToken(token);
     inflightAnthropicRefresh.set(token.id, promise);
+
     try {
       return await promise;
     } finally {
@@ -1850,24 +2048,29 @@ class QgridFrameClass extends BaseFrameClass {
   async refreshGrokToken(token: TokenSubsetA): Promise<string> {
     if (!this.grokRefresher) throw new Error("Grok refresher not initialized");
     const current = StrictGrokCredentials.parse(token.credentials);
+
     const next = await this.grokRefresher.refresh(token.id, current, (creds) =>
       persistGrokCredentials(token.id, creds),
     );
+
     return next.accessToken;
   }
 
   async doRefreshToken(token: TokenSubsetA): Promise<string> {
     const creds = token.credentials;
     const rt = getRefreshToken(creds);
+
     if (!rt) throw new Error("No refresh token");
 
     let refreshed;
+
     try {
       refreshed = await refreshAccessToken(rt);
     } catch (e) {
       if (e instanceof RefreshFailedError && e.isAuthDead()) {
         await deactivateAuthDeadToken(token, `anthropic:${e.status}`);
       }
+
       throw e;
     }
 
@@ -1877,6 +2080,7 @@ class QgridFrameClass extends BaseFrameClass {
       refreshToken: refreshed.refreshToken,
       expiresAt: refreshed.expiresAt,
     });
+
     await TokenModel.save([
       {
         id: token.id,
@@ -1886,12 +2090,14 @@ class QgridFrameClass extends BaseFrameClass {
         reauth_required: false,
       },
     ]);
+
     return refreshed.accessToken;
   }
 
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
   async health(): Promise<HealthResponse> {
     const providers = { ...QgridDispatcher.startupState };
+
     return {
       status: "ok",
       activeTokens: QgridDispatcher.tokens.size,

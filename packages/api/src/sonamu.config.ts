@@ -116,15 +116,18 @@ export default defineConfig({
       custom: (server) => {
         const oauthCallback = async (request: FastifyRequest, reply: FastifyReply) => {
           const { code, state } = request.query as { code?: string; state?: string };
+
           if (!code || !state) {
             return reply.redirect("/?oauth=error&reason=missing_params");
           }
+
           try {
             return QgridFrame.handleOAuthCallback(code, state, reply);
           } catch {
             return reply.redirect("/?oauth=error&reason=callback_failed");
           }
         };
+
         server.get("/callback", oauthCallback);
         server.get("/auth/callback", oauthCallback);
       },
@@ -140,7 +143,9 @@ export default defineConfig({
       guardHandler: () => {},
       cacheControlHandler: (req) => {
         if (req.type === "api") return CachePresets.noCache;
+
         if (req.type === "csr") return CachePresets.shortLived;
+
         // Sonamu serves fingerprinted assets with its default immutable policy.
         return undefined;
       },
@@ -164,12 +169,14 @@ export default defineConfig({
           if (key === "slack.expiryReminderMinutes" || key === "slack.remindersEnabled") {
             rescheduleExpiredTokenReminder();
           }
+
           if (key === "qgrid.tokenWindowKeepaliveEnabled") {
             void rescheduleTokenWindowKeepalive();
           }
         });
 
         let triggerReady = true;
+
         try {
           await ensureTokensTrigger(connConfig);
         } catch (e) {
@@ -206,11 +213,13 @@ export default defineConfig({
 
         try {
           const grokRefresher = new GrokRefreshCoordinator({ persist: persistGrokCredentials });
+
           const grokDispatcher = new GrokDispatcher({
             refresher: grokRefresher,
             media: new GrokMediaClient(),
             voice: new GrokVoiceClient(),
           });
+
           await grokDispatcher.start();
           QgridFrame.grokRefresher = grokRefresher;
           QgridDispatcher.grokDispatcher = grokDispatcher;
@@ -228,6 +237,7 @@ export default defineConfig({
         subscriber.tokenChangeHandler = () => {
           void rescheduleTokenWindowKeepalive();
         };
+
         startExpiredTokenReminder();
         void startTokenWindowKeepalive();
 
@@ -247,20 +257,27 @@ export default defineConfig({
         stopTokenWindowKeepalive();
         stopOpenAICallbackRelay();
         setSettingChangeHandler(null);
+
         if (QgridDispatcher.subscriber) QgridDispatcher.subscriber.tokenChangeHandler = null;
+
         if (QgridDispatcher.openaiDispatcher) {
           await QgridDispatcher.openaiDispatcher.stop();
         }
+
         if (QgridDispatcher.anthropicDispatcher) {
           await QgridDispatcher.anthropicDispatcher.stop();
         }
+
         const grokDispatcher = QgridDispatcher.grokDispatcher;
+
         if (grokDispatcher instanceof GrokDispatcher) {
           await grokDispatcher.stop();
         }
+
         if (QgridDispatcher.subscriber) {
           await QgridDispatcher.subscriber.stop();
         }
+
         log.info("graceful shutdown");
       },
       onError: (error, _request, reply) => {

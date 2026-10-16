@@ -157,6 +157,7 @@ export class QgridDispatcherClass {
   // 초기화 중에는 503 + Retry-After, 초기화 실패에는 500을 반환한다.
   notReadyError(provider: ProviderId): Error {
     const label = PROVIDER_LABELS[provider];
+
     return this.startupState[provider] === "failed"
       ? new InternalServerErrorException(SD("qgrid.dispatcherFailed")(label))
       : new ServiceUnavailableException(SD("qgrid.dispatcherStarting")(label));
@@ -169,7 +170,9 @@ export class QgridDispatcherClass {
   ): { provider: ProviderId; dispatcher: StreamingProviderDispatcher } {
     if (!isProviderId(provider)) throw directLlmApiFallbackNotImplemented(input);
     const dispatcher = this.dispatchers.get(provider);
+
     if (!dispatcher) throw this.notReadyError(provider);
+
     return { provider, dispatcher };
   }
 
@@ -199,6 +202,7 @@ export class QgridDispatcherClass {
 
     if (provider === "anthropic") {
       const decision = decideConvRouting(input);
+
       const result = await dispatcher.generate({
         model: input.model,
         systemPrompt: composeSystemWithSchemaContract(input.system, input),
@@ -212,6 +216,7 @@ export class QgridDispatcherClass {
         imageGeneration: input.imageGeneration,
         imageGenerationOptions: input.imageGenerationOptions,
       });
+
       this.recordCompleted(provider, result.tokenName);
 
       return applyToolCallEmulation(toEmulationResult(result), input.tools, {
@@ -224,6 +229,7 @@ export class QgridDispatcherClass {
       directProvider: provider,
       modelNamespace: `${provider}/${route.model}`,
     });
+
     const result = await dispatcher.generate({
       ...buildDirectRequest(input, route.model, outputSchema, answerKind, abortSignal),
       promptCacheKey: input.imageGeneration ? undefined : decision.promptCacheKey,
@@ -232,6 +238,7 @@ export class QgridDispatcherClass {
       coldInput: decision.coldInput,
       coldHistory: decision.coldHistory,
     });
+
     this.recordCompleted(provider, result.tokenName);
 
     // 이미지 요청은 cold-only(R8)라 재사용 좌표를 발급하지 않는다. 좌표를 실으면
@@ -261,9 +268,11 @@ export class QgridDispatcherClass {
       // 구조화 응답은 최종 텍스트와 델타 모두 코드펜스를 제거한다.
       const hasSchemaContract = input.jsonSchema !== undefined || Boolean(input.tools?.length);
       const fenceStrip = hasSchemaContract ? createFenceStripTransform() : undefined;
+
       const emitDelta = fenceStrip
         ? (text: string) => {
             const safe = fenceStrip.push(text);
+
             if (safe) cb.onDelta(safe);
           }
         : cb.onDelta;
@@ -290,6 +299,7 @@ export class QgridDispatcherClass {
             this.recordCompleted(provider, turnResult.tokenName);
             // 닫는 펜스 판정 때문에 보류한 텍스트를 완료 전에 방출한다.
             const rest = fenceStrip?.flush();
+
             if (rest) cb.onDelta(rest);
 
             const issuedCoord = issueConvContext(turnResult.threadCoord, decision);
@@ -303,6 +313,7 @@ export class QgridDispatcherClass {
           onError: cb.onError,
         },
       );
+
       return;
     }
 
@@ -310,6 +321,7 @@ export class QgridDispatcherClass {
       directProvider: provider,
       modelNamespace: `${provider}/${route.model}`,
     });
+
     await dispatcher.generateStream(
       {
         ...buildDirectRequest(input, route.model, outputSchema, answerKind, abortSignal),
@@ -379,7 +391,9 @@ function parseProviderRoute(model: string | undefined): { provider?: string; mod
   }
 
   const [provider, routedModel] = model.split("/", 2);
+
   if (!provider || !routedModel) throw new ProcessError("unknown model");
+
   return { provider, model: routedModel };
 }
 
@@ -408,11 +422,13 @@ export function buildAndValidateStrictOutputSchema(
   // Anthropic은 원본 스키마를 검증한 뒤 프롬프트로 전달하고, 응답 검증은 소비자에 맡긴다.
   if (provider === "anthropic") {
     parseAndValidateCallerSchemas(input);
+
     return undefined;
   }
 
   const outputSchema = buildStrictOutputSchema(input, provider);
   serializeAndValidateDispatchSchema(outputSchema, provider);
+
   return outputSchema;
 }
 
@@ -431,6 +447,7 @@ export function completedDriverFromImageFailure(
   serviceTier?: string,
 ): QueryOutput | undefined {
   if (!(error instanceof ImageGenerationError) || !error.completedDriver) return undefined;
+
   return applyToolCallEmulation(toEmulationResult(error.completedDriver, serviceTier), undefined, {
     answerKind: "text",
   });
@@ -445,6 +462,7 @@ function toEmulationResult(
   // positive provider cost (Claude Code total_cost_usd) wins over the price table.
   const hasProviderCost =
     result.costUsd !== undefined && (result.costSource === "provider" || result.costUsd > 0);
+
   return {
     text: result.text,
     tokenName: result.tokenName,

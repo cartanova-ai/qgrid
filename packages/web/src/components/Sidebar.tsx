@@ -30,6 +30,7 @@ export default function Sidebar({ className }: SidebarProps) {
             <div className="space-y-0.5">
               {section.items.map((item) => {
                 const active = isNavItemActive(item.path, pathname);
+
                 return (
                   <Link
                     key={item.path}

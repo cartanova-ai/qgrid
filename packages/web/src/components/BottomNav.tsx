@@ -17,6 +17,7 @@ export function BottomNav() {
       <div className="flex">
         {NAV_ITEMS.map((item) => {
           const active = isNavItemActive(item.path, pathname);
+
           return (
             <Link
               key={item.path}

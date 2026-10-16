@@ -43,6 +43,7 @@ class RequestLogStepModelClass extends BaseModelClass<
       page: 1,
       queryMode: "list",
     });
+
     if (!rows[0]) {
       throw new NotFoundException(SD("error.entityNotFound")("RequestLogStep", id));
     }

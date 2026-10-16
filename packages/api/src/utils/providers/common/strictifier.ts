@@ -35,10 +35,13 @@ export function strictify(schema: JsonSchema, options: StrictifierOptions = {}):
   if (options.provider === "openai" || options.provider === "anthropic") {
     assertNormalizationCompatibility(schema, options.provider);
   }
+
   const result = strictifyNode(schema, "$", options.provider);
+
   if (options.provider === "openai" || options.provider === "anthropic") {
     assertNormalizationCompatibility(result, options.provider);
   }
+
   return result;
 }
 
@@ -70,6 +73,7 @@ function positionEntries(keywords: readonly string[]): ReadonlyArray<readonly [s
 
 const SCHEMA_SCAN_MAP_KEYWORDS = positionEntries(SCHEMA_MAP_KEYWORDS);
 const SCHEMA_SCAN_ARRAY_KEYWORDS = positionEntries(SCHEMA_ARRAY_KEYWORDS);
+
 // items/additionalItems 는 tuple 분기에서 직접 다루므로 단일 위치 스캔에서 제외한다.
 const SCHEMA_SCAN_SINGLE_KEYWORDS = positionEntries(
   SCHEMA_SINGLE_KEYWORDS.filter((keyword) => keyword !== "items" && keyword !== "additionalItems"),
@@ -88,6 +92,7 @@ function assertNormalizationCompatibility(
   provider: "openai" | "anthropic",
 ): void {
   const references: Array<{ value: string; path: string }> = [];
+
   const stack: Array<{ node: JsonSchema; path: string; normalizable: boolean }> = [
     { node: schema, path: "$", normalizable: true },
   ];
@@ -104,18 +109,21 @@ function assertNormalizationCompatibility(
 
     if (legacyTuple || prefixTuple) {
       const tuple = (legacyTuple ? itemsValue : prefixItemsValue) as unknown[];
+
       if (provider === "anthropic" && tuple.length > 0) {
         throw new StrictifierError(
           "positional tuple schemas are not supported on Anthropic because Claude Code cannot preserve item positions",
           current.path,
         );
       }
+
       if (!current.normalizable) {
         throw new StrictifierError(
           "positional tuple schemas are not supported in this schema position",
           current.path,
         );
       }
+
       if (ownValue(current.node, "type") !== "array") {
         throw new StrictifierError(
           'positional tuple schemas must declare type "array"; express nullable tuples with anyOf',
@@ -126,7 +134,9 @@ function assertNormalizationCompatibility(
 
     for (const [keyword, keywordNormalizable] of SCHEMA_SCAN_MAP_KEYWORDS) {
       const schemas = ownValue(current.node, keyword);
+
       if (!isSchemaObject(schemas)) continue;
+
       for (const [name, child] of Object.entries(schemas)) {
         if (!isSchemaObject(child)) continue;
         stack.push({
@@ -138,6 +148,7 @@ function assertNormalizationCompatibility(
     }
 
     const dependencies = ownValue(current.node, "dependencies");
+
     if (isSchemaObject(dependencies)) {
       for (const [name, child] of Object.entries(dependencies)) {
         if (!isSchemaObject(child)) continue;
@@ -151,9 +162,12 @@ function assertNormalizationCompatibility(
 
     for (const [keyword, keywordNormalizable] of SCHEMA_SCAN_ARRAY_KEYWORDS) {
       const schemas = ownValue(current.node, keyword);
+
       if (!Array.isArray(schemas)) continue;
+
       for (let index = 0; index < schemas.length; index += 1) {
         const child = schemas[index];
+
         if (!isSchemaObject(child)) continue;
         stack.push({
           node: child,
@@ -164,6 +178,7 @@ function assertNormalizationCompatibility(
     }
 
     const items = ownValue(current.node, "items");
+
     if (isSchemaObject(items)) {
       stack.push({
         node: items,
@@ -173,6 +188,7 @@ function assertNormalizationCompatibility(
     } else if (Array.isArray(items)) {
       for (let index = 0; index < items.length; index += 1) {
         const child = items[index];
+
         if (!isSchemaObject(child)) continue;
         stack.push({
           node: child,
@@ -183,6 +199,7 @@ function assertNormalizationCompatibility(
     }
 
     const additionalItems = ownValue(current.node, "additionalItems");
+
     if (isSchemaObject(additionalItems)) {
       stack.push({
         node: additionalItems,
@@ -193,6 +210,7 @@ function assertNormalizationCompatibility(
 
     for (const [keyword, keywordNormalizable] of SCHEMA_SCAN_SINGLE_KEYWORDS) {
       const child = ownValue(current.node, keyword);
+
       if (!isSchemaObject(child)) continue;
       stack.push({
         node: child,
@@ -220,9 +238,11 @@ function collectSchemaReference(
   if (!Object.hasOwn(current.node, "$ref")) return;
 
   const reference = current.node.$ref;
+
   if (typeof reference !== "string") {
     throw new StrictifierError("$ref must be a string", `${current.path}.$ref`);
   }
+
   if (!current.normalizable) {
     throw new StrictifierError(
       "schema references are not supported in this schema position",
@@ -239,28 +259,33 @@ function assertReferenceTargets(
 ): void {
   for (const reference of references) {
     const tokens = parseLocalJsonPointer(reference.value, reference.path);
+
     if (!isDefinitionRootPointer(tokens)) {
       throw new StrictifierError(
         "$ref target must be the document root or a definition root",
         reference.path,
       );
     }
+
     resolveDefinitionRoot(root, tokens, reference.path);
   }
 }
 
 function isDefinitionRootPointer(tokens: string[]): boolean {
   if (tokens.length === 0) return true;
+
   if (tokens.length % 2 !== 0) return false;
 
   for (let index = 0; index < tokens.length; index += 2) {
     if (tokens[index] !== "$defs" && tokens[index] !== "definitions") return false;
   }
+
   return true;
 }
 
 function parseLocalJsonPointer(reference: string, path: string): string[] {
   if (reference === "#") return [];
+
   if (!reference.startsWith("#/")) {
     throw new StrictifierError(
       "only local root-relative JSON Pointer $ref values are supported",
@@ -269,11 +294,13 @@ function parseLocalJsonPointer(reference: string, path: string): string[] {
   }
 
   let fragment: string;
+
   try {
     fragment = decodeURIComponent(reference.slice(1));
   } catch {
     throw new StrictifierError("$ref contains invalid percent encoding", path);
   }
+
   if (!fragment.startsWith("/")) {
     throw new StrictifierError(
       "only local root-relative JSON Pointer $ref values are supported",
@@ -289,31 +316,39 @@ function parseLocalJsonPointer(reference: string, path: string): string[] {
 
 function resolveDefinitionRoot(root: JsonSchema, tokens: string[], path: string): void {
   let current = root;
+
   for (let index = 0; index < tokens.length; index += 2) {
     const keyword = tokens[index]!;
     const name = tokens[index + 1]!;
     const definitions = ownValue(current, keyword);
+
     if (!isSchemaObject(definitions) || !Object.hasOwn(definitions, name)) {
       throw new StrictifierError("$ref does not resolve inside the caller schema", path);
     }
+
     const target = definitions[name];
+
     if (!isSchemaObject(target)) {
       throw new StrictifierError("$ref target must be an object schema", path);
     }
+
     current = target;
   }
 }
 
 function decodeJsonPointerToken(rawToken: string, path: string): string {
   let token = "";
+
   for (let index = 0; index < rawToken.length; index += 1) {
     const character = rawToken[index]!;
+
     if (character !== "~") {
       token += character;
       continue;
     }
 
     const escaped = rawToken[index + 1];
+
     if (escaped === "0") {
       token += "~";
     } else if (escaped === "1") {
@@ -321,8 +356,10 @@ function decodeJsonPointerToken(rawToken: string, path: string): string {
     } else {
       throw new StrictifierError("$ref contains an invalid JSON Pointer escape", path);
     }
+
     index += 1;
   }
+
   return token;
 }
 
@@ -353,6 +390,7 @@ function strictifySchemaMaps(node: JsonSchema, path: string, provider?: string):
 
   for (const keyword of DEFINITION_MAP_KEYWORDS) {
     const schemas = ownValue(node, keyword);
+
     if (!isSchemaObject(schemas)) continue;
 
     result[keyword] = Object.fromEntries(
@@ -376,6 +414,7 @@ function strictifySchemaArrays(node: JsonSchema, path: string, provider?: string
 
   for (const keyword of COMBINATOR_KEYWORDS) {
     const schemas = ownValue(node, keyword);
+
     if (!schemas) continue;
     result[keyword] = (schemas as JsonSchema[]).map((schema, index) =>
       strictifyNode(schema, `${path}.${keyword}[${index}]`, provider),
@@ -387,6 +426,7 @@ function strictifySchemaArrays(node: JsonSchema, path: string, provider?: string
 
 function strictifyObject(node: JsonSchema, path: string, provider?: string): JsonSchema {
   const properties = ownValue(node, "properties") as Record<string, JsonSchema> | undefined;
+
   if (!properties) {
     return { ...node, additionalProperties: false };
   }
@@ -436,6 +476,7 @@ function strictifyArray(node: JsonSchema, path: string, provider?: string): Json
   }
 
   const prefixItems = ownValue(node, "prefixItems") as JsonSchema[] | undefined;
+
   if (Array.isArray(prefixItems)) {
     result.prefixItems = prefixItems.map((schema, index) =>
       strictifyNode(schema, `${path}.prefixItems[${index}]`, provider),
@@ -454,15 +495,18 @@ function normalizeTuple(
   const prefixItems = ownValue(node, "prefixItems");
   const legacyTuple = Array.isArray(items);
   const prefixTuple = Array.isArray(prefixItems);
+
   if (legacyTuple && prefixTuple) {
     throw new StrictifierError("items and prefixItems tuple forms cannot be combined", path);
   }
+
   if (prefixTuple && Object.hasOwn(node, "additionalItems")) {
     throw new StrictifierError("additionalItems cannot be combined with prefixItems", path);
   }
 
   const rawTuple = (legacyTuple ? items : prefixItems) as unknown[];
   const tuplePath = legacyTuple ? `${path}.items` : `${path}.prefixItems`;
+
   const tuple = rawTuple.map((schema, index) => {
     if (!isSchemaObject(schema)) {
       throw new StrictifierError(
@@ -470,21 +514,26 @@ function normalizeTuple(
         `${tuplePath}[${index}]`,
       );
     }
+
     const memberPath = `${tuplePath}[${index}]`;
     const member = strictifyNode(schema, memberPath, provider);
+
     if (!hasProviderSchemaEntryPoint(member)) {
       throw new StrictifierError(
         "tuple member must define a provider-representable schema",
         memberPath,
       );
     }
+
     return member;
   });
 
   const rawTail = legacyTuple ? ownValue(node, "additionalItems") : items;
+
   if (rawTail === true) {
     throw new StrictifierError("an unrestricted tuple rest is not supported", path);
   }
+
   if (rawTail !== undefined && rawTail !== false && !isSchemaObject(rawTail)) {
     throw new StrictifierError("tuple rest must be an object schema or false", path);
   }
@@ -492,9 +541,11 @@ function normalizeTuple(
   const tail = isSchemaObject(rawTail)
     ? strictifyNode(rawTail, legacyTuple ? `${path}.additionalItems` : `${path}.items`, provider)
     : undefined;
+
   if (tail !== undefined && !hasProviderSchemaEntryPoint(tail)) {
     throw new StrictifierError("an unrestricted tuple rest is not supported", path);
   }
+
   const tailMode = tail !== undefined ? "typed" : rawTail === false ? "closed" : "implicit";
   const bounds = normalizeTupleBounds(node, tuple.length, tailMode, path);
   const base = omitKeys(node, ["items", "prefixItems", "additionalItems", "minItems", "maxItems"]);
@@ -518,6 +569,7 @@ function normalizeTupleBounds(
 ): { minItems: number; maxItems?: number } {
   const callerMinItems = integerBound(ownValue(node, "minItems"), "minItems", path);
   const callerMaxItems = integerBound(ownValue(node, "maxItems"), "maxItems", path);
+
   if (tailMode === "implicit" && callerMaxItems !== undefined && callerMaxItems > tupleLength) {
     throw new StrictifierError(
       "implicit tuple rest cannot be represented when maxItems exceeds the tuple length",
@@ -526,6 +578,7 @@ function normalizeTupleBounds(
   }
 
   const minItems = callerMinItems ?? (callerMaxItems === undefined ? tupleLength : 0);
+
   const maxItems =
     tailMode === "typed" ? callerMaxItems : Math.min(callerMaxItems ?? tupleLength, tupleLength);
 
@@ -541,9 +594,11 @@ function normalizeTupleBounds(
 
 function integerBound(value: unknown, keyword: string, path: string): number | undefined {
   if (value === undefined) return undefined;
+
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     throw new StrictifierError(`${keyword} must be a non-negative safe integer`, path);
   }
+
   return value as number;
 }
 
@@ -570,6 +625,7 @@ function hasProviderSchemaEntryPoint(schema: JsonSchema): boolean {
 
 function omitKeys(node: JsonSchema, keys: readonly string[]): JsonSchema {
   const omitted = new Set(keys);
+
   return Object.fromEntries(Object.entries(node).filter(([key]) => !omitted.has(key)));
 }
 
@@ -577,18 +633,24 @@ function makeNullable(schema: JsonSchema): JsonSchema {
   if (ownValue(schema, "type") === "null") return schema;
 
   const anyOf = ownValue(schema, "anyOf");
+
   if (anyOf) {
     const variants = anyOf as JsonSchema[];
     const hasNull = variants.some((v) => ownValue(v, "type") === "null");
+
     if (hasNull) return schema;
+
     return { anyOf: [...variants, { type: "null" }] };
   }
 
   const oneOf = ownValue(schema, "oneOf");
+
   if (oneOf) {
     const variants = oneOf as JsonSchema[];
     const hasNull = variants.some((v) => ownValue(v, "type") === "null");
+
     if (hasNull) return schema;
+
     return { oneOf: [...variants, { type: "null" }] };
   }
 

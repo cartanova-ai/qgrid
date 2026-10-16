@@ -52,12 +52,14 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
 
   const emit = (text: string) => {
     if (discard || text === "") return;
+
     if (action === "answer") out += text;
     else pending += text;
   };
 
   const resolveAction = (value: string) => {
     if (action !== null) return;
+
     if (value === "answer") {
       action = "answer";
       out += pending;
@@ -108,11 +110,14 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
 
   const endString = () => {
     inString = false;
+
     if (stringIsKey) {
       currentKey = keyBuf;
       mode = "colon";
+
       return;
     }
+
     if (capture === "action") resolveAction(actionBuf);
     capture = "none";
     mode = "afterValue";
@@ -122,6 +127,7 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
   const endRaw = (reprocessChar?: string) => {
     rawActive = false;
     mode = "afterValue";
+
     if (reprocessChar !== undefined) step(reprocessChar);
   };
 
@@ -132,24 +138,32 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
         // 방출해봤자 pending 에서 폐기된다. 그래도 흘리지 않는 게 안전.
         return;
       }
+
       rawIsLiteral = false;
       endRaw(c);
+
       return;
     }
+
     emit(c);
+
     if (rawInString) {
       if (rawEscape) rawEscape = false;
       else if (c === "\\") rawEscape = true;
       else if (c === '"') {
         rawInString = false;
+
         if (rawDepth === 0) endRaw(); // answer 가 단일 문자열이었던 경우
       }
+
       return;
     }
+
     if (c === '"') rawInString = true;
     else if (c === "{" || c === "[") rawDepth++;
     else if (c === "}" || c === "]") {
       rawDepth--;
+
       if (rawDepth === 0) endRaw();
     }
   };
@@ -165,6 +179,7 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
       rawInString = false;
       rawEscape = false;
       rawIsLiteral = false;
+
       if (c === "{" || c === "[") {
         rawDepth = 1;
         emit(c);
@@ -174,6 +189,7 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
       } else {
         rawIsLiteral = true; // null 등 — 방출 없이 소비
       }
+
       return;
     }
 
@@ -182,6 +198,7 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
       stringIsKey = false;
       escape = false;
       unicode = null;
+
       if (watchedAction) {
         capture = "action";
         actionBuf = "";
@@ -190,30 +207,40 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
       } else {
         capture = "none";
       }
+
       return;
     }
+
     if (c === "{") {
       stack.push({ type: "object", openedAtKey: currentKey });
       currentKey = null;
       mode = "key";
+
       return;
     }
+
     if (c === "[") {
       stack.push({ type: "array", openedAtKey: currentKey });
       currentKey = null;
       mode = "value";
+
       return;
     }
+
     if (c === "]" && stack[stack.length - 1]?.type === "array") {
       // 빈 배열 []
       stack.pop();
       mode = "afterValue";
+
       return;
     }
+
     if (LITERAL_CHARS.test(c)) {
       mode = "literal";
+
       return;
     }
+
     // 인식 불가 입력 — 미리보기 포기 (done 폴백이 커버).
     discard = true;
   };
@@ -223,46 +250,66 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
 
     if (rawActive) {
       rawStep(c);
+
       return;
     }
 
     if (inString) {
       if (unicode !== null) {
         unicode += c;
+
         if (unicode.length === 4) {
           const code = Number.parseInt(unicode, 16);
           unicode = null;
+
           if (Number.isNaN(code)) {
             discard = true;
+
             return;
           }
+
           deliverStringChar(String.fromCharCode(code));
         }
+
         return;
       }
+
       if (escape) {
         escape = false;
+
         if (c === "u") {
           unicode = "";
+
           return;
         }
+
         const mapped = ESCAPE_MAP[c];
+
         if (mapped === undefined) {
           discard = true;
+
           return;
         }
+
         deliverStringChar(mapped);
+
         return;
       }
+
       if (c === "\\") {
         escape = true;
+
         return;
       }
+
       if (c === '"') {
         endString();
+
         return;
       }
+
       deliverStringChar(c);
+
       return;
     }
 
@@ -270,6 +317,7 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
       if (LITERAL_CHARS.test(c)) return;
       mode = "afterValue";
       step(c);
+
       return;
     }
 
@@ -278,6 +326,7 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
     switch (mode) {
       case "value":
         startValue(c);
+
         return;
       case "key":
         if (c === '"') {
@@ -292,6 +341,7 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
         } else {
           discard = true;
         }
+
         return;
       case "colon":
         if (c === ":") {
@@ -300,14 +350,18 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
         } else {
           discard = true;
         }
+
         return;
       case "afterValue":
         if (c === ",") {
           const frame = stack[stack.length - 1];
+
           if (!frame) {
             discard = true;
+
             return;
           }
+
           currentKey = null;
           mode = frame.type === "object" ? "key" : "value";
         } else if (c === "}" || c === "]") {
@@ -316,6 +370,7 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
         } else {
           discard = true;
         }
+
         return;
     }
   };
@@ -323,12 +378,16 @@ export function createEnvelopeStreamParser(answerKind: EnvelopeAnswerKind): Enve
   return {
     push(chunk: string): string {
       if (discard) return "";
+
       for (const c of chunk) {
         step(c);
+
         if (discard) break;
       }
+
       const emitted = out;
       out = "";
+
       return emitted;
     },
   };

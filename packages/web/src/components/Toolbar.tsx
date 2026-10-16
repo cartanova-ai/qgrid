@@ -15,6 +15,7 @@ function getBreadcrumb(pathname: string): {
   if (pathname.startsWith("/requests/show")) {
     return { parent: "Request Logs", parentPath: "/logs", current: "Detail" };
   }
+
   return { current: ROUTE_TITLES[pathname] ?? pathname };
 }
 
