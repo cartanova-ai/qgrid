@@ -8,6 +8,8 @@ import {
   type ImageGenerationMetadata,
   type ImageGenerationOptions,
   type QgridContent,
+  type ReasoningSummary,
+  type Verbosity,
 } from "../../../application/qgrid/qgrid.types";
 import {
   type GrokImageEditRequest,
@@ -100,8 +102,8 @@ export interface GenerateRequest {
   stopAfterOutputMessage?: (text: string, phase?: string) => boolean;
   effort?: string;
   thinking?: boolean;
-  verbosity?: string;
-  reasoningSummary?: string;
+  verbosity?: Verbosity;
+  reasoningSummary?: ReasoningSummary;
   serviceTier?: string;
   // provider 실행 제한(ms). Queue selection 이후의 active provider request 전체에 적용한다.
   timeoutMs?: number;

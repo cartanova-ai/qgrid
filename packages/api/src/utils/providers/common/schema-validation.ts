@@ -1,6 +1,8 @@
 import { Buffer } from "node:buffer";
 
-import { type JsonValue } from "./provider-types";
+import { z } from "zod";
+
+import { isJsonObject, type JsonValue } from "./provider-types";
 
 /**
  * Caller-provided schemas are serialized, copied, and recursively normalized before dispatch.
@@ -49,34 +51,39 @@ export function parseAndValidateCallerSchemas(input: CallerSchemasInput): JsonVa
   if (input.jsonSchema !== undefined) {
     addUtf8Bytes(Buffer.byteLength(input.jsonSchema, "utf8"), "jsonSchema", state);
 
-    let parsed: unknown;
+    let parsed: JsonValue;
 
     try {
+      // JSON.parse without a reviver yields only JSON values.
       parsed = JSON.parse(input.jsonSchema);
     } catch {
       throw new CallerSchemaValidationError("jsonSchema must contain valid JSON");
     }
 
-    if (!isRecord(parsed) || parsed.type !== "object") {
+    if (!isJsonObject(parsed) || parsed.type !== "object") {
       throw new CallerSchemaValidationError('jsonSchema top-level type must be "object"');
     }
 
-    addComplexity(parsed, "jsonSchema", state);
+    complexityWalk("jsonSchema", state, false).parse(parsed);
     state.schemas += 1;
-    outputSchema = parsed as JsonValue;
+    outputSchema = parsed;
   }
 
   for (const [index, tool] of (input.tools ?? []).entries()) {
     addToolMetadataUtf8Bytes(tool, index, state);
 
     const path = `tools[${index}].inputSchema`;
-    addComplexity(tool.inputSchema, path, state, true);
+    complexityWalk(path, state, true).parse(tool.inputSchema);
 
-    const serialized = stringifyJsonOrThrow(tool.inputSchema, path);
+    const serialized = callerJsonText.safeParse(tool.inputSchema);
+
+    if (!serialized.success) {
+      throw new CallerSchemaValidationError(`${path} must be JSON-serializable`);
+    }
 
     // buildToolCallSchema embeds this serialization inside another JSON string. Charge the
     // escaped outer-string representation before that composed description is materialized.
-    addUtf8Bytes(jsonStringContentUtf8ByteUpperBound(serialized), path, state);
+    addUtf8Bytes(jsonStringContentUtf8ByteUpperBound(serialized.data), path, state);
     state.schemas += 1;
   }
 
@@ -84,7 +91,7 @@ export function parseAndValidateCallerSchemas(input: CallerSchemasInput): JsonVa
 }
 
 export function serializeAndValidateDispatchSchema(
-  schema: unknown,
+  schema: JsonValue | undefined,
   provider?: string,
 ): string | undefined {
   if (schema === undefined) return undefined;
@@ -114,7 +121,29 @@ export function assertAnthropicSchemaArgvSize(jsonSchema: string): void {
   }
 }
 
-function stringifyJsonOrThrow(value: unknown, subject: string): string {
+/**
+ * Decodes an opaque caller value (QgridTool.inputSchema is z.unknown() at the API boundary) into
+ * its JSON text. Cycles, BigInt, and values with no JSON form (bare undefined, functions) fail.
+ */
+const callerJsonText = z.unknown().transform((value, context): string => {
+  let serialized: string | undefined;
+
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    serialized = undefined;
+  }
+
+  if (serialized === undefined) {
+    context.addIssue({ code: "custom", message: "value is not JSON-serializable" });
+
+    return z.NEVER;
+  }
+
+  return serialized;
+});
+
+function stringifyJsonOrThrow(value: JsonValue, subject: string): string {
   let serialized: string | undefined;
 
   try {
@@ -221,71 +250,87 @@ function jsonStringContentUtf8ByteUpperBound(value: string): number {
   return bytes;
 }
 
-function addComplexity(
-  root: unknown,
-  path: string,
-  state: ComplexityState,
-  precheckUtf8Bytes = false,
-): void {
-  const rawUtf8Bytes = { value: 0 };
+/**
+ * Bounded, iterative walk over a caller schema, run before anything materializes its
+ * serialization. Values are read one at a time, in key order, so a limit stops the walk before
+ * later values (including getters) are touched. That rules out decoding each value with a schema
+ * first; nodes are classified by identity instead: Object(value) === value holds exactly for
+ * objects, arrays, and functions.
+ */
+function complexityWalk(path: string, state: ComplexityState, precheckUtf8Bytes: boolean) {
+  return z.unknown().transform((root): void => {
+    const rawUtf8Bytes = { value: 0 };
 
-  if (precheckUtf8Bytes && typeof root === "string") {
-    addRawUtf8LowerBound(root, path, state, rawUtf8Bytes);
-  }
+    if (precheckUtf8Bytes && isPrimitiveText(root)) {
+      addRawUtf8LowerBound(root, path, state, rawUtf8Bytes);
+    }
 
-  addNode(path, state);
+    addNode(path, state);
 
-  if (root === null || typeof root !== "object") return;
+    if (root === null || root === undefined || Object(root) !== root) return;
 
-  const stack: Array<{ value: Record<string, unknown> | unknown[]; depth: number }> = [
-    { value: root as Record<string, unknown> | unknown[], depth: 0 },
-  ];
+    const rootObject: object = Object(root);
+    const stack: Array<{ value: object; depth: number }> = [{ value: rootObject, depth: 0 }];
 
-  while (stack.length > 0) {
-    const current = stack.pop()!;
+    while (stack.length > 0) {
+      const current = stack.pop()!;
 
-    if (Array.isArray(current.value)) {
-      for (let index = 0; index < current.value.length; index += 1) {
+      if (Array.isArray(current.value)) {
+        for (let index = 0; index < current.value.length; index += 1) {
+          const depth = current.depth + 1;
+          assertDepthWithinLimit(depth, path);
+          addNode(path, state);
+
+          const child: unknown = current.value[index];
+
+          if (precheckUtf8Bytes && isPrimitiveText(child)) {
+            addRawUtf8LowerBound(child, path, state, rawUtf8Bytes);
+          }
+
+          if (child !== null && child !== undefined && Object(child) === child) {
+            stack.push({ value: Object(child), depth });
+          }
+        }
+
+        continue;
+      }
+
+      for (const key in current.value) {
+        if (!Object.hasOwn(current.value, key)) continue;
+
+        if (precheckUtf8Bytes) {
+          addRawUtf8LowerBound(key, path, state, rawUtf8Bytes);
+        }
+
         const depth = current.depth + 1;
         assertDepthWithinLimit(depth, path);
         addNode(path, state);
 
-        const child = current.value[index];
+        // Same read as current.value[key] for an own property: data value, or the getter's result.
+        const descriptor = Object.getOwnPropertyDescriptor(current.value, key);
 
-        if (precheckUtf8Bytes && typeof child === "string") {
+        const child: unknown = descriptor?.get
+          ? descriptor.get.call(current.value)
+          : descriptor?.value;
+
+        if (precheckUtf8Bytes && isPrimitiveText(child)) {
           addRawUtf8LowerBound(child, path, state, rawUtf8Bytes);
         }
 
-        if (child !== null && typeof child === "object") {
-          stack.push({ value: child as Record<string, unknown> | unknown[], depth });
+        if (child !== null && child !== undefined && Object(child) === child) {
+          stack.push({ value: Object(child), depth });
         }
       }
-
-      continue;
     }
+  });
+}
 
-    for (const key in current.value) {
-      if (!Object.hasOwn(current.value, key)) continue;
-
-      if (precheckUtf8Bytes) {
-        addRawUtf8LowerBound(key, path, state, rawUtf8Bytes);
-      }
-
-      const depth = current.depth + 1;
-      assertDepthWithinLimit(depth, path);
-      addNode(path, state);
-
-      const child = current.value[key];
-
-      if (precheckUtf8Bytes && typeof child === "string") {
-        addRawUtf8LowerBound(child, path, state, rawUtf8Bytes);
-      }
-
-      if (child !== null && typeof child === "object") {
-        stack.push({ value: child as Record<string, unknown> | unknown[], depth });
-      }
-    }
-  }
+/**
+ * String test for the bounded walk. A failed zod parse builds a ZodError (which serializes the
+ * input), so the walk uses identity: a primitive whose String() form is itself is a string.
+ */
+function isPrimitiveText(value: unknown): value is string {
+  return Object(value) !== value && String(value) === value;
 }
 
 function addRawUtf8LowerBound(
@@ -328,8 +373,4 @@ function throwLimitError(
       ? `${path} exceeds ${kind} limit of ${limit}`
       : `caller schemas exceed aggregate ${kind} limit of ${limit}`,
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

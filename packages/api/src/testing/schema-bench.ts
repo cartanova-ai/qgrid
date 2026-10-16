@@ -12,6 +12,13 @@
  *      syntax/contract 와 겹칠 수 있고, 게이트 계수는 이 축 기준이다.
  */
 import Ajv2020, { type ValidateFunction } from "ajv/dist/2020";
+import { z } from "zod";
+
+import {
+  isJsonObject,
+  type JsonObject,
+  type JsonValue,
+} from "../utils/providers/common/provider-types";
 
 export type BenchMode = "generate" | "stream";
 
@@ -26,14 +33,17 @@ export interface BenchClassifyOptions {
    * 검증한다 — top-level 키 존재만 보면 `{"scenes":[{},{},{}]}` 같은 속 빈 응답이
    * 통과한다(SON-495 교훈: 상위 키 판정은 쓰레기를 통과시킨다).
    */
-  schema?: unknown;
+  schema?: JsonValue;
   /** 최상위에 반드시 있어야 하는 키 (schema 미지정 시의 최소 검증) */
   requiredTopLevelKeys?: string[];
   /** 허용되는 최상위 키 전체 — 래퍼 키 판정에 사용 */
   allowedTopLevelKeys?: string[];
   /** fixture 별 추가 계약 검증. 실패 사유 문자열을 반환하면 contract fail. */
-  validate?: (parsed: unknown, rawText: string) => string | undefined;
+  validate?: (parsed: JsonValue, rawText: string) => string | undefined;
 }
+
+// Ajv reports enum violations with the allowed values in `params.allowedValues`.
+const EnumErrorParams = z.looseObject({ allowedValues: z.array(z.json()).optional() });
 
 /**
  * 표준 JSON Schema 검증 (Ajv, Draft 2020-12). 위반 경로 목록을 반환한다.
@@ -43,22 +53,25 @@ export interface BenchClassifyOptions {
  * 뒤집혔다(anyOf 브랜치 내부의 enum 위반을 통째로 건너뜀). 임의 스키마(BENCH_SCHEMA_FILE)
  * 를 게이트로 쓰려면 표준 검증기가 유일하게 신뢰 가능하다.
  */
-export function validateAgainstSchema(node: unknown, schema: unknown): string[] {
-  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return [];
-  const validate = compileSchema(schema as Record<string, unknown>);
+export function validateAgainstSchema(node: JsonValue, schema: JsonValue): string[] {
+  if (!isJsonObject(schema)) return [];
+  const validate = compileSchema(schema);
 
   if (validate(node)) return [];
 
-  return (validate.errors ?? []).map(
-    (e) =>
-      `${e.instancePath || "$"}: ${e.message ?? e.keyword}${e.keyword === "enum" ? ` (${JSON.stringify((e.params as { allowedValues?: unknown[] }).allowedValues?.slice(0, 8))})` : ""}`,
-  );
+  return (validate.errors ?? []).map((e) => {
+    const allowed = EnumErrorParams.safeParse(e.params).data?.allowedValues;
+
+    const enumDetail = e.keyword === "enum" ? ` (${JSON.stringify(allowed?.slice(0, 8))})` : "";
+
+    return `${e.instancePath || "$"}: ${e.message ?? e.keyword}${enumDetail}`;
+  });
 }
 
 const compiledSchemas = new WeakMap<object, ValidateFunction>();
 let ajvInstance: Ajv2020 | undefined;
 
-function compileSchema(schema: Record<string, unknown>): ValidateFunction {
+function compileSchema(schema: JsonObject): ValidateFunction {
   const cached = compiledSchemas.get(schema);
 
   if (cached) return cached;
@@ -108,18 +121,23 @@ export function classifyBenchText(
   if (options.plainText) {
     const reason = options.validate?.(text, text);
 
-    return {
+    const classification: BenchClassification = {
       syntax: "ok",
       contract: reason === undefined ? "ok" : "fail",
-      ...(reason === undefined ? {} : { contractDetail: reason }),
       topLevel: { wrapperKey: false, fenceResidue, prose: false },
     };
+
+    if (reason !== undefined) classification.contractDetail = reason;
+
+    return classification;
   }
 
-  let parsed: unknown;
+  // Placeholder until parsing succeeds; it is read only when `syntax` stays "ok".
+  let parsed: JsonValue = null;
   let syntax: "ok" | "fail" = "ok";
 
   try {
+    // JSON.parse without a reviver yields only JSON values.
     parsed = JSON.parse(text);
   } catch {
     syntax = "fail";
@@ -132,19 +150,14 @@ export function classifyBenchText(
   let contractDetail: string | undefined;
 
   if (syntax === "ok") {
-    const record =
-      parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : undefined;
+    const record = isJsonObject(parsed) ? parsed : undefined;
 
     if (record && options.allowedTopLevelKeys) {
       const keys = Object.keys(record);
       const allowed = new Set(options.allowedTopLevelKeys);
+      const only = record[keys[0]!];
       wrapperKey =
-        keys.length === 1 &&
-        !allowed.has(keys[0]!) &&
-        typeof record[keys[0]!] === "object" &&
-        record[keys[0]!] !== null;
+        keys.length === 1 && !allowed.has(keys[0]!) && (isJsonObject(only) || Array.isArray(only));
     }
 
     contract = "ok";
@@ -228,6 +241,33 @@ export function checkpointKey(
   return `${record.model}|${record.fixture}|${record.fixtureHash ?? "-"}|${record.mode}|${record.iteration}`;
 }
 
+const TopLevelViolationsSchema = z.object({
+  wrapperKey: z.boolean(),
+  fenceResidue: z.boolean(),
+  prose: z.boolean(),
+});
+
+const BenchRecordSchema = z.object({
+  fixture: z.string(),
+  fixtureHash: z.string().optional(),
+  model: z.string(),
+  mode: z.enum(["generate", "stream"]),
+  iteration: z.number(),
+  transportError: z.string().optional(),
+  classification: z
+    .object({
+      syntax: z.enum(["ok", "fail"]),
+      contract: z.enum(["ok", "fail", "n/a"]),
+      contractDetail: z.string().optional(),
+      topLevel: TopLevelViolationsSchema,
+    })
+    .optional(),
+  deltaDoneMismatch: z.boolean().optional(),
+  durationMs: z.number(),
+  outputTokens: z.number().optional(),
+  costUsd: z.number().optional(),
+}) satisfies z.ZodType<BenchRecord>;
+
 /** JSONL checkpoint 파일 파싱. 깨진 줄(중단 시 부분 기록)은 건너뛴다. */
 export function parseCheckpointLines(jsonl: string): Map<string, BenchRecord> {
   const map = new Map<string, BenchRecord>();
@@ -236,8 +276,10 @@ export function parseCheckpointLines(jsonl: string): Map<string, BenchRecord> {
     if (!line.trim()) continue;
 
     try {
-      const record = JSON.parse(line) as BenchRecord;
-      map.set(checkpointKey(record), record);
+      const record = BenchRecordSchema.safeParse(JSON.parse(line));
+
+      // A line that does not match the record shape is skipped like a partial write.
+      if (record.success) map.set(checkpointKey(record.data), record.data);
     } catch {
       // 부분 기록된 마지막 줄 — resume 시 해당 조합만 재발사된다
     }
@@ -269,19 +311,28 @@ export interface BenchAggregateRow {
 }
 
 export function aggregateBench(records: BenchRecord[]): BenchAggregateRow[] {
-  const groups = new Map<string, BenchRecord[]>();
+  const groups = new Map<
+    string,
+    { model: string; fixture: string; mode: BenchMode; bucket: BenchRecord[] }
+  >();
 
   for (const record of records) {
     const key = `${record.model}|${record.fixture}|${record.mode}`;
-    const bucket = groups.get(key);
+    const group = groups.get(key);
 
-    if (bucket) bucket.push(record);
-    else groups.set(key, [record]);
+    if (group) group.bucket.push(record);
+    else {
+      groups.set(key, {
+        model: record.model,
+        fixture: record.fixture,
+        mode: record.mode,
+        bucket: [record],
+      });
+    }
   }
 
-  return [...groups.entries()]
-    .map(([key, bucket]) => {
-      const [model, fixture, mode] = key.split("|") as [string, string, BenchMode];
+  return [...groups.values()]
+    .map(({ model, fixture, mode, bucket }) => {
       const transportErrors = bucket.filter((r) => r.transportError !== undefined).length;
       const syntaxFails = bucket.filter((r) => r.classification?.syntax === "fail").length;
       const contractFails = bucket.filter((r) => r.classification?.contract === "fail").length;

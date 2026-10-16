@@ -37,7 +37,7 @@ function parseBlock(block: string): JsonValue | undefined {
 }
 
 /** Parses arbitrary UTF-8/chunk boundaries and all complete SSE event blocks. */
-export async function* parseOpenAISSE(body: ReadableStream<Uint8Array>): AsyncGenerator<unknown> {
+export async function* parseOpenAISSE(body: ReadableStream<Uint8Array>): AsyncGenerator<JsonValue> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";

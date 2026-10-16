@@ -8,6 +8,7 @@ import {
   buildCodexIdentityHeaders,
   buildOpenAIResponsesRequest,
   CHATGPT_CODEX_RESPONSES_URL,
+  type JsonValue,
   normalizeOpenAIEvent,
   OpenAIProtocolError,
   type OpenAINormalizedEvent,
@@ -369,9 +370,10 @@ export class OpenAIWebSocketTransport implements OpenAIResponsesTransport {
               throw new OpenAIProtocolError("OpenAI WebSocket sent an unexpected binary message");
             }
 
-            let raw: unknown;
+            let raw: JsonValue;
 
             try {
+              // JSON.parse without a reviver yields only JSON values.
               raw = JSON.parse(rawDataText(record.data));
             } catch {
               throw new OpenAIProtocolError("OpenAI WebSocket sent invalid JSON");

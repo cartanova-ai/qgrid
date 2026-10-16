@@ -8,11 +8,20 @@
  * The only executable user line is the current input.
  */
 
+import { z } from "zod";
+
 import {
   type ModelFallback,
   type ProviderTokenUsageBreakdown,
 } from "../common/provider-dispatcher";
-import { type JsonValue, type UserInput } from "../common/provider-types";
+import {
+  isJsonObject,
+  type JsonObject,
+  jsonNumber,
+  jsonString,
+  type JsonValue,
+  type UserInput,
+} from "../common/provider-types";
 import { stripFences } from "./fence-strip";
 
 // ── 입력 어댑터 ────────────────────────────────────────────────────
@@ -27,10 +36,7 @@ export interface ClaudeStreamJsonLine {
 }
 
 function userInputToText(input: Array<UserInput>): string {
-  return input
-    .filter((i): i is Extract<UserInput, { type: "text" }> => i.type === "text")
-    .map((i) => i.text)
-    .join("\n");
+  return input.flatMap((i) => (i.type === "text" ? [i.text] : [])).join("\n");
 }
 
 function textBlock(text: string): Array<{ type: "text"; text: string }> {
@@ -43,10 +49,10 @@ function textBlock(text: string): Array<{ type: "text"; text: string }> {
 //   { type:"message", role:"assistant", content:[{type:"output_text", text}] }
 //   { type:"function_call", name, arguments, call_id }
 //   { type:"function_call_output", call_id, output }
-type ResponseItem = { [key: string]: JsonValue | undefined };
+type ResponseItem = JsonObject;
 
 function asObject(v: JsonValue | undefined): ResponseItem | null {
-  return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as ResponseItem) : null;
+  return isJsonObject(v) ? v : null;
 }
 
 function responseItemText(item: ResponseItem): string {
@@ -58,7 +64,7 @@ function responseItemText(item: ResponseItem): string {
     .map((c) => {
       const obj = asObject(c);
 
-      return obj && typeof obj.text === "string" ? obj.text : "";
+      return (obj && jsonString(obj.text)) ?? "";
     })
     .filter(Boolean)
     .join("\n");
@@ -77,15 +83,12 @@ function flattenColdHistory(coldHistory: Array<JsonValue>): string {
     } else if (item.type === "message" && item.role === "user") {
       parts.push(`User: ${responseItemText(item)}`);
     } else if (item.type === "function_call") {
-      const name = typeof item.name === "string" ? item.name : "";
-
-      const args =
-        typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments ?? {});
+      const name = jsonString(item.name) ?? "";
+      const args = jsonString(item.arguments) ?? JSON.stringify(item.arguments ?? {});
 
       parts.push(`Tool call: ${name}(${args})`);
     } else if (item.type === "function_call_output") {
-      const output =
-        typeof item.output === "string" ? item.output : JSON.stringify(item.output ?? "");
+      const output = jsonString(item.output) ?? JSON.stringify(item.output ?? "");
 
       parts.push(`Tool result: ${output}`);
     }
@@ -130,20 +133,21 @@ export function serializeStreamJsonInput(lines: Array<ClaudeStreamJsonLine>): st
 //
 // Claude stdout(JSONL)을 qgrid deltas + final result 로 변환한다.
 
-interface ClaudeUsage {
-  input_tokens?: number;
-  output_tokens?: number;
-  cache_creation_input_tokens?: number;
-  cache_read_input_tokens?: number;
-  cache_creation?: {
-    ephemeral_5m_input_tokens?: number;
-    ephemeral_1h_input_tokens?: number;
-  };
-  iterations?: Array<{
-    type?: string;
-    model?: string;
-  }>;
-}
+// Usage fields are read only when they hold numbers; anything else counts as absent.
+const optionalCount = z.number().optional().catch(undefined);
+
+const ClaudeUsage = z.object({
+  input_tokens: optionalCount,
+  output_tokens: optionalCount,
+  cache_creation_input_tokens: optionalCount,
+  cache_read_input_tokens: optionalCount,
+  cache_creation: z
+    .object({ ephemeral_5m_input_tokens: optionalCount, ephemeral_1h_input_tokens: optionalCount })
+    .optional()
+    .catch(undefined),
+});
+
+type ClaudeUsage = z.infer<typeof ClaudeUsage>;
 
 export interface ClaudeStreamResult {
   text: string;
@@ -194,16 +198,20 @@ function toUsageBreakdown(u: ClaudeUsage): ProviderTokenUsageBreakdown {
   const cacheCreate5m = u.cache_creation?.ephemeral_5m_input_tokens;
   const cacheCreate1h = u.cache_creation?.ephemeral_1h_input_tokens;
 
-  return {
+  const usage: ProviderTokenUsageBreakdown = {
     totalTokens: totalInput + output,
     inputTokens: totalInput,
     cachedInputTokens: cacheRead,
     cacheCreationInputTokens: cacheCreate,
-    ...(typeof cacheCreate5m === "number" ? { cacheCreationInputTokens5m: cacheCreate5m } : {}),
-    ...(typeof cacheCreate1h === "number" ? { cacheCreationInputTokens1h: cacheCreate1h } : {}),
     outputTokens: output,
     reasoningOutputTokens: 0,
   };
+
+  if (cacheCreate5m !== undefined) usage.cacheCreationInputTokens5m = cacheCreate5m;
+
+  if (cacheCreate1h !== undefined) usage.cacheCreationInputTokens1h = cacheCreate1h;
+
+  return usage;
 }
 
 function structuredOutputToolUseText(j: ResponseItem): string | undefined {
@@ -236,7 +244,7 @@ function canonicalEventModel(model: string): string {
 }
 
 function optionalString(value: JsonValue | undefined): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+  return jsonString(value) || undefined;
 }
 
 function recordFallback(state: ClaudeStreamJsonState | undefined, fallback: ModelFallback): void {
@@ -341,13 +349,17 @@ export function handleStreamJsonLine(
 
   if (!trimmed) return null;
 
-  let j: { [key: string]: JsonValue | undefined };
+  let parsed: JsonValue;
 
   try {
-    j = JSON.parse(trimmed) as { [key: string]: JsonValue | undefined };
+    // JSON.parse without a reviver yields only JSON values.
+    parsed = JSON.parse(trimmed);
   } catch {
     return null;
   }
+
+  // Every Claude stream-json line is an object; other JSON values carry no event.
+  const j = asObject(parsed) ?? {};
 
   if (j.type === "stream_event") {
     const event = asObject(j.event);
@@ -370,13 +382,13 @@ export function handleStreamJsonLine(
 
       if (delta) {
         if (structuredOutput) {
-          if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
-            onDelta(delta.partial_json);
-          }
+          const partialJson = jsonString(delta.partial_json);
+
+          if (delta.type === "input_json_delta" && partialJson !== undefined) onDelta(partialJson);
         } else {
-          if (delta.type === "text_delta" && typeof delta.text === "string") {
-            onDelta(delta.text);
-          }
+          const deltaText = jsonString(delta.text);
+
+          if (delta.type === "text_delta" && deltaText !== undefined) onDelta(deltaText);
         }
       }
     }
@@ -444,8 +456,8 @@ export function handleStreamJsonLine(
   }
 
   if (j.type === "result") {
-    const subtype = typeof j.subtype === "string" ? j.subtype : undefined;
-    const terminalReason = typeof j.terminal_reason === "string" ? j.terminal_reason : undefined;
+    const subtype = jsonString(j.subtype);
+    const terminalReason = jsonString(j.terminal_reason);
 
     const resultSucceeded =
       j.is_error !== true &&
@@ -465,7 +477,7 @@ export function handleStreamJsonLine(
     } else if (j.structured_output !== undefined) {
       text = JSON.stringify(j.structured_output);
     } else {
-      text = stripFences(typeof j.result === "string" ? j.result : "");
+      text = stripFences(jsonString(j.result) ?? "");
     }
 
     const rawUsage = asObject(j.usage) ?? {};
@@ -484,7 +496,7 @@ export function handleStreamJsonLine(
       if (resultStopReason === "refusal") state.refusalWithoutFallback = true;
     }
 
-    const usage = toUsageBreakdown(rawUsage as ClaudeUsage);
+    const usage = toUsageBreakdown(ClaudeUsage.parse(rawUsage));
     const quotaExhausted = text.startsWith("You've hit");
 
     // SON-495: 비정상 종료(error_max_structured_output_retries 등)는 정직하게 에러로 처리한다.
@@ -503,8 +515,8 @@ export function handleStreamJsonLine(
     return {
       text,
       usage,
-      durationMs: typeof j.duration_ms === "number" ? j.duration_ms : 0,
-      costUsd: typeof j.total_cost_usd === "number" ? j.total_cost_usd : 0,
+      durationMs: jsonNumber(j.duration_ms) ?? 0,
+      costUsd: jsonNumber(j.total_cost_usd) ?? 0,
       quotaExhausted,
       isError,
       subtype,

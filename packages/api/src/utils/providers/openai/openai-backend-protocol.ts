@@ -1,7 +1,17 @@
 import os from "node:os";
 
+import { z } from "zod";
+
 import { ImageGenerationMetadata } from "../../../application/qgrid/qgrid.types";
 import { type OpenAIEffort } from "../common/effort";
+import {
+  isJsonObject,
+  type JsonObject,
+  type JsonValue,
+  jsonString,
+} from "../common/provider-types";
+
+export { type JsonValue } from "../common/provider-types";
 
 export const CHATGPT_CODEX_RESPONSES_URL =
   "https://chatgpt.com/backend-api/codex/responses" as const;
@@ -39,16 +49,8 @@ export function codexCliUserAgent(platform: CodexUserAgentPlatform = codexPlatfo
   return `codex_cli_rs/${CODEX_CLI_VERSION} (${platform.osType} ${platform.osVersion}; ${platform.architecture}) ${platform.terminal}`;
 }
 
-export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue };
-
 /** Raw Responses API items. Keeping these opaque preserves the complete conversation history. */
-export type OpenAIResponseItem = Record<string, unknown>;
+export type OpenAIResponseItem = JsonObject;
 
 export interface OpenAIOutputSchema {
   name?: string;
@@ -58,7 +60,8 @@ export interface OpenAIOutputSchema {
 export interface OpenAIResponsesOptions {
   model: string;
   instructions?: string;
-  history: readonly OpenAIResponseItem[];
+  /** Raw conversation items, forwarded unchanged. */
+  history: readonly JsonValue[];
   tools?: readonly OpenAIResponseItem[];
   toolChoice?: string | OpenAIResponseItem;
   parallelToolCalls?: boolean;
@@ -76,7 +79,7 @@ export interface OpenAIResponsesOptions {
 export interface OpenAIResponsesRequest {
   model: string;
   instructions?: string;
-  input: OpenAIResponseItem[];
+  input: JsonValue[];
   tools?: OpenAIResponseItem[];
   tool_choice: string | OpenAIResponseItem;
   parallel_tool_calls: boolean;
@@ -86,14 +89,16 @@ export interface OpenAIResponsesRequest {
   include: string[];
   service_tier?: string;
   prompt_cache_key?: string;
-  text?: {
-    verbosity?: "low" | "medium" | "high";
-    format?: {
-      type: "json_schema";
-      strict: true;
-      schema: JsonValue;
-      name: string;
-    };
+  text?: OpenAIResponsesText;
+}
+
+export interface OpenAIResponsesText {
+  verbosity?: "low" | "medium" | "high";
+  format?: {
+    type: "json_schema";
+    strict: true;
+    schema: JsonValue;
+    name: string;
   };
 }
 
@@ -110,57 +115,80 @@ export function buildOpenAIResponsesRequest(
     );
   }
 
-  const text =
-    options.verbosity || options.outputSchema
-      ? {
-          ...(options.verbosity ? { verbosity: options.verbosity } : {}),
-          ...(options.outputSchema
-            ? {
-                format: {
-                  type: "json_schema" as const,
-                  strict: true as const,
-                  schema: options.outputSchema.schema,
-                  name: options.outputSchema.name ?? "codex_output_schema",
-                },
-              }
-            : {}),
-        }
-      : undefined;
-
-  return {
+  const request: OpenAIResponsesRequest = {
     model: options.model,
-    ...(options.instructions ? { instructions: options.instructions } : {}),
     // Copy the array, not its items: raw items must arrive byte-for-byte equivalent.
     input: [...options.history],
-    ...(tools.length ? { tools } : {}),
     tool_choice: options.toolChoice ?? "auto",
     parallel_tool_calls: options.parallelToolCalls ?? true,
     reasoning: options.reasoning ?? null,
     store: false,
     stream: true,
     include: ["reasoning.encrypted_content"],
-    ...(options.serviceTier ? { service_tier: options.serviceTier } : {}),
-    ...(options.promptCacheKey ? { prompt_cache_key: options.promptCacheKey } : {}),
-    ...(text ? { text } : {}),
   };
+
+  if (options.instructions) request.instructions = options.instructions;
+
+  if (tools.length) request.tools = tools;
+
+  if (options.serviceTier) request.service_tier = options.serviceTier;
+
+  if (options.promptCacheKey) request.prompt_cache_key = options.promptCacheKey;
+
+  if (options.verbosity || options.outputSchema) {
+    const text: OpenAIResponsesText = {};
+
+    if (options.verbosity) text.verbosity = options.verbosity;
+
+    if (options.outputSchema) {
+      text.format = {
+        type: "json_schema",
+        strict: true,
+        schema: options.outputSchema.schema,
+        name: options.outputSchema.name ?? "codex_output_schema",
+      };
+    }
+
+    request.text = text;
+  }
+
+  return request;
 }
+
+/** Codex CLI identity headers; correlation headers are present only when supplied. */
+export type CodexIdentityHeaders = {
+  Accept: "text/event-stream";
+  Authorization: string;
+  "ChatGPT-Account-ID": string;
+  "Content-Type": "application/json";
+  originator: typeof CODEX_CLI_ORIGINATOR;
+  "User-Agent": string;
+  "session-id"?: string;
+  "thread-id"?: string;
+  "x-client-request-id"?: string;
+};
 
 export function buildCodexIdentityHeaders(
   accessToken: string,
   accountId: string,
   correlation?: { sessionId?: string; threadId?: string; clientRequestId?: string },
-): Record<string, string> {
-  return {
+): CodexIdentityHeaders {
+  const headers: CodexIdentityHeaders = {
     Accept: "text/event-stream",
     Authorization: `Bearer ${accessToken}`,
     "ChatGPT-Account-ID": accountId,
     "Content-Type": "application/json",
     originator: CODEX_CLI_ORIGINATOR,
     "User-Agent": codexCliUserAgent(),
-    ...(correlation?.sessionId ? { "session-id": correlation.sessionId } : {}),
-    ...(correlation?.threadId ? { "thread-id": correlation.threadId } : {}),
-    ...(correlation?.clientRequestId ? { "x-client-request-id": correlation.clientRequestId } : {}),
   };
+
+  if (correlation?.sessionId) headers["session-id"] = correlation.sessionId;
+
+  if (correlation?.threadId) headers["thread-id"] = correlation.threadId;
+
+  if (correlation?.clientRequestId) headers["x-client-request-id"] = correlation.clientRequestId;
+
+  return headers;
 }
 
 export interface OpenAIUsage {
@@ -204,24 +232,28 @@ export class OpenAIProtocolError extends Error {
   }
 }
 
-function usageFrom(value: unknown): OpenAIUsage | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const usage = value as Record<string, unknown>;
-  const inputDetails = (usage.input_tokens_details ?? {}) as Record<string, unknown>;
-  const outputDetails = (usage.output_tokens_details ?? {}) as Record<string, unknown>;
+const tokenCount = z.coerce.number().catch(0);
+
+function jsonObjectOrEmpty(value: JsonValue | undefined): JsonObject {
+  return isJsonObject(value) ? value : {};
+}
+
+function usageFrom(value: JsonObject): OpenAIUsage {
+  const inputDetails = jsonObjectOrEmpty(value.input_tokens_details);
+  const outputDetails = jsonObjectOrEmpty(value.output_tokens_details);
 
   return {
-    inputTokens: Number(usage.input_tokens ?? 0),
-    cachedInputTokens: Number(inputDetails.cached_tokens ?? 0),
-    outputTokens: Number(usage.output_tokens ?? 0),
-    reasoningTokens: Number(outputDetails.reasoning_tokens ?? 0),
-    totalTokens: Number(usage.total_tokens ?? 0),
+    inputTokens: tokenCount.parse(value.input_tokens ?? 0),
+    cachedInputTokens: tokenCount.parse(inputDetails.cached_tokens ?? 0),
+    outputTokens: tokenCount.parse(value.output_tokens ?? 0),
+    reasoningTokens: tokenCount.parse(outputDetails.reasoning_tokens ?? 0),
+    totalTokens: tokenCount.parse(value.total_tokens ?? 0),
   };
 }
 
 export function imageMimeType(
   base64: string,
-  outputFormat?: unknown,
+  outputFormat?: JsonValue,
 ): "image/png" | "image/jpeg" | "image/webp" {
   // Inspect only the header, without decoding a potentially large image twice.
   const header = Buffer.from(base64.slice(0, 24), "base64");
@@ -239,115 +271,141 @@ export function imageMimeType(
   if (outputFormat === "webp") return "image/webp";
 
   if (outputFormat === undefined || outputFormat === "png") return "image/png";
-  throw new OpenAIProtocolError(`Unsupported image output format: ${String(outputFormat)}`);
+  const label = jsonString(outputFormat) ?? JSON.stringify(outputFormat);
+  throw new OpenAIProtocolError(`Unsupported image output format: ${label}`);
 }
 
-export function normalizeOpenAIEvent(raw: unknown): OpenAINormalizedEvent | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const event = raw as Record<string, unknown>;
-  const type = String(event.type ?? "");
+type OpenAIImageEvent = Extract<OpenAINormalizedEvent, { type: "image" }>;
 
-  if (type === "response.created") {
-    const response = event.response as Record<string, unknown> | undefined;
+function imageEvent(item: JsonObject, result: string): OpenAIImageEvent {
+  // PNG exposes dimensions in its fixed header. Other formats retain the
+  // backend's observed size; never substitute requested image controls.
+  const header = Buffer.from(result.slice(0, 32), "base64");
 
-    return { type: "created", ...(response?.id ? { responseId: String(response.id) } : {}) };
+  const pngSize =
+    header.length >= 24 &&
+    header.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex")) &&
+    header.readUInt32BE(16) > 0 &&
+    header.readUInt32BE(20) > 0
+      ? `${header.readUInt32BE(16)}x${header.readUInt32BE(20)}`
+      : undefined;
+
+  const reportedSize = jsonString(item.size);
+
+  const size =
+    pngSize ??
+    (reportedSize !== undefined && /^[1-9]\d*x[1-9]\d*$/.test(reportedSize)
+      ? reportedSize
+      : undefined);
+
+  const id = jsonString(item.id);
+  const model = jsonString(item.model);
+  const quality = jsonString(item.quality);
+  const background = jsonString(item.background);
+  const revisedPrompt = jsonString(item.revised_prompt) ?? jsonString(item.revisedPrompt);
+  const generation: ImageGenerationMetadata = { route: "codex-responses" };
+
+  if (size) generation.size = size;
+
+  if (model !== undefined) generation.model = model;
+
+  if (quality !== undefined) generation.quality = quality;
+
+  if (background !== undefined) generation.background = background;
+
+  const event: OpenAIImageEvent = { type: "image", base64: result, mimeType: "image/png" };
+
+  if (id !== undefined) event.id = id;
+  event.base64 = result;
+  event.mimeType = imageMimeType(result, item.output_format);
+  event.generation = generation;
+
+  if (revisedPrompt !== undefined) event.revisedPrompt = revisedPrompt;
+
+  return event;
+}
+
+type OpenAICompletedEvent = Extract<OpenAINormalizedEvent, { type: "completed" }>;
+
+function completedEvent(response: JsonObject): OpenAICompletedEvent {
+  const toolUsage = jsonObjectOrEmpty(response.tool_usage);
+  const parsedImageUsage = ImageGenerationMetadata.shape.usage.safeParse(toolUsage.image_gen);
+  const imageUsage = parsedImageUsage.success ? parsedImageUsage.data : undefined;
+
+  const imageTool = Array.isArray(response.tools)
+    ? response.tools.find((tool) => isJsonObject(tool) && tool.type === "image_generation")
+    : undefined;
+
+  const imageModel = isJsonObject(imageTool) ? jsonString(imageTool.model) : undefined;
+  const model = jsonString(response.model);
+
+  const event: OpenAICompletedEvent = {
+    type: "completed",
+    responseId: jsonString(response.id) ?? "",
+  };
+
+  if (isJsonObject(response.usage)) event.usage = usageFrom(response.usage);
+
+  if (model !== undefined) event.model = model;
+
+  if (imageUsage || imageModel) {
+    const imageGeneration: ImageGenerationMetadata = { route: "codex-responses" };
+
+    if (imageModel) imageGeneration.model = imageModel;
+
+    if (imageUsage) imageGeneration.usage = imageUsage;
+    event.imageGeneration = imageGeneration;
   }
 
-  if (type === "response.output_text.delta" && typeof event.delta === "string") {
-    return {
-      type: "text-delta",
-      text: event.delta,
-      ...(typeof event.item_id === "string" ? { itemId: event.item_id } : {}),
-    };
+  return event;
+}
+
+export function normalizeOpenAIEvent(raw: JsonValue): OpenAINormalizedEvent | undefined {
+  if (!isJsonObject(raw)) return undefined;
+  const event = raw;
+  const type = jsonString(event.type) ?? "";
+
+  if (type === "response.created") {
+    const responseId = isJsonObject(event.response) ? jsonString(event.response.id) : undefined;
+
+    return responseId ? { type: "created", responseId } : { type: "created" };
+  }
+
+  const delta = jsonString(event.delta);
+
+  if (type === "response.output_text.delta" && delta !== undefined) {
+    const itemId = jsonString(event.item_id);
+
+    return itemId === undefined
+      ? { type: "text-delta", text: delta }
+      : { type: "text-delta", text: delta, itemId };
   }
 
   if (
     (type === "response.output_item.added" || type === "response.output_item.done") &&
-    event.item &&
-    typeof event.item === "object"
+    isJsonObject(event.item)
   ) {
-    const item = event.item as OpenAIResponseItem;
+    const item = event.item;
+    const result = jsonString(item.result);
 
-    if (item.type === "image_generation_call" && typeof item.result === "string") {
-      // PNG exposes dimensions in its fixed header. Other formats retain the
-      // backend's observed size; never substitute requested image controls.
-      const header = Buffer.from(item.result.slice(0, 32), "base64");
-
-      const pngSize =
-        header.length >= 24 &&
-        header.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex")) &&
-        header.readUInt32BE(16) > 0 &&
-        header.readUInt32BE(20) > 0
-          ? `${header.readUInt32BE(16)}x${header.readUInt32BE(20)}`
-          : undefined;
-
-      const size =
-        pngSize ??
-        (typeof item.size === "string" && /^[1-9]\d*x[1-9]\d*$/.test(item.size)
-          ? item.size
-          : undefined);
-
-      return {
-        type: "image",
-        ...(typeof item.id === "string" ? { id: item.id } : {}),
-        base64: item.result,
-        mimeType: imageMimeType(item.result, item.output_format),
-        generation: {
-          route: "codex-responses",
-          ...(size ? { size } : {}),
-          ...(typeof item.model === "string" ? { model: item.model } : {}),
-          ...(typeof item.quality === "string" ? { quality: item.quality } : {}),
-          ...(typeof item.background === "string" ? { background: item.background } : {}),
-        },
-        ...(typeof item.revised_prompt === "string"
-          ? { revisedPrompt: item.revised_prompt }
-          : typeof item.revisedPrompt === "string"
-            ? { revisedPrompt: item.revisedPrompt }
-            : {}),
-      };
+    if (item.type === "image_generation_call" && result !== undefined) {
+      return imageEvent(item, result);
     }
 
     return { type: "output-item", item, completed: type === "response.output_item.done" };
   }
 
-  if (type === "response.completed") {
-    const response = (event.response ?? {}) as Record<string, unknown>;
-    const toolUsage = response.tool_usage as Record<string, unknown> | undefined;
-    const parsedImageUsage = ImageGenerationMetadata.shape.usage.safeParse(toolUsage?.image_gen);
-    const imageUsage = parsedImageUsage.success ? parsedImageUsage.data : undefined;
-
-    const imageTool = Array.isArray(response.tools)
-      ? response.tools.find((tool) => tool?.type === "image_generation")
-      : undefined;
-
-    const imageModel = typeof imageTool?.model === "string" ? imageTool.model : undefined;
-
-    return {
-      type: "completed",
-      responseId: String(response.id ?? ""),
-      ...(response.usage ? { usage: usageFrom(response.usage) } : {}),
-      ...(typeof response.model === "string" ? { model: response.model } : {}),
-      ...(imageUsage || imageModel
-        ? {
-            imageGeneration: {
-              route: "codex-responses" as const,
-              ...(imageModel ? { model: imageModel } : {}),
-              ...(imageUsage ? { usage: imageUsage } : {}),
-            },
-          }
-        : {}),
-    };
-  }
+  if (type === "response.completed") return completedEvent(jsonObjectOrEmpty(event.response));
 
   if (type === "error" || type === "response.failed" || type === "response.incomplete") {
-    const source = (event.error ?? event.response ?? event) as Record<string, unknown>;
-    const nested = (source.error ?? source) as Record<string, unknown>;
+    const source = jsonObjectOrEmpty(event.error ?? event.response ?? event);
+    const nested = jsonObjectOrEmpty(source.error ?? source);
 
     return {
       type: "error",
       error: new OpenAIProtocolError(
-        String(nested.message ?? `OpenAI stream ended with ${type}`),
-        typeof nested.code === "string" ? nested.code : undefined,
+        jsonString(nested.message) ?? `OpenAI stream ended with ${type}`,
+        jsonString(nested.code),
       ),
     };
   }

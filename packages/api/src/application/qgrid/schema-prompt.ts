@@ -15,6 +15,14 @@
  * - 렌더된 계약은 parseEnvelope 의 zod 계약({"result": ...} 한 겹, 상호배타 변형)과
  *   정확히 일치해야 한다 — 교차 테스트(schema-prompt.test.ts)가 드리프트를 막는다.
  */
+import { z } from "zod";
+
+import {
+  isJsonObject,
+  type JsonObject,
+  type JsonValue,
+  jsonValueSchema,
+} from "../../utils/providers/common/provider-types";
 import { type QgridTool, type QueryInput } from "./qgrid.types";
 
 /**
@@ -72,34 +80,47 @@ export function renderOutputSchemaPrompt(jsonSchema: string): string {
  * 있으면 **fail-closed** — 위반 가능성이 있는 예시를 싣는 대신 예시 자체를 생략하고
  * 렌더러가 프로즈 서술로 대체한다 (`toolCallExample: undefined`).
  */
-export function buildEnvelopeExamples(tools: QgridTool[]): {
+export interface EnvelopeExamples {
   toolCallExample?: string;
   textAnswerExample: string;
-} {
-  const firstTool = tools[0];
-  const args = firstTool ? exampleValueForSchema(firstTool.inputSchema) : { ok: true, value: {} };
+}
 
-  return {
-    ...(args.ok
-      ? {
-          toolCallExample: JSON.stringify({
-            result: {
-              action: "tool_call",
-              answer: null,
-              toolCalls: [
-                { toolName: firstTool?.name ?? "toolName", args: JSON.stringify(args.value) },
-              ],
-            },
-          }),
-        }
-      : {}),
+export function buildEnvelopeExamples(tools: QgridTool[]): EnvelopeExamples {
+  const firstTool = tools[0];
+  const args = exampleArgsForTool(firstTool);
+
+  const examples: EnvelopeExamples = {
     textAnswerExample: JSON.stringify({
       result: { action: "answer", answer: "your final answer", toolCalls: null },
     }),
   };
+
+  if (args.ok) {
+    examples.toolCallExample = JSON.stringify({
+      result: {
+        action: "tool_call",
+        answer: null,
+        toolCalls: [{ toolName: firstTool?.name ?? "toolName", args: JSON.stringify(args.value) }],
+      },
+    });
+  }
+
+  return examples;
 }
 
-type ExampleResult = { ok: true; value: unknown } | { ok: false };
+type ExampleResult = { ok: true; value: JsonValue } | { ok: false };
+
+/** A missing tool or schema allows any object; a schema that is not JSON yields no example. */
+function exampleArgsForTool(tool: QgridTool | undefined): ExampleResult {
+  if (tool === undefined || tool.inputSchema === undefined) return { ok: true, value: {} };
+  const inputSchema = jsonValueSchema.safeParse(tool.inputSchema);
+
+  return inputSchema.success ? exampleValueForSchema(inputSchema.data) : { ok: false };
+}
+
+function jsonNumber(value: JsonValue | undefined): number | undefined {
+  return z.number().safeParse(value).data;
+}
 
 /** 생성기가 값 선택에 반영하는 keyword. 어노테이션(description 등)은 값과 무관해 무시한다. */
 const EXAMPLE_ANNOTATION_KEYWORDS = new Set([
@@ -138,11 +159,11 @@ const EXAMPLE_HANDLED_KEYWORDS = new Set([
  * (pattern/format/$ref/allOf/not/if/multipleOf/uniqueItems/...)을 만나면 값을
  * 지어내지 않고 { ok: false } 를 돌려준다 — 계약 위반 예시는 모델이 베낀다.
  */
-function exampleValueForSchema(schema: unknown): ExampleResult {
+function exampleValueForSchema(schema: JsonValue | undefined): ExampleResult {
   if (schema === true || schema === undefined) return { ok: true, value: {} };
 
-  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return { ok: false };
-  const node = schema as Record<string, unknown>;
+  if (!isJsonObject(schema)) return { ok: false };
+  const node = schema;
 
   for (const keyword of Object.keys(node)) {
     if (!EXAMPLE_HANDLED_KEYWORDS.has(keyword) && !EXAMPLE_ANNOTATION_KEYWORDS.has(keyword)) {
@@ -150,16 +171,20 @@ function exampleValueForSchema(schema: unknown): ExampleResult {
     }
   }
 
-  if (Array.isArray(node.enum) && node.enum.length > 0) return { ok: true, value: node.enum[0] };
+  const enumValues = node.enum;
 
-  if ("const" in node) return { ok: true, value: node.const };
+  if (Array.isArray(enumValues) && enumValues.length > 0) {
+    return { ok: true, value: enumValues[0] ?? null };
+  }
+
+  if ("const" in node) return { ok: true, value: node.const ?? null };
 
   for (const kw of ["anyOf", "oneOf"] as const) {
-    if (Array.isArray(node[kw])) {
+    const list = node[kw];
+
+    if (Array.isArray(list)) {
       // oneOf 는 "정확히 하나"라 첫 브랜치 값이 다른 브랜치에도 매칭될 수 있다 —
       // 검증기 없이 확신할 수 없으므로 브랜치가 하나일 때만 생성한다.
-      const list = node[kw] as unknown[];
-
       if (kw === "oneOf" && list.length > 1) return { ok: false };
 
       for (const branch of list) {
@@ -176,16 +201,17 @@ function exampleValueForSchema(schema: unknown): ExampleResult {
 
   switch (type) {
     case "string": {
-      const min = typeof node.minLength === "number" ? node.minLength : 0;
+      const min = jsonNumber(node.minLength) ?? 0;
+      const maxLength = jsonNumber(node.maxLength);
 
       if (min > 64) return { ok: false };
       const base = "example";
       const value = base.length >= min ? base : base.padEnd(min, "x");
 
-      if (typeof node.maxLength === "number" && value.length > node.maxLength) {
-        if (node.maxLength < min) return { ok: false };
+      if (maxLength !== undefined && value.length > maxLength) {
+        if (maxLength < min) return { ok: false };
 
-        return { ok: true, value: value.slice(0, node.maxLength) };
+        return { ok: true, value: value.slice(0, maxLength) };
       }
 
       return { ok: true, value };
@@ -194,13 +220,17 @@ function exampleValueForSchema(schema: unknown): ExampleResult {
     case "number":
     case "integer": {
       let value = 0;
+      const minimum = jsonNumber(node.minimum);
+      const exclusiveMinimum = jsonNumber(node.exclusiveMinimum);
+      const maximum = jsonNumber(node.maximum);
+      const exclusiveMaximum = jsonNumber(node.exclusiveMaximum);
 
-      if (typeof node.minimum === "number") value = node.minimum;
-      else if (typeof node.exclusiveMinimum === "number") value = node.exclusiveMinimum + 1;
+      if (minimum !== undefined) value = minimum;
+      else if (exclusiveMinimum !== undefined) value = exclusiveMinimum + 1;
 
-      if (typeof node.maximum === "number" && value > node.maximum) return { ok: false };
+      if (maximum !== undefined && value > maximum) return { ok: false };
 
-      if (typeof node.exclusiveMaximum === "number" && value >= node.exclusiveMaximum) {
+      if (exclusiveMaximum !== undefined && value >= exclusiveMaximum) {
         return { ok: false };
       }
 
@@ -212,11 +242,12 @@ function exampleValueForSchema(schema: unknown): ExampleResult {
     case "null":
       return { ok: true, value: null };
     case "array": {
-      const min = typeof node.minItems === "number" ? node.minItems : 0;
+      const min = jsonNumber(node.minItems) ?? 0;
+      const maxItems = jsonNumber(node.maxItems);
 
       if (min > 8) return { ok: false };
 
-      if (typeof node.maxItems === "number" && node.maxItems < min) return { ok: false };
+      if (maxItems !== undefined && maxItems < min) return { ok: false };
 
       if (min === 0) return { ok: true, value: [] };
       const item = exampleValueForSchema(node.items);
@@ -230,16 +261,13 @@ function exampleValueForSchema(schema: unknown): ExampleResult {
 
     case undefined:
     case "object": {
-      const properties =
-        node.properties && typeof node.properties === "object" && !Array.isArray(node.properties)
-          ? (node.properties as Record<string, unknown>)
-          : {};
+      const properties: JsonObject = isJsonObject(node.properties) ? node.properties : {};
 
       const required = Array.isArray(node.required)
-        ? node.required.filter((k): k is string => typeof k === "string")
+        ? node.required.flatMap((key) => z.string().safeParse(key).data ?? [])
         : [];
 
-      const entries: Array<[string, unknown]> = [];
+      const entries: Array<[string, JsonValue]> = [];
 
       for (const key of required) {
         const child = exampleValueForSchema(properties[key]);

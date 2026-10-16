@@ -11,10 +11,13 @@ import {
   type GenerateRequest,
   type GenerateResult,
   type GenerateStreamCallbacks,
+  type MediaDispatcher,
   type ProviderDispatcher,
   type StreamCallbacks,
+  type VoiceDispatcher,
 } from "../../utils/providers/common/provider-dispatcher";
 import {
+  isJsonObject,
   isProviderId,
   type JsonValue,
   type ProviderId,
@@ -24,6 +27,7 @@ import {
   serializeAndValidateDispatchSchema,
 } from "../../utils/providers/common/schema-validation";
 import { strictify } from "../../utils/providers/common/strictifier";
+import { type GrokTokenStateSnapshot } from "../../utils/providers/grok/grok-dispatcher";
 import {
   ImageGenerationError,
   type OpenAIDispatcher,
@@ -84,7 +88,15 @@ export interface GrokTokenSink {
   replaceTokens(rows: GrokTokenRow[]): void | Promise<void>;
 }
 
-export type GrokProviderDispatcher = StreamingProviderDispatcher & GrokTokenSink;
+/** Observability the concrete Grok dispatcher exposes beyond routing. */
+export interface GrokTokenStateSource {
+  tokenStates(): GrokTokenStateSnapshot[];
+}
+
+/** Media, voice, and token-state reporting are optional capabilities of a Grok dispatcher. */
+export type GrokProviderDispatcher = StreamingProviderDispatcher &
+  GrokTokenSink &
+  Partial<MediaDispatcher & VoiceDispatcher & GrokTokenStateSource>;
 
 export type QgridDispatcherOptions = {
   grokDispatcher?: GrokProviderDispatcher | null;
@@ -418,9 +430,10 @@ export function buildStrictOutputSchema(
 ): JsonValue | undefined {
   const outputSchema = buildRawOutputSchema(input);
 
-  return outputSchema
-    ? (strictify(outputSchema as Parameters<typeof strictify>[0], { provider }) as JsonValue)
-    : undefined;
+  if (!outputSchema) return undefined;
+
+  // Boolean and other non-object schemas have nothing to tighten and pass through unchanged.
+  return isJsonObject(outputSchema) ? strictify(outputSchema, { provider }) : outputSchema;
 }
 
 export function buildAndValidateStrictOutputSchema(

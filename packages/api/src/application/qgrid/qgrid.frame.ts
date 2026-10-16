@@ -14,7 +14,7 @@ import {
   stream,
 } from "sonamu";
 import { getCacheManagerRef } from "sonamu/cache";
-import { type z } from "zod";
+import { z } from "zod";
 
 import { type LocalizedString, SD } from "../../i18n/sd.generated";
 import {
@@ -74,7 +74,12 @@ import {
   exchangeOpenAICode,
   generateOpenAIPKCE,
 } from "../../utils/providers/openai/openai-oauth";
-import { MICRO_USD, RequestLogModel } from "../request-log/request-log.model";
+import {
+  type FinishRunParams,
+  MICRO_USD,
+  RequestLogModel,
+  type RequestLogStepFields,
+} from "../request-log/request-log.model";
 import { type RequestLogListParams } from "../request-log/request-log.types";
 import { type TokenSubsetA } from "../sonamu.generated";
 
@@ -127,6 +132,7 @@ import {
   type OAuthStartResult,
   type QueryOutput,
   type QgridRunContext,
+  type QgridThreadCoord,
   REQUEST_BODY_LIMIT_BYTES,
   StreamEvents,
   type TokenStats,
@@ -137,12 +143,14 @@ import { ToolSchemaCompositionError } from "./tool-emulation-schema";
 
 const pendingStreams = new Map<string, QueryInput>();
 
-type PendingOAuth = {
-  codeVerifier: string;
-  name: string;
-  redirectUri: string;
-  provider: "anthropic" | "openai" | "grok";
-};
+const PendingOAuth = z.object({
+  codeVerifier: z.string(),
+  name: z.string(),
+  redirectUri: z.string(),
+  provider: z.enum(["anthropic", "openai", "grok"]),
+});
+
+type PendingOAuth = z.infer<typeof PendingOAuth>;
 
 const OAUTH_STATE_PREFIX = "oauth:state:";
 const OAUTH_STATE_TTL = "5m";
@@ -152,10 +160,16 @@ const OAUTH_STATE_TTL_MS = 5 * 60_000;
 const GROK_LATEST_STATE_KEY = "oauth:grok:latest";
 const GROK_DEVICE_PREFIX = "oauth:grok:device:";
 
-type PendingGrokDevice = { name: string; interval: number; expiresAtMs: number };
+const PendingGrokDevice = z.object({
+  name: z.string(),
+  interval: z.number(),
+  expiresAtMs: z.number(),
+});
+
+type PendingGrokDevice = z.infer<typeof PendingGrokDevice>;
 
 function unixSecondsToIso(seconds: number | null | undefined): string | null {
-  return typeof seconds === "number" ? new Date(seconds * 1000).toISOString() : null;
+  return seconds === null || seconds === undefined ? null : new Date(seconds * 1000).toISOString();
 }
 
 async function setOAuthState(state: string, data: PendingOAuth): Promise<void> {
@@ -177,7 +191,7 @@ async function getOAuthState(state: string): Promise<PendingOAuth | undefined> {
 
   if (!raw) return undefined;
 
-  return JSON.parse(raw) as PendingOAuth;
+  return PendingOAuth.safeParse(JSON.parse(raw)).data;
 }
 
 async function deleteOAuthState(state: string): Promise<void> {
@@ -221,9 +235,9 @@ async function getGrokDeviceState(deviceCode: string): Promise<PendingGrokDevice
   const raw = await cache.get<string>({ key: `${GROK_DEVICE_PREFIX}${deviceCode}` });
 
   if (!raw) return undefined;
-  const data = JSON.parse(raw) as PendingGrokDevice;
+  const data = PendingGrokDevice.safeParse(JSON.parse(raw)).data;
 
-  return data.expiresAtMs > Date.now() ? data : undefined;
+  return data && data.expiresAtMs > Date.now() ? data : undefined;
 }
 
 async function deleteGrokDeviceState(deviceCode: string): Promise<void> {
@@ -233,25 +247,17 @@ async function deleteGrokDeviceState(deviceCode: string): Promise<void> {
   await cache.delete({ key: `${GROK_DEVICE_PREFIX}${deviceCode}` });
 }
 
-function grokOAuthBadRequest(error: unknown): never {
-  if (error instanceof GrokOAuthError) {
-    throw new BadRequestException(SD("qgrid.grokLoginFailed")(error.message));
+function grokOAuthBadRequest(cause: unknown): never {
+  if (cause instanceof GrokOAuthError) {
+    throw new BadRequestException(SD("qgrid.grokLoginFailed")(cause.message));
   }
 
-  throw error;
+  throw cause;
 }
 
-// GrokProviderDispatcher (the routing port) does not expose observability; GrokDispatcher does.
-type GrokSnapshotSource = { tokenStates(): GrokTokenStateSnapshot[] };
-
 function grokTokenSnapshot(tokenId: number): GrokTokenStateSnapshot | undefined {
-  const dispatcher: unknown = QgridDispatcher.grokDispatcher;
-
-  if (!dispatcher || typeof (dispatcher as GrokSnapshotSource).tokenStates !== "function") {
-    return undefined;
-  }
-
-  return (dispatcher as GrokSnapshotSource).tokenStates().find((state) => state.id === tokenId);
+  // Token-state reporting is optional on the routing port; the concrete GrokDispatcher has it.
+  return QgridDispatcher.grokDispatcher?.tokenStates?.().find((state) => state.id === tokenId);
 }
 
 /** Stores refreshed Grok credentials; the token subscriber pushes the row to the dispatcher. */
@@ -277,7 +283,7 @@ const trustedLoopbackBase = () => `http://localhost:${process.env.PORT ?? "44900
 function isRemoteOAuthRequest(): boolean {
   try {
     const { headers } = Sonamu.getContext();
-    const origin = typeof headers.origin === "string" ? headers.origin : undefined;
+    const origin = headers.origin;
     const forwarded = headers["x-forwarded-host"];
     const rawHost = Array.isArray(forwarded) ? forwarded[0] : (forwarded ?? headers.host);
 
@@ -293,7 +299,12 @@ function isRemoteOAuthRequest(): boolean {
 
 // Anthropic's remote/manual flow uses its fixed console callback. Headers may select between two
 // allowlisted URIs, but never contribute authority or path bytes to either URI.
-function resolveOAuthRedirect(): { redirectUri: string; mode: "redirect" | "code" } {
+interface OAuthRedirect {
+  redirectUri: string;
+  mode: "redirect" | "code";
+}
+
+function resolveOAuthRedirect(): OAuthRedirect {
   if (isRemoteOAuthRequest()) {
     return { redirectUri: CONSOLE_CALLBACK_URL, mode: "code" };
   }
@@ -413,10 +424,12 @@ async function resolveTokenName(args: QueryInput): Promise<InternalQueryInput> {
   return { ...args, preferredTokenId: token.id, requirePreferredToken: true };
 }
 
-function createHttpDisconnectHandle(): {
+interface HttpDisconnectHandle {
   signal: AbortSignal;
   dispose: () => void;
-} {
+}
+
+function createHttpDisconnectHandle(): HttpDisconnectHandle {
   const abortController = new AbortController();
   let requestRaw: FastifyRequest["raw"] | undefined;
   let responseRaw: FastifyReply["raw"] | undefined;
@@ -471,32 +484,6 @@ const MEDIA_TOOL_NAMES: Record<MediaKind, string> = {
   tts: "speech",
 };
 
-function isGrokMediaDispatcher(value: unknown): value is MediaDispatcher {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "generateImages" in value &&
-    typeof value.generateImages === "function" &&
-    "editImages" in value &&
-    typeof value.editImages === "function" &&
-    "startVideo" in value &&
-    typeof value.startVideo === "function" &&
-    "getVideo" in value &&
-    typeof value.getVideo === "function"
-  );
-}
-
-function isGrokVoiceDispatcher(value: unknown): value is VoiceDispatcher {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "transcribe" in value &&
-    typeof value.transcribe === "function" &&
-    "speak" in value &&
-    typeof value.speak === "function"
-  );
-}
-
 function grokNotReady(): Error {
   return QgridDispatcher.startupState.grok === "failed"
     ? new InternalServerErrorException(SD("qgrid.dispatcherFailed")("Grok"))
@@ -504,19 +491,32 @@ function grokNotReady(): Error {
 }
 
 function grokMedia(): MediaDispatcher {
-  const dispatcher: unknown = QgridDispatcher.grokDispatcher;
+  const dispatcher = QgridDispatcher.grokDispatcher;
+  const generateImages = dispatcher?.generateImages;
+  const editImages = dispatcher?.editImages;
+  const startVideo = dispatcher?.startVideo;
+  const getVideo = dispatcher?.getVideo;
 
-  if (!isGrokMediaDispatcher(dispatcher)) throw grokNotReady();
+  if (!dispatcher || !generateImages || !editImages || !startVideo || !getVideo) {
+    throw grokNotReady();
+  }
 
-  return dispatcher;
+  return {
+    generateImages: generateImages.bind(dispatcher),
+    editImages: editImages.bind(dispatcher),
+    startVideo: startVideo.bind(dispatcher),
+    getVideo: getVideo.bind(dispatcher),
+  };
 }
 
 function grokVoice(): VoiceDispatcher {
-  const dispatcher: unknown = QgridDispatcher.grokDispatcher;
+  const dispatcher = QgridDispatcher.grokDispatcher;
+  const transcribe = dispatcher?.transcribe;
+  const speak = dispatcher?.speak;
 
-  if (!isGrokVoiceDispatcher(dispatcher)) throw grokNotReady();
+  if (!dispatcher || !transcribe || !speak) throw grokNotReady();
 
-  return dispatcher;
+  return { transcribe: transcribe.bind(dispatcher), speak: speak.bind(dispatcher) };
 }
 
 class TooManyRequestsException extends SoException {
@@ -552,42 +552,42 @@ function grokRateLimited(error: GrokRateLimitedError): TooManyRequestsException 
  * this request class" (no workers, in-flight cap, on-demand D6, ZDR video) is a 503, not a server
  * fault; every token cooling down is a 429 with the soonest retry delay.
  */
-function mapGrokCallerError(error: unknown): unknown {
-  if (error instanceof GrokInvalidRequestError) {
-    return new BadRequestException(SD("qgrid.grokInvalidRequest")(error.message));
+function throwGrokCallerError(cause: unknown): never {
+  if (cause instanceof GrokInvalidRequestError) {
+    throw new BadRequestException(SD("qgrid.grokInvalidRequest")(cause.message));
   }
 
-  if (error instanceof GrokContentPolicyError) {
-    return new BadRequestException(SD("qgrid.grokContentPolicy")(error.message));
+  if (cause instanceof GrokContentPolicyError) {
+    throw new BadRequestException(SD("qgrid.grokContentPolicy")(cause.message));
   }
 
-  if (error instanceof GrokCapabilityUnavailableError) {
-    return new ServiceUnavailableException(SD("qgrid.grokCapabilityUnavailable")(error.message));
+  if (cause instanceof GrokCapabilityUnavailableError) {
+    throw new ServiceUnavailableException(SD("qgrid.grokCapabilityUnavailable")(cause.message));
   }
 
-  if (error instanceof GrokOnDemandExcludedError) {
-    return new ServiceUnavailableException(
-      SD("qgrid.grokOnDemandExcluded")(error.tokenNames.join(", ")),
+  if (cause instanceof GrokOnDemandExcludedError) {
+    throw new ServiceUnavailableException(
+      SD("qgrid.grokOnDemandExcluded")(cause.tokenNames.join(", ")),
     );
   }
 
-  if (error instanceof GrokZdrVideoUnavailableError) {
-    return new ServiceUnavailableException(
-      SD("qgrid.grokZdrVideoUnavailable")(error.tokenNames.join(", ")),
+  if (cause instanceof GrokZdrVideoUnavailableError) {
+    throw new ServiceUnavailableException(
+      SD("qgrid.grokZdrVideoUnavailable")(cause.tokenNames.join(", ")),
     );
   }
 
-  if (error instanceof GrokCapacityError) {
-    return new ServiceUnavailableException(SD("qgrid.grokCapacity"));
+  if (cause instanceof GrokCapacityError) {
+    throw new ServiceUnavailableException(SD("qgrid.grokCapacity"));
   }
 
-  if (error instanceof GrokRateLimitedError) return grokRateLimited(error);
+  if (cause instanceof GrokRateLimitedError) throw grokRateLimited(cause);
 
-  if (error instanceof GrokNoWorkersError) {
-    return new ServiceUnavailableException(SD("qgrid.grokNoWorkers")(error.message));
+  if (cause instanceof GrokNoWorkersError) {
+    throw new ServiceUnavailableException(SD("qgrid.grokNoWorkers")(cause.message));
   }
 
-  return error;
+  throw cause;
 }
 
 class PayloadTooLargeException extends SoException {
@@ -615,7 +615,7 @@ export function mapRequestBodyTooLarge(error: Error): Error {
 
 // Sonamu's generated validator does not carry zod refinements (size, https, base64), so media
 // endpoints re-validate with the full schema.
-function parseMediaInput<S extends z.ZodType>(schema: S, value: unknown): z.infer<S> {
+function parseMediaInput<S extends z.ZodType>(schema: S, value: z.input<S>): z.infer<S> {
   const parsed = schema.safeParse(value);
 
   if (!parsed.success) {
@@ -649,27 +649,49 @@ async function resolveGrokTokenSelection(
   return { preferredTokenId: token.id, requirePreferredToken: true };
 }
 
-function routeModelId(model: string | undefined, fallback: string): { id: string; route: string } {
+interface RoutedModelId {
+  id: string;
+  route: string;
+}
+
+function routeModelId(model: string | undefined, fallback: string): RoutedModelId {
   const id = model ? model.slice("grok/".length) : fallback;
 
   return { id, route: `grok/${id}` };
+}
+
+type GeneratedImage = GenerateImagesOutput["images"][number];
+
+/** Adds the provider thread coordinate to the lifecycle run context without dropping either. */
+function mergeRunContext(
+  lifecycle: QgridRunContext | undefined,
+  threadCoord: QgridThreadCoord | undefined,
+): QgridRunContext | undefined {
+  if (!lifecycle && !threadCoord) return undefined;
+  const runContext: QgridRunContext = { ...lifecycle };
+
+  if (threadCoord) runContext.threadCoord = threadCoord;
+
+  return runContext;
 }
 
 function microUsd(usd: number | undefined): number | undefined {
   return usd === undefined ? undefined : Math.round(usd * MICRO_USD);
 }
 
+/** Reference-image log metadata: a URL, or a data URL's media type and size (plus bytes). */
+type ImageRefLog = { url: string } | { mediaType: string; data?: string; byteSize: number };
+
 /** Reference-image log metadata. Data URLs keep their bytes only when `withData` (images). */
-function describeImageRefs(refs: string[], withData: boolean): Array<Record<string, unknown>> {
+function describeImageRefs(refs: string[], withData: boolean): ImageRefLog[] {
   return refs.map((ref) => {
     const match = /^data:([^;,]+);base64,(.*)$/.exec(ref);
 
     if (!match) return { url: ref };
-    const byteSize = Buffer.byteLength(match[2]!, "base64");
+    const [, mediaType = "", data = ""] = match;
+    const byteSize = Buffer.byteLength(data, "base64");
 
-    return withData
-      ? { mediaType: match[1], data: match[2], byteSize }
-      : { mediaType: match[1], byteSize };
+    return withData ? { mediaType, data, byteSize } : { mediaType, byteSize };
   });
 }
 
@@ -696,7 +718,33 @@ async function startMediaRun(
   });
 }
 
-type MediaLogSteps = Array<{ toolCallId: string; args: Record<string, unknown>; result?: string }>;
+/** JSON-serializable log arguments; `undefined` members are dropped by JSON.stringify. */
+type MediaLogArg = string | number | boolean | null | undefined | MediaLogArg[] | MediaLogArgs;
+
+type MediaLogArgs = { [key: string]: MediaLogArg };
+
+/** Image step arguments; cost and reference images are recorded only when known. */
+type ImageStepArgs = {
+  kind: "image";
+  prompt: string;
+  model: string;
+  requestedOptions: MediaLogArgs;
+  imageCount: number;
+  costSource?: string;
+  costInUsdTicks?: number;
+  inputImages?: ImageRefLog[];
+};
+
+/** Video step arguments; reference images are recorded only when supplied. */
+type VideoStepArgs = {
+  kind: "video";
+  prompt: string;
+  model: string;
+  requestedOptions: MediaLogArgs;
+  inputImages?: ImageRefLog[];
+};
+
+type MediaLogSteps = Array<{ toolCallId: string; args: MediaLogArgs; result?: string }>;
 
 type MediaLogSuccess = {
   kind: MediaKind;
@@ -708,22 +756,38 @@ type MediaLogSuccess = {
   cost?: GrokMediaCost;
 };
 
-function mediaToolSteps(kind: MediaKind, steps: MediaLogSteps, durationMs: number) {
-  return steps.map((step, index) => ({
-    step_index: 0,
-    type: "tool_call",
-    tool_call_index: index,
-    tool_call_id: step.toolCallId,
-    tool_name: MEDIA_TOOL_NAMES[kind],
-    tool_args: JSON.stringify(step.args),
-    ...(step.result === undefined ? {} : { tool_result: step.result }),
-    tool_duration_ms: durationMs,
-  }));
+function mediaToolSteps(
+  kind: MediaKind,
+  steps: MediaLogSteps,
+  durationMs: number,
+): RequestLogStepFields[] {
+  return steps.map((step, index) => {
+    const fields: RequestLogStepFields = {
+      step_index: 0,
+      type: "tool_call",
+      tool_call_index: index,
+      tool_call_id: step.toolCallId,
+      tool_name: MEDIA_TOOL_NAMES[kind],
+      tool_args: JSON.stringify(step.args),
+    };
+
+    if (step.result !== undefined) fields.tool_result = step.result;
+    fields.tool_duration_ms = durationMs;
+
+    return fields;
+  });
 }
 
 // Image cost follows the image-generation columns (driver cost 0); video and voice cost is the
 // row's own cost. An unknown cost stays NULL rather than a guessed 0.
-function mediaCostFields(kind: MediaKind, model: string, cost: GrokMediaCost | undefined) {
+type MediaCostFields = Pick<FinishRunParams, "cost_usd" | "cost_source"> &
+  Partial<Pick<FinishRunParams, "is_image_generation" | "image_cost_usd" | "image_cost_method">>;
+
+function mediaCostFields(
+  kind: MediaKind,
+  model: string,
+  cost: GrokMediaCost | undefined,
+): MediaCostFields {
   if (kind === "image") {
     return {
       cost_usd: 0,
@@ -739,7 +803,7 @@ function mediaCostFields(kind: MediaKind, model: string, cost: GrokMediaCost | u
   return { cost_usd: microUsd(cost?.costUsd) ?? null, cost_source: cost?.costSource ?? null };
 }
 
-function mediaFinishFields(success: Omit<MediaLogSuccess, "steps">) {
+function mediaFinishFields(success: Omit<MediaLogSuccess, "steps">): FinishRunParams {
   return {
     status: "succeeded",
     response: success.response,
@@ -777,7 +841,7 @@ async function finishMediaRun(
 
 async function failMediaRun(
   requestLogId: number | undefined,
-  error: unknown,
+  cause: unknown,
   aborted: boolean,
 ): Promise<void> {
   if (requestLogId === undefined) return;
@@ -785,7 +849,11 @@ async function failMediaRun(
   try {
     await RequestLogModel.finishRun(requestLogId, {
       status: aborted ? "aborted" : "error",
-      error_message: aborted ? "client disconnected" : String((error as Error)?.message ?? error),
+      error_message: aborted
+        ? "client disconnected"
+        : cause instanceof Error
+          ? cause.message
+          : String(cause),
     });
   } catch (e) {
     mediaLogger.error(`media request log failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -801,15 +869,18 @@ async function dispatchMediaCall<T>(
   call: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const disconnect = createHttpDisconnectHandle();
+  let result: T;
 
   try {
-    return await call(disconnect.signal);
+    result = await call(disconnect.signal);
   } catch (e) {
     await failMediaRun(requestLogId, e, disconnect.signal.aborted);
-    throw mapGrokCallerError(e);
+    throwGrokCallerError(e);
   } finally {
     disconnect.dispose();
   }
+
+  return result;
 }
 
 type MediaRunLog = Omit<MediaLogSuccess, "kind" | "model" | "durationMs">;
@@ -935,7 +1006,7 @@ class QgridFrameClass extends BaseFrameClass {
         try {
           return await QgridDispatcher.query(resolvedArgs, disconnect.signal);
         } catch (e) {
-          throw mapGrokCallerError(e);
+          throwGrokCallerError(e);
         }
       }
 
@@ -962,7 +1033,7 @@ class QgridFrameClass extends BaseFrameClass {
           );
         }
 
-        throw mapGrokCallerError(e);
+        throwGrokCallerError(e);
       }
 
       try {
@@ -975,10 +1046,7 @@ class QgridFrameClass extends BaseFrameClass {
         // tool-call requestLogId와 provider threadCoord는 서로 독립적으로 유지한다.
         const threadCoord = result.runContext?.threadCoord;
 
-        const runContext =
-          lifecycle.runContext || threadCoord
-            ? { ...lifecycle.runContext, ...(threadCoord ? { threadCoord } : {}) }
-            : undefined;
+        const runContext = mergeRunContext(lifecycle.runContext, threadCoord);
 
         return { ...result, requestLogId, runContext };
       } catch (e) {
@@ -1067,7 +1135,7 @@ class QgridFrameClass extends BaseFrameClass {
         abortController.signal,
       );
     } catch (e) {
-      streamError = e as Error;
+      streamError = e instanceof Error ? e : new Error(String(e));
     }
 
     // provider 결과가 없는 close는 즉시 aborted로 마감한다.
@@ -1096,10 +1164,7 @@ class QgridFrameClass extends BaseFrameClass {
             streamResult,
           );
 
-          runContext =
-            lifecycle.runContext || threadCoord
-              ? { ...lifecycle.runContext, ...(threadCoord ? { threadCoord } : {}) }
-              : undefined;
+          runContext = mergeRunContext(lifecycle.runContext, threadCoord);
 
           // afterQuery가 진행되는 사이 client가 닫힌 경우 완료 상태를 aborted로 되돌린다.
           if (clientClosed) {
@@ -1126,11 +1191,11 @@ class QgridFrameClass extends BaseFrameClass {
       }
 
       if (!clientClosed && !sse.closed) {
-        sse.publish("done", {
-          ...streamResult,
-          ...(runInfo ? { requestLogId: runInfo.requestLogId } : {}),
-          runContext,
-        });
+        const done: QueryOutput = { ...streamResult };
+
+        if (runInfo) done.requestLogId = runInfo.requestLogId;
+        done.runContext = runContext;
+        sse.publish("done", done);
       }
     } else if (streamError) {
       if (runInfo) await finishRunWithError(runInfo.requestLogId, streamError.message, args);
@@ -1634,20 +1699,29 @@ class QgridFrameClass extends BaseFrameClass {
       const output: GenerateImagesOutput = {
         model: route,
         tokenName: dispatched.tokenName,
-        images: decoded.images.map((image) => ({
-          b64: Buffer.from(image.bytes).toString("base64"),
-          mimeType: image.mediaType,
-          ...(image.revisedPrompt ? { revisedPrompt: image.revisedPrompt } : {}),
-        })),
-        usage: {
-          imageCount: decoded.images.length,
-          ...(decoded.costInUsdTicks === undefined
-            ? {}
-            : { costInUsdTicks: decoded.costInUsdTicks }),
-        },
-        ...(cost ? { costUsd: cost.costUsd, costSource: cost.costSource } : {}),
-        ...(requestLogId === undefined ? {} : { requestLogId }),
+        images: decoded.images.map((image) => {
+          const generated: GeneratedImage = {
+            b64: Buffer.from(image.bytes).toString("base64"),
+            mimeType: image.mediaType,
+          };
+
+          if (image.revisedPrompt) generated.revisedPrompt = image.revisedPrompt;
+
+          return generated;
+        }),
+        usage: { imageCount: decoded.images.length },
       };
+
+      if (decoded.costInUsdTicks !== undefined) {
+        output.usage.costInUsdTicks = decoded.costInUsdTicks;
+      }
+
+      if (cost) {
+        output.costUsd = cost.costUsd;
+        output.costSource = cost.costSource;
+      }
+
+      if (requestLogId !== undefined) output.requestLogId = requestLogId;
 
       const log: MediaRunLog = {
         tokenName: output.tokenName,
@@ -1655,9 +1729,8 @@ class QgridFrameClass extends BaseFrameClass {
         response: output.images
           .map((image) => imageTagForLog(image.b64, image.mimeType, image.revisedPrompt))
           .join("\n"),
-        steps: output.images.map((image, index) => ({
-          toolCallId: `image_generation:0:${index}`,
-          args: {
+        steps: output.images.map((image, index) => {
+          const args: ImageStepArgs = {
             kind: "image",
             prompt: input.prompt,
             model: route,
@@ -1669,12 +1742,22 @@ class QgridFrameClass extends BaseFrameClass {
               outputFormat: input.outputFormat,
             },
             imageCount: output.usage.imageCount,
-            ...(cost ? { costSource: cost.costSource, costInUsdTicks: cost.ticks } : {}),
-            // Reference images are stored once, on the first output step.
-            ...(index === 0 && refs.length ? { inputImages: describeImageRefs(refs, true) } : {}),
-          },
-          result: imageTagForLog(image.b64, image.mimeType, image.revisedPrompt),
-        })),
+          };
+
+          if (cost) {
+            args.costSource = cost.costSource;
+            args.costInUsdTicks = cost.ticks;
+          }
+
+          // Reference images are stored once, on the first output step.
+          if (index === 0 && refs.length) args.inputImages = describeImageRefs(refs, true);
+
+          return {
+            toolCallId: `image_generation:0:${index}`,
+            args,
+            result: imageTagForLog(image.b64, image.mimeType, image.revisedPrompt),
+          };
+        }),
       };
 
       return { output, log };
@@ -1727,8 +1810,9 @@ class QgridFrameClass extends BaseFrameClass {
       owner: input.projectName ?? null,
       model: route,
       createdAt: now,
-      ...(requestLogId === undefined ? {} : { requestLogId }),
     };
+
+    if (requestLogId !== undefined) job.requestLogId = requestLogId;
 
     videoJobs.set(jobHandle, job);
 
@@ -1740,25 +1824,23 @@ class QgridFrameClass extends BaseFrameClass {
         ...(input.referenceImages ?? []),
       ];
 
+      const args: VideoStepArgs = {
+        kind: "video",
+        prompt: input.prompt,
+        model: route,
+        requestedOptions: {
+          duration: input.duration,
+          aspectRatio: input.aspectRatio,
+          resolution: input.resolution,
+          mode: input.mode,
+        },
+      };
+
+      if (refs.length) args.inputImages = describeImageRefs(refs, false);
+
       const [step] = mediaToolSteps(
         "video",
-        [
-          {
-            toolCallId: videoToolCallId(job),
-            args: {
-              kind: "video",
-              prompt: input.prompt,
-              model: route,
-              requestedOptions: {
-                duration: input.duration,
-                aspectRatio: input.aspectRatio,
-                resolution: input.resolution,
-                mode: input.mode,
-              },
-              ...(refs.length ? { inputImages: describeImageRefs(refs, false) } : {}),
-            },
-          },
-        ],
+        [{ toolCallId: videoToolCallId(job), args }],
         now - startedAt,
       );
 
@@ -1771,7 +1853,11 @@ class QgridFrameClass extends BaseFrameClass {
       }
     }
 
-    return { jobHandle, model: route, ...(requestLogId === undefined ? {} : { requestLogId }) };
+    const output: VideoStartOutput = { jobHandle, model: route };
+
+    if (requestLogId !== undefined) output.requestLogId = requestLogId;
+
+    return output;
   }
 
   // Polls the token that started the job. A terminal status is cached so the run is logged once.
@@ -1798,29 +1884,31 @@ class QgridFrameClass extends BaseFrameClass {
       summary = summarizeGrokVideoStatus(polled.result);
       durationSec = polled.result.video?.duration ?? undefined;
     } catch (e) {
-      if (!(e instanceof GrokContentPolicyError)) throw mapGrokCallerError(e);
+      if (!(e instanceof GrokContentPolicyError)) throwGrokCallerError(e);
       summary = { status: "failed", mimeType: "video/mp4", error: e.message };
     } finally {
       disconnect.dispose();
     }
 
-    const base = {
-      mimeType: "video/mp4" as const,
-      ...(job.requestLogId === undefined ? {} : { requestLogId: job.requestLogId }),
-    };
+    const status: VideoStatusOutput = { status: summary.status, mimeType: "video/mp4" };
 
-    if (summary.status === "pending") return { status: "pending", ...base };
+    if (job.requestLogId !== undefined) status.requestLogId = job.requestLogId;
+
+    if (summary.status === "pending") return status;
 
     const cost = grokReportedCost(summary.usageTicks);
+    const final = status;
 
-    const final: VideoStatusOutput = {
-      status: summary.status,
-      ...base,
-      ...(summary.url ? { url: summary.url } : {}),
-      ...(durationSec === undefined ? {} : { durationSec }),
-      ...(cost ? { costInUsdTicks: cost.ticks, costUsd: cost.costUsd } : {}),
-      ...(summary.error ? { error: summary.error } : {}),
-    };
+    if (summary.url) final.url = summary.url;
+
+    if (durationSec !== undefined) final.durationSec = durationSec;
+
+    if (cost) {
+      final.costInUsdTicks = cost.ticks;
+      final.costUsd = cost.costUsd;
+    }
+
+    if (summary.error) final.error = summary.error;
 
     // Set before any await: concurrent polls return this result instead of logging again.
     job.final = final;
@@ -1857,14 +1945,13 @@ class QgridFrameClass extends BaseFrameClass {
 
       const { text, language, duration } = dispatched.result;
 
-      const output: TranscribeOutput = {
-        text,
-        ...(language ? { language } : {}),
-        ...(duration === undefined ? {} : { durationSec: duration }),
-        model: route,
-        tokenName: dispatched.tokenName,
-        ...(requestLogId === undefined ? {} : { requestLogId }),
-      };
+      const output: TranscribeOutput = { text, model: route, tokenName: dispatched.tokenName };
+
+      if (language) output.language = language;
+
+      if (duration !== undefined) output.durationSec = duration;
+
+      if (requestLogId !== undefined) output.requestLogId = requestLogId;
 
       const log: MediaRunLog = {
         tokenName: output.tokenName,
@@ -1924,8 +2011,9 @@ class QgridFrameClass extends BaseFrameClass {
         audio: Buffer.from(dispatched.result.audio).toString("base64"),
         mimeType: dispatched.result.mediaType,
         tokenName: dispatched.tokenName,
-        ...(requestLogId === undefined ? {} : { requestLogId }),
       };
+
+      if (requestLogId !== undefined) output.requestLogId = requestLogId;
 
       const log: MediaRunLog = {
         tokenName: output.tokenName,

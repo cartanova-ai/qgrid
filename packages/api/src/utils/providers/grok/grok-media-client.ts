@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { type JsonValue } from "../common/provider-types";
 import {
   classifyGrokHttpError,
   GrokProtocolError,
@@ -138,8 +139,8 @@ const ErrorWithCode = z.looseObject({ code: z.string() });
 const ErrorWithCause = z.looseObject({ cause: z.unknown() });
 
 /** The first `code` along the `cause` chain (undici wraps socket errors in `TypeError`). */
-function errorCode(error: unknown): string | undefined {
-  let current: unknown = error;
+function errorCode(cause: unknown): string | undefined {
+  let current: unknown = cause;
 
   for (let depth = 0; depth < 5 && current !== undefined && current !== null; depth++) {
     const withCode = ErrorWithCode.safeParse(current);
@@ -152,8 +153,8 @@ function errorCode(error: unknown): string | undefined {
   return undefined;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -162,16 +163,11 @@ function abortReason(signal: AbortSignal): Error {
   return reason instanceof Error ? reason : new DOMException("Aborted", "AbortError");
 }
 
-function connectFailure(error: unknown): GrokHttpError {
-  const code = errorCode(error);
-  const message = `${errorMessage(error)}${code ? ` (${code})` : ""}`;
+function connectFailure(cause: unknown): GrokHttpError {
+  const code = errorCode(cause);
+  const message = `${errorMessage(cause)}${code ? ` (${code})` : ""}`;
 
-  return new GrokHttpError(
-    { ...classifyGrokHttpError(0, "", {}), message },
-    "",
-    {},
-    { cause: error },
-  );
+  return new GrokHttpError({ ...classifyGrokHttpError(0, "", {}), message }, "", {}, { cause });
 }
 
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
@@ -223,19 +219,23 @@ export function decodeGrokImages(response: GrokImageResponse): GrokDecodedImages
       ? image.mime_type
       : (sniffImageMediaType(bytes) ?? "image/jpeg");
 
-    return {
-      bytes,
-      mediaType,
-      ...(image.revised_prompt ? { revisedPrompt: image.revised_prompt } : {}),
-      ...(image.respect_moderation === undefined
-        ? {}
-        : { respectModeration: image.respect_moderation }),
-    };
+    const decoded: GrokDecodedImage = { bytes, mediaType };
+
+    if (image.revised_prompt) decoded.revisedPrompt = image.revised_prompt;
+
+    if (image.respect_moderation !== undefined) {
+      decoded.respectModeration = image.respect_moderation;
+    }
+
+    return decoded;
   });
 
   const ticks = response.usage?.cost_in_usd_ticks;
+  const result: GrokDecodedImages = { images };
 
-  return { images, ...(ticks === undefined ? {} : { costInUsdTicks: ticks }) };
+  if (ticks !== undefined) result.costInUsdTicks = ticks;
+
+  return result;
 }
 
 // Fields @ai-sdk/xai reads that grok-types' GrokVideoStatus leaves loose
@@ -263,10 +263,9 @@ export function summarizeGrokVideoStatus(status: GrokVideoStatus): GrokVideoSumm
   if (extras.video?.respect_moderation === false) throw new GrokContentPolicyError("video");
   const ticks = status.usage?.cost_in_usd_ticks;
 
-  const base = {
-    mimeType: "video/mp4" as const,
-    ...(ticks === undefined ? {} : { usageTicks: ticks }),
-  };
+  const base: Omit<GrokVideoSummary, "status"> = { mimeType: "video/mp4" };
+
+  if (ticks !== undefined) base.usageTicks = ticks;
 
   if (status.status === "expired")
     return { ...base, status: "failed", error: "Video generation request expired." };
@@ -297,7 +296,7 @@ interface MediaCall {
   method: "GET" | "POST";
   path: string;
   auth: GrokMediaAuth;
-  body?: Record<string, unknown>;
+  body?: GrokImageBody | GrokVideoBody;
   totalMs: number;
   readMs: number;
   maxBytes: number;
@@ -396,7 +395,7 @@ export class GrokMediaClient implements GrokMediaPort {
   async postImages(
     path: string,
     auth: GrokMediaAuth,
-    body: Record<string, unknown>,
+    body: GrokImageBody,
     signal: AbortSignal | undefined,
   ): Promise<GrokImageResponse> {
     const { text } = await this.call({
@@ -455,19 +454,19 @@ export class GrokMediaClient implements GrokMediaPort {
     signal?.addEventListener("abort", onAbort, { once: true });
 
     // Called for every failure: a caller abort or a timeout wins over the transport error.
-    const settle = (error: unknown, responded: boolean): Error => {
+    const settle = (cause: unknown, responded: boolean): Error => {
       if (signal?.aborted) return abortReason(signal);
 
       if (timeout) return timeout;
 
-      if (error instanceof GrokProtocolError || error instanceof GrokHttpError) return error;
+      if (cause instanceof GrokProtocolError || cause instanceof GrokHttpError) return cause;
 
-      if (call.method === "GET") return connectFailure(error);
+      if (call.method === "GET") return connectFailure(cause);
 
-      if (!responded && PRE_SEND_ERROR_CODES.has(errorCode(error) ?? ""))
-        return connectFailure(error);
+      if (!responded && PRE_SEND_ERROR_CODES.has(errorCode(cause) ?? ""))
+        return connectFailure(cause);
 
-      return new GrokMediaDeliveryError(errorMessage(error), { cause: error });
+      return new GrokMediaDeliveryError(errorMessage(cause), { cause });
     };
 
     try {
@@ -478,7 +477,7 @@ export class GrokMediaClient implements GrokMediaPort {
         response = await this.fetchImpl(`${this.baseUrl}${call.path}`, {
           method: call.method,
           headers,
-          ...(call.body === undefined ? {} : { body: JSON.stringify(call.body) }),
+          body: call.body === undefined ? undefined : JSON.stringify(call.body),
           signal: controller.signal,
         });
       } catch (error) {
@@ -512,7 +511,36 @@ export class GrokMediaClient implements GrokMediaPort {
   }
 }
 
-function imageBody(request: GrokImageGenerateRequest, model: string): Record<string, unknown> {
+/**
+ * Image request body. Optional members are left `undefined`, which JSON.stringify omits, so the
+ * serialized key order stays that of the verified request.
+ */
+interface GrokImageBody {
+  model: string;
+  prompt: string;
+  n: number;
+  aspect_ratio?: GrokImageGenerateRequest["aspectRatio"];
+  resolution: NonNullable<GrokImageGenerateRequest["resolution"]>;
+  response_format: "b64_json";
+  quality?: GrokImageGenerateRequest["quality"];
+  output_format?: GrokImageGenerateRequest["outputFormat"];
+  image?: { url: string };
+  images?: Array<{ url: string }>;
+}
+
+/** Video request body; `undefined` members are omitted from the serialized JSON. */
+interface GrokVideoBody {
+  model: string;
+  prompt: string;
+  image?: { url: string };
+  duration?: number;
+  aspect_ratio?: GrokVideoStartRequest["aspectRatio"];
+  resolution?: GrokVideoStartRequest["resolution"];
+  reference_images?: Array<{ url: string }>;
+  last_frame?: { url: string };
+}
+
+function imageBody(request: GrokImageGenerateRequest, model: string): GrokImageBody {
   const n = request.n ?? 1;
 
   if (!Number.isSafeInteger(n) || n < 1 || n > GROK_IMAGE_MAX_PER_CALL)
@@ -521,19 +549,21 @@ function imageBody(request: GrokImageGenerateRequest, model: string): Record<str
     );
 
   // Key order of the U0-verified request (image_gen/mod.rs:231-238); SDK options follow.
-  return {
+  const body: GrokImageBody = {
     model,
     prompt: request.prompt,
     n,
-    ...(request.aspectRatio === undefined ? {} : { aspect_ratio: request.aspectRatio }),
+    aspect_ratio: request.aspectRatio,
     resolution: request.resolution ?? GROK_IMAGE_DEFAULT_RESOLUTION,
     response_format: "b64_json",
-    ...(request.quality === undefined ? {} : { quality: request.quality }),
-    ...(request.outputFormat === undefined ? {} : { output_format: request.outputFormat }),
+    quality: request.quality,
+    output_format: request.outputFormat,
   };
+
+  return body;
 }
 
-function videoBody(request: GrokVideoStartRequest): Record<string, unknown> {
+function videoBody(request: GrokVideoStartRequest): GrokVideoBody {
   // `edit-video` / `extend-video` are not in the port type: they post to /videos/edits and
   // /videos/extensions with a source `video: {url}` (xai-video-model.ts:586-593, 391-396), and the
   // port request carries no video URL.
@@ -554,21 +584,26 @@ function videoBody(request: GrokVideoStartRequest): Record<string, unknown> {
   // Field order of grok-build GenerateVideoPayload (video_gen/mod.rs:811-827). `mode` selects the
   // endpoint in @ai-sdk/xai and is never a body field; reference-to-video is inferred upstream
   // from `reference_images` (xai-video-model.ts:169-194).
-  return {
+  const body: GrokVideoBody = {
     model: request.model.trim() || GROK_VIDEO_DEFAULT_MODEL,
     prompt: request.prompt,
-    ...(request.image === undefined ? {} : { image: { url: request.image } }),
-    ...(duration === undefined ? {} : { duration }),
-    ...(request.aspectRatio === undefined ? {} : { aspect_ratio: request.aspectRatio }),
-    ...(request.resolution === undefined ? {} : { resolution: request.resolution }),
-    ...(references.length === 0 ? {} : { reference_images: references.map((url) => ({ url })) }),
-    ...(request.lastFrame === undefined ? {} : { last_frame: { url: request.lastFrame } }),
+    image: request.image === undefined ? undefined : { url: request.image },
+    duration,
+    aspect_ratio: request.aspectRatio,
+    resolution: request.resolution,
+    reference_images: references.length === 0 ? undefined : references.map((url) => ({ url })),
+    last_frame: request.lastFrame === undefined ? undefined : { url: request.lastFrame },
   };
+
+  return body;
 }
 
-function parseJsonText(text: string, what: string): unknown {
+function parseJsonText(text: string, what: string): JsonValue {
   try {
-    return JSON.parse(text);
+    // JSON.parse without a reviver yields only JSON values.
+    const json: JsonValue = JSON.parse(text);
+
+    return json;
   } catch {
     throw new GrokProtocolError(`Grok ${what} response is not JSON`);
   }

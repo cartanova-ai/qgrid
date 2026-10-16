@@ -1,8 +1,13 @@
 import { getLogger } from "@logtape/logtape";
+import { z } from "zod";
 
-import { QuotaThresholdExceededError } from "../../../application/qgrid/qgrid.types";
+import {
+  type ImageGenerationMetadata,
+  QuotaThresholdExceededError,
+} from "../../../application/qgrid/qgrid.types";
 import { TokenModel } from "../../../application/token/token.model";
 import { type OpenAICredentials } from "../../../application/token/token.types";
+import { isOpenAICredentials } from "../common/credentials";
 import { resolveOpenAIEffort } from "../common/effort";
 import {
   type GenerateRequest,
@@ -11,11 +16,13 @@ import {
   type GeneratedImage,
   type ProviderDispatcher,
 } from "../common/provider-dispatcher";
+import { isJsonObject, jsonString } from "../common/provider-types";
 import { SmoothWeightedRoundRobin } from "../common/smooth-weighted-round-robin";
 import { ThinkingValidationError } from "../common/thinking";
 import {
   imageMimeType,
   type JsonValue,
+  type OpenAINormalizedEvent,
   type OpenAIResponseItem,
   type OpenAIResponsesOptions,
 } from "./openai-backend-protocol";
@@ -44,6 +51,27 @@ type ImageToolArguments = {
   transparent_background: boolean;
   num_last_images_to_include: number;
 };
+
+// Exactly these three keys; the backend rejects strict tools, so arguments are validated here.
+const ImageToolArgumentsSchema = z.strictObject({
+  prompt: z.string().refine((prompt) => prompt.trim().length > 0),
+  transparent_background: z.boolean(),
+  num_last_images_to_include: z.number().int().min(0).max(5),
+});
+
+function generatedImageFrom(
+  event: Extract<OpenAINormalizedEvent, { type: "image" }>,
+): GeneratedImage {
+  const image: GeneratedImage = {
+    data: event.base64,
+    mediaType: event.mimeType,
+    revisedPrompt: event.revisedPrompt ?? null,
+  };
+
+  if (event.generation) image.generation = event.generation;
+
+  return image;
+}
 
 export type ImageFailureKind = "gate" | "not_called" | "incomplete";
 
@@ -108,8 +136,8 @@ function quotaMessage(entries: Array<{ name: string; threshold: number }>): stri
     : "All openai tokens exceeded quota threshold";
 }
 
-function inputItems(req: GenerateRequest): OpenAIResponseItem[] {
-  const history = (req.coldHistory ?? []) as OpenAIResponseItem[];
+function inputItems(req: GenerateRequest): JsonValue[] {
+  const history = req.coldHistory ?? [];
 
   const content: OpenAIResponseItem[] = req.coldInput.map((input) => {
     if (input.type === "text") return { type: "input_text", text: input.text };
@@ -126,27 +154,29 @@ function inputItems(req: GenerateRequest): OpenAIResponseItem[] {
 
 function imageReferences(req: GenerateRequest): OpenAIResponseItem[] {
   return inputItems(req).flatMap((item) => {
-    if (item.type === "image_generation_call" && typeof item.result === "string") {
+    if (!isJsonObject(item)) return [];
+    const result = jsonString(item.result);
+
+    if (item.type === "image_generation_call" && result !== undefined) {
       return [
         {
           type: "input_image",
-          image_url: `data:${imageMimeType(item.result, item.output_format)};base64,${item.result}`,
+          image_url: `data:${imageMimeType(result, item.output_format)};base64,${result}`,
         },
       ];
     }
 
     if (!Array.isArray(item.content)) return [];
 
-    return item.content.filter(
-      (part): part is OpenAIResponseItem =>
-        part !== null &&
-        typeof part === "object" &&
-        (part.type === "input_image" || part.type === "image_url"),
-    );
+    return item.content
+      .filter(isJsonObject)
+      .filter((part) => part.type === "input_image" || part.type === "image_url");
   });
 }
 
-function asReasoning(req: GenerateRequest): OpenAIResponsesOptions["reasoning"] | undefined {
+type OpenAIReasoning = NonNullable<OpenAIResponsesOptions["reasoning"]>;
+
+function asReasoning(req: GenerateRequest): OpenAIReasoning | undefined {
   if (req.thinking === false) return { effort: "none" };
 
   const summary =
@@ -157,15 +187,40 @@ function asReasoning(req: GenerateRequest): OpenAIResponsesOptions["reasoning"] 
 
   if (!effort && !summary) return undefined;
 
-  return {
-    ...(effort ? { effort } : {}),
-    ...(summary
-      ? {
-          summary: summary as NonNullable<OpenAIResponsesOptions["reasoning"]>["summary"],
-        }
-      : {}),
-  };
+  const reasoning: OpenAIReasoning = {};
+
+  if (effort) reasoning.effort = effort;
+
+  if (summary) reasoning.summary = summary;
+
+  return reasoning;
 }
+
+const AUTO_IMAGE_INSTRUCTIONS =
+  "Use generate_image when image generation or editing is needed; otherwise reply with text. Call it at most once per response. Supply a complete, self-contained prompt with all relevant conversation instructions. Set transparent_background to true only when a transparent background is requested. Set num_last_images_to_include to 0 for a new image without references. For editing or reference-based generation, choose the smallest number of recent conversation images that includes all needed references, at most 5. References retain their chronological order. Do not select images for an unrelated new request.";
+
+const AUTO_IMAGE_TOOL: OpenAIResponseItem = {
+  type: "function",
+  name: IMAGE_TOOL,
+  description:
+    "Generate or edit an image, optionally with a transparent background or recent conversation images as references.",
+  // Astra's subscription backend rejects strict tools; validate arguments locally.
+  strict: false,
+  parameters: {
+    type: "object",
+    properties: {
+      prompt: {
+        type: "string",
+        minLength: 1,
+        description: "Complete, self-contained instructions for the image generation or edit.",
+      },
+      transparent_background: { type: "boolean" },
+      num_last_images_to_include: { type: "integer", minimum: 0, maximum: 5 },
+    },
+    required: ["prompt", "transparent_background", "num_last_images_to_include"],
+    additionalProperties: false,
+  },
+};
 
 function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
   const { outputFormat, ...imageControls } = req.imageGenerationOptions ?? {};
@@ -182,64 +237,42 @@ function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
     throw new ImageGenerationError("gate", "Automatic image generation only supports PNG output");
   }
 
-  return {
-    model: req.model ?? "",
-    ...(req.systemPrompt ? { instructions: req.systemPrompt } : {}),
-    ...(auto
-      ? {
-          instructions: [
-            req.systemPrompt,
-            "Use generate_image when image generation or editing is needed; otherwise reply with text. Call it at most once per response. Supply a complete, self-contained prompt with all relevant conversation instructions. Set transparent_background to true only when a transparent background is requested. Set num_last_images_to_include to 0 for a new image without references. For editing or reference-based generation, choose the smallest number of recent conversation images that includes all needed references, at most 5. References retain their chronological order. Do not select images for an unrelated new request.",
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-          parallelToolCalls: false,
-          tools: [
-            {
-              type: "function",
-              name: IMAGE_TOOL,
-              description:
-                "Generate or edit an image, optionally with a transparent background or recent conversation images as references.",
-              // Astra's subscription backend rejects strict tools; validate arguments locally.
-              strict: false,
-              parameters: {
-                type: "object",
-                properties: {
-                  prompt: {
-                    type: "string",
-                    minLength: 1,
-                    description:
-                      "Complete, self-contained instructions for the image generation or edit.",
-                  },
-                  transparent_background: { type: "boolean" },
-                  num_last_images_to_include: { type: "integer", minimum: 0, maximum: 5 },
-                },
-                required: ["prompt", "transparent_background", "num_last_images_to_include"],
-                additionalProperties: false,
-              },
-            },
-          ],
-        }
-      : {}),
-    history: inputItems(req),
-    ...(asReasoning(req) ? { reasoning: asReasoning(req) } : {}),
-    ...(req.verbosity ? { verbosity: req.verbosity as OpenAIResponsesOptions["verbosity"] } : {}),
-    ...(req.serviceTier
-      ? { serviceTier: req.serviceTier === "fast" ? "priority" : req.serviceTier }
-      : {}),
-    ...(req.promptCacheKey ? { promptCacheKey: req.promptCacheKey } : {}),
-    ...(req.outputSchema ? { outputSchema: { schema: req.outputSchema as JsonValue } } : {}),
-    ...(req.imageGeneration && !auto
-      ? {
-          imageGeneration: req.imageGenerationOptions
-            ? {
-                ...imageControls,
-                ...(outputFormat ? { output_format: outputFormat } : {}),
-              }
-            : true,
-        }
-      : {}),
-  };
+  const options: OpenAIResponsesOptions = { model: req.model ?? "", history: inputItems(req) };
+
+  if (req.systemPrompt) options.instructions = req.systemPrompt;
+
+  if (auto) {
+    options.instructions = [req.systemPrompt, AUTO_IMAGE_INSTRUCTIONS].filter(Boolean).join("\n\n");
+    options.parallelToolCalls = false;
+    options.tools = [AUTO_IMAGE_TOOL];
+  }
+
+  const reasoning = asReasoning(req);
+
+  if (reasoning) options.reasoning = reasoning;
+
+  if (req.verbosity) options.verbosity = req.verbosity;
+
+  if (req.serviceTier) {
+    options.serviceTier = req.serviceTier === "fast" ? "priority" : req.serviceTier;
+  }
+
+  if (req.promptCacheKey) options.promptCacheKey = req.promptCacheKey;
+
+  if (req.outputSchema) options.outputSchema = { schema: req.outputSchema };
+
+  if (req.imageGeneration && !auto) {
+    if (req.imageGenerationOptions) {
+      const controls: OpenAIResponseItem = { ...imageControls };
+
+      if (outputFormat) controls.output_format = outputFormat;
+      options.imageGeneration = controls;
+    } else {
+      options.imageGeneration = true;
+    }
+  }
+
+  return options;
 }
 
 // quota와 cache affinity로 토큰을 선택해 HTTPS/WS로 전송한다. 로컬 동시성 제한은 없다.
@@ -273,18 +306,18 @@ export class OpenAIDispatcher implements ProviderDispatcher {
 
   async start(): Promise<void> {
     const { rows } = await TokenModel.findMany("A");
-    rows
-      .filter((row) => row.provider === "openai")
-      .forEach((row) => {
-        this.setToken(
-          row.id,
-          row.name,
-          row.credentials as OpenAICredentials,
-          row.quota_threshold,
-          row.weight,
-          row.active,
-        );
-      });
+
+    for (const row of rows) {
+      if (row.provider !== "openai") continue;
+
+      if (!isOpenAICredentials(row.credentials)) {
+        logger.warn(`skipping token ${row.name}: credentials are not OpenAI OAuth credentials`);
+        continue;
+      }
+
+      this.setToken(row.id, row.name, row.credentials, row.quota_threshold, row.weight, row.active);
+    }
+
     logger.info(`started direct OpenAI runtime with ${this.tokenMetadata.size} tokens`);
   }
 
@@ -373,7 +406,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     try {
       cb.onComplete(await this.run(req, cb.onDelta));
     } catch (error) {
-      cb.onError(error as Error);
+      cb.onError(error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
   }
@@ -439,22 +472,31 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     let imageAttempted = false;
     const auto = req.imageGeneration === "auto";
     const imageCalls = new Map<string, ImageToolArguments>();
-    const imageCallIds = new Set<unknown>();
+    const imageCallIds = new Set<JsonValue | undefined>();
     let imageToolAttempted = false;
     let driverCompleted = false;
     let servingModel = req.model ?? "";
     const metadata = selection.metadata;
 
-    const driverResult = (): GenerateResult => ({
-      text,
-      tokenName: metadata.name,
-      usage,
-      durationMs: Date.now() - startedAt,
-      ttftMs: firstDeltaAt === undefined ? null : firstDeltaAt - startedAt,
-      model: servingModel,
-      ...(servingModel !== req.model ? { requestedModel: req.model } : {}),
-      threadCoord: { workerId: selection.tokenId, threadId: req.promptCacheKey ?? "", epoch: -1 },
-    });
+    const driverResult = (): GenerateResult => {
+      const result: GenerateResult = {
+        text,
+        tokenName: metadata.name,
+        usage,
+        durationMs: Date.now() - startedAt,
+        ttftMs: firstDeltaAt === undefined ? null : firstDeltaAt - startedAt,
+        model: servingModel,
+        threadCoord: {
+          workerId: selection.tokenId,
+          threadId: req.promptCacheKey ?? "",
+          epoch: -1,
+        },
+      };
+
+      if (servingModel !== req.model) result.requestedModel = req.model;
+
+      return result;
+    };
 
     const clientEntry = this.acquireClient(selection);
 
@@ -463,14 +505,17 @@ export class OpenAIDispatcher implements ProviderDispatcher {
         requestOptions(req),
         req.abortSignal,
       )) {
+        const itemId = event.type === "output-item" ? jsonString(event.item.id) : undefined;
+        const itemPhase = event.type === "output-item" ? jsonString(event.item.phase) : undefined;
+
         if (
           req.stopAfterOutputMessage &&
           event.type === "output-item" &&
           event.item.type === "message" &&
-          typeof event.item.id === "string" &&
-          typeof event.item.phase === "string"
+          itemId !== undefined &&
+          itemPhase !== undefined
         ) {
-          messagePhases.set(event.item.id, event.item.phase);
+          messagePhases.set(itemId, itemPhase);
         }
 
         if (event.type === "text-delta") {
@@ -495,37 +540,38 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           Array.isArray(event.item.content)
         ) {
           const messageText = event.item.content
-            .filter((part) => part?.type === "output_text" && typeof part.text === "string")
-            .map((part) => part.text)
+            .flatMap((part) => {
+              const partText =
+                isJsonObject(part) && part.type === "output_text"
+                  ? jsonString(part.text)
+                  : undefined;
+
+              return partText === undefined ? [] : [partText];
+            })
             .join("");
 
           // A valid client tool request ends this application turn. Later answers cannot
           // know its result yet. Never split/repair malformed JSON within a message.
-          const phase = typeof event.item.phase === "string" ? event.item.phase : undefined;
+          const phase = itemPhase;
 
           if (messageText) outputMessageAccepted = req.stopAfterOutputMessage(messageText, phase);
 
           if (
-            typeof event.item.id === "string" &&
-            !streamedMessageIds.has(event.item.id) &&
+            itemId !== undefined &&
+            !streamedMessageIds.has(itemId) &&
             (phase !== "commentary" || outputMessageAccepted) &&
             messageText
           ) {
             firstDeltaAt ??= Date.now();
             text += messageText;
             onDelta?.(messageText);
-            streamedMessageIds.add(event.item.id);
+            streamedMessageIds.add(itemId);
           }
         } else if (event.type === "image") {
           if (auto)
             throw new ImageGenerationError("incomplete", "Unexpected hosted image generation");
           imageAttempted = true;
-          images.push({
-            data: event.base64,
-            mediaType: event.mimeType,
-            revisedPrompt: event.revisedPrompt ?? null,
-            ...(event.generation ? { generation: event.generation } : {}),
-          });
+          images.push(generatedImageFrom(event));
         } else if (event.type === "output-item" && event.item.type === "image_generation_call") {
           if (auto)
             throw new ImageGenerationError("incomplete", "Unexpected hosted image generation");
@@ -539,35 +585,25 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           imageCallIds.add(event.item.call_id);
 
           if (!event.completed) continue;
-          const id = event.item.call_id;
-          let args: unknown;
+          const id = jsonString(event.item.call_id);
+          const rawArguments = jsonString(event.item.arguments);
+          let decoded: JsonValue;
 
           try {
-            args = JSON.parse(String(event.item.arguments));
+            if (rawArguments === undefined) throw new Error("missing arguments");
+            // JSON.parse without a reviver yields only JSON values.
+            decoded = JSON.parse(rawArguments);
           } catch {
             throw new ImageGenerationError("incomplete", "Invalid image tool arguments");
           }
 
-          if (
-            typeof id !== "string" ||
-            !id ||
-            !args ||
-            typeof args !== "object" ||
-            Array.isArray(args) ||
-            Object.keys(args).length !== 3 ||
-            !("prompt" in args) ||
-            typeof args.prompt !== "string" ||
-            !args.prompt.trim() ||
-            !("transparent_background" in args) ||
-            typeof args.transparent_background !== "boolean" ||
-            !("num_last_images_to_include" in args) ||
-            typeof args.num_last_images_to_include !== "number" ||
-            !Number.isInteger(args.num_last_images_to_include) ||
-            args.num_last_images_to_include < 0 ||
-            args.num_last_images_to_include > 5
-          ) {
+          const parsedArgs = ImageToolArgumentsSchema.safeParse(decoded);
+
+          if (!id || !parsedArgs.success) {
             throw new ImageGenerationError("incomplete", "Invalid image tool arguments");
           }
+
+          const args = parsedArgs.data;
 
           const previous = imageCalls.get(id);
 
@@ -616,15 +652,22 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             );
 
             for (const [index, image] of hostedImages.entries()) {
-              image.generation = {
+              const generation: ImageGenerationMetadata = {
                 route: "codex-responses",
-                ...(event.imageGeneration.model ? { model: event.imageGeneration.model } : {}),
                 ...image.generation,
-                // Tool usage covers the whole response, not each returned image.
-                ...(index === 0 && event.imageGeneration.usage
-                  ? { usage: event.imageGeneration.usage }
-                  : {}),
               };
+
+              // The image's own model wins; the response-level model only fills a gap.
+              if (generation.model === undefined && event.imageGeneration.model) {
+                generation.model = event.imageGeneration.model;
+              }
+
+              // Tool usage covers the whole response, not each returned image.
+              if (index === 0 && event.imageGeneration.usage) {
+                generation.usage = event.imageGeneration.usage;
+              }
+
+              image.generation = generation;
             }
           }
         } else if (event.type === "error") {
@@ -675,13 +718,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
           },
           req.abortSignal,
         )) {
-          if (event.type === "image")
-            images.push({
-              data: event.base64,
-              mediaType: event.mimeType,
-              revisedPrompt: event.revisedPrompt ?? null,
-              ...(event.generation ? { generation: event.generation } : {}),
-            });
+          if (event.type === "image") images.push(generatedImageFrom(event));
           else if (event.type === "completed") imageCompleted = true;
           else if (event.type === "error")
             throw new ImageGenerationError("incomplete", event.error.message, {
@@ -730,10 +767,11 @@ export class OpenAIDispatcher implements ProviderDispatcher {
       this.releaseClient(clientEntry);
     }
 
-    return {
-      ...driverResult(),
-      ...(images.length ? { images } : {}),
-    };
+    const result = driverResult();
+
+    if (images.length) result.images = images;
+
+    return result;
   }
 
   /** 세대가 바뀐 client 는 사용 중인 요청이 끝난 뒤에 닫는다. */
@@ -818,25 +856,26 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     }
 
     // 콜드 캐시에서 토큰 수만큼 조회 지연이 쌓이지 않도록 병렬 판정한다.
+    const activeTokens = [...this.tokenMetadata.entries()].filter(([, token]) => token.active);
+
     const checks = await Promise.all(
-      [...this.tokenMetadata.entries()]
-        .filter(([, token]) => token.active)
-        .map(async ([id, token]) => ({
-          id,
-          token,
-          eligible: await this.isQuotaEligible(id, token, signal),
-        })),
+      activeTokens.map(async ([id, token]) => ({
+        id,
+        token,
+        eligible: await this.isQuotaEligible(id, token, signal),
+      })),
     );
 
     const eligible = new Set(checks.filter((c) => c.eligible).map((c) => c.id));
 
     if (eligible.size === 0) {
-      const over = checks
-        .filter(
-          (c) =>
-            !c.eligible && c.token.quotaThreshold !== null && c.token.quotaThreshold !== undefined,
-        )
-        .map((c) => ({ name: c.token.name, threshold: c.token.quotaThreshold as number }));
+      const over = checks.flatMap((c) => {
+        const threshold = c.token.quotaThreshold;
+
+        return c.eligible || threshold === null || threshold === undefined
+          ? []
+          : [{ name: c.token.name, threshold }];
+      });
 
       if (over.length) {
         logger.warn("quota_threshold gate: all_exceeded", {
@@ -919,7 +958,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
         credentials: token.credentials,
         refreshCredentials: () => this.refreshCredentials(tokenId),
         fetch: this.fetchImpl,
-        ...(signal ? { signal } : {}),
+        signal,
       });
 
       if (result.kind === "lookup_failed") throw new Error(result.reason);

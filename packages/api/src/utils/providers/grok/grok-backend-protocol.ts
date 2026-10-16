@@ -3,7 +3,12 @@ import { zstdCompress } from "node:zlib";
 
 import { z } from "zod";
 
-import { type JsonValue } from "../common/provider-types";
+import {
+  isJsonObject,
+  type JsonObject,
+  type JsonValue,
+  jsonValueSchema,
+} from "../common/provider-types";
 import { type GrokReasoningEffort } from "./grok-constants";
 
 // ---------------------------------------------------------------------------
@@ -88,12 +93,15 @@ function replayItem(item: GrokInputItem): GrokInputWireItem | undefined {
   // payload (for example reasoning from another account) the item is dropped, not replayed.
   if (!item.encrypted_content) return undefined;
 
-  return {
+  const replayed: Extract<GrokInputWireItem, { type: "reasoning" }> = {
     type: "reasoning",
-    ...(item.id ? { id: item.id } : {}),
     summary: item.summary ?? [],
     encrypted_content: item.encrypted_content,
   };
+
+  if (item.id) replayed.id = item.id;
+
+  return replayed;
 }
 
 /** Builds the `/responses` body in the key order of the 1.0.60 golden capture. */
@@ -204,7 +212,7 @@ export interface GrokUsage {
   contextOutputTokens?: number;
 }
 
-export type GrokOutputItem = { type: string } & Record<string, unknown>;
+export type GrokOutputItem = { type: string } & JsonObject;
 
 export type GrokNormalizedEvent =
   | { type: "created"; responseId?: string; model?: string }
@@ -245,7 +253,8 @@ const WireUsage = z.object({
     .nullish(),
 });
 
-const WireItem = z.looseObject({ type: z.string() });
+// Items arrive from JSON.parse, so every extra member is a JSON value.
+const WireItem = z.object({ type: z.string() }).catchall(jsonValueSchema);
 
 const WireResponse = z.looseObject({
   id: z.string().optional(),
@@ -268,32 +277,35 @@ const WireEvent = z.looseObject({
   error: z.object({ message: z.string().optional(), code: z.string().optional() }).nullish(),
 });
 
-export function grokUsageFrom(value: unknown): GrokUsage | undefined {
-  const parsed = WireUsage.safeParse(value);
-
-  if (!parsed.success) return undefined;
-  const usage = parsed.data;
+export function grokUsageFrom(usage: z.infer<typeof WireUsage>): GrokUsage {
   const inputTokens = usage.input_tokens ?? 0;
   const outputTokens = usage.output_tokens ?? 0;
 
-  return {
+  const result: GrokUsage = {
     inputTokens,
     cachedInputTokens: usage.input_tokens_details?.cached_tokens ?? 0,
     outputTokens,
     reasoningTokens: usage.output_tokens_details?.reasoning_tokens ?? 0,
     totalTokens: usage.total_tokens ?? inputTokens + outputTokens,
-    ...(usage.num_sources_used === undefined ? {} : { numSourcesUsed: usage.num_sources_used }),
-    ...(usage.num_server_side_tools_used === undefined
-      ? {}
-      : { numServerSideToolsUsed: usage.num_server_side_tools_used }),
-    ...(usage.cost_in_usd_ticks === undefined ? {} : { costInUsdTicks: usage.cost_in_usd_ticks }),
-    ...(usage.context_details?.input_tokens === undefined
-      ? {}
-      : { contextInputTokens: usage.context_details.input_tokens }),
-    ...(usage.context_details?.output_tokens === undefined
-      ? {}
-      : { contextOutputTokens: usage.context_details.output_tokens }),
   };
+
+  if (usage.num_sources_used !== undefined) result.numSourcesUsed = usage.num_sources_used;
+
+  if (usage.num_server_side_tools_used !== undefined) {
+    result.numServerSideToolsUsed = usage.num_server_side_tools_used;
+  }
+
+  if (usage.cost_in_usd_ticks !== undefined) result.costInUsdTicks = usage.cost_in_usd_ticks;
+
+  if (usage.context_details?.input_tokens !== undefined) {
+    result.contextInputTokens = usage.context_details.input_tokens;
+  }
+
+  if (usage.context_details?.output_tokens !== undefined) {
+    result.contextOutputTokens = usage.context_details.output_tokens;
+  }
+
+  return result;
 }
 
 export interface GrokRawSSEEvent {
@@ -309,18 +321,18 @@ export interface GrokRawSSEEvent {
  */
 export function normalizeGrokEvent(raw: GrokRawSSEEvent): GrokNormalizedEvent | undefined {
   if (raw.data.trim() === "[DONE]") return undefined;
-  let json: unknown;
+  let json: JsonValue;
 
   try {
+    // JSON.parse without a reviver yields only JSON values.
     json = JSON.parse(raw.data);
   } catch (error) {
     throw new GrokProtocolError(`Invalid Grok SSE JSON: ${String(error)}`);
   }
 
+  // An SSE `event:` line names the type when the payload object omits it.
   const withType =
-    json && typeof json === "object" && !("type" in json) && raw.event
-      ? { ...json, type: raw.event }
-      : json;
+    isJsonObject(json) && !("type" in json) && raw.event ? { ...json, type: raw.event } : json;
 
   const parsed = WireEvent.safeParse(withType);
 
@@ -330,28 +342,28 @@ export function normalizeGrokEvent(raw: GrokRawSSEEvent): GrokNormalizedEvent | 
   const response = event.response;
 
   switch (event.type) {
-    case "response.created":
-      return {
-        type: "created",
-        ...(response?.id ? { responseId: response.id } : {}),
-        ...(response?.model ? { model: response.model } : {}),
-      };
+    case "response.created": {
+      const created: GrokNormalizedEvent = { type: "created" };
+
+      if (response?.id) created.responseId = response.id;
+
+      if (response?.model) created.model = response.model;
+
+      return created;
+    }
+
     case "response.output_text.delta":
       if (event.delta === undefined) return undefined;
 
-      return {
-        type: "text-delta",
-        text: event.delta,
-        ...(event.item_id ? { itemId: event.item_id } : {}),
-      };
+      return event.item_id
+        ? { type: "text-delta", text: event.delta, itemId: event.item_id }
+        : { type: "text-delta", text: event.delta };
     case "response.reasoning_summary_text.delta":
       if (event.delta === undefined) return undefined;
 
-      return {
-        type: "reasoning-summary-delta",
-        text: event.delta,
-        ...(event.item_id ? { itemId: event.item_id } : {}),
-      };
+      return event.item_id
+        ? { type: "reasoning-summary-delta", text: event.delta, itemId: event.item_id }
+        : { type: "reasoning-summary-delta", text: event.delta };
     case "response.output_item.added":
     case "response.output_item.done":
       if (!event.item) return undefined;
@@ -364,28 +376,38 @@ export function normalizeGrokEvent(raw: GrokRawSSEEvent): GrokNormalizedEvent | 
     case "response.completed": {
       const usage = response?.usage ? grokUsageFrom(response.usage) : undefined;
 
-      return {
+      const completed: GrokNormalizedEvent = {
         type: "completed",
         terminal: true,
         responseId: response?.id ?? "",
-        ...(response?.model ? { model: response.model } : {}),
-        ...(usage ? { usage } : {}),
-        ...(response?.output ? { output: response.output } : {}),
       };
+
+      if (response?.model) completed.model = response.model;
+
+      if (usage) completed.usage = usage;
+
+      if (response?.output) completed.output = response.output;
+
+      return completed;
     }
 
     case "response.incomplete": {
       const usage = response?.usage ? grokUsageFrom(response.usage) : undefined;
       const reason = response?.incomplete_details?.reason;
 
-      return {
+      const incomplete: GrokNormalizedEvent = {
         type: "incomplete",
         terminal: true,
         responseId: response?.id ?? "",
-        ...(reason ? { reason } : {}),
-        ...(response?.model ? { model: response.model } : {}),
-        ...(usage ? { usage } : {}),
       };
+
+      if (reason) incomplete.reason = reason;
+
+      if (response?.model) incomplete.model = response.model;
+
+      if (usage) incomplete.usage = usage;
+
+      return incomplete;
     }
 
     case "response.failed":
@@ -420,7 +442,11 @@ function parseSSEBlock(block: string): GrokRawSSEEvent | undefined {
 
   if (!data.length) return undefined;
 
-  return { ...(event === undefined ? {} : { event }), data: data.join("\n") };
+  const parsed: GrokRawSSEEvent = { data: data.join("\n") };
+
+  if (event !== undefined) parsed.event = event;
+
+  return parsed;
 }
 
 /** Splits a byte stream into SSE blocks across arbitrary UTF-8/chunk boundaries. */
@@ -595,25 +621,28 @@ export interface GrokHttpErrorClassification {
 const MAX_ERROR_MESSAGE_LENGTH = 500;
 const SUBSCRIPTION_CODE_PATTERN = /subscription:[a-z0-9][a-z0-9_.-]*/i;
 
+const ErrorObject = z.looseObject({
+  code: z.string().optional(),
+  message: z.string().optional(),
+  type: z.string().optional(),
+});
+
 const ErrorBody = z.looseObject({
   code: z.string().optional(),
   message: z.string().optional(),
-  error: z
-    .union([
-      z.string(),
-      z.looseObject({
-        code: z.string().optional(),
-        message: z.string().optional(),
-        type: z.string().optional(),
-      }),
-    ])
-    .optional(),
+  error: z.union([z.string(), ErrorObject]).optional(),
 });
 
-function parseErrorBody(bodyText: string): { code?: string; message?: string } {
-  let json: unknown;
+interface GrokErrorBody {
+  code?: string;
+  message?: string;
+}
+
+function parseErrorBody(bodyText: string): GrokErrorBody {
+  let json: JsonValue;
 
   try {
+    // JSON.parse without a reviver yields only JSON values.
     json = JSON.parse(bodyText);
   } catch {
     return bodyText.trim() ? { message: bodyText.trim() } : {};
@@ -623,12 +652,17 @@ function parseErrorBody(bodyText: string): { code?: string; message?: string } {
 
   if (!parsed.success) return bodyText.trim() ? { message: bodyText.trim() } : {};
   const { error } = parsed.data;
-  const code = parsed.data.code ?? (typeof error === "object" ? error.code : undefined);
+  const errorText = z.string().safeParse(error).data;
+  const errorObject = ErrorObject.safeParse(error).data;
+  const code = parsed.data.code ?? errorObject?.code;
+  const message = errorText ?? errorObject?.message ?? parsed.data.message;
+  const body: GrokErrorBody = {};
 
-  const message =
-    (typeof error === "string" ? error : error?.message) ?? parsed.data.message ?? undefined;
+  if (code) body.code = code;
 
-  return { ...(code ? { code } : {}), ...(message ? { message } : {}) };
+  if (message) body.message = message;
+
+  return body;
 }
 
 /**
@@ -648,13 +682,15 @@ export function classifyGrokHttpError(
   const shouldRetry = parseShouldRetry(headers);
   const retryAfterSec = parseRetryAfterSec(headers);
 
-  const base = {
-    status,
-    ...(body.code ? { code: body.code } : {}),
-    ...(message === undefined ? {} : { message }),
-    ...(shouldRetry === undefined ? {} : { shouldRetry }),
-    ...(retryAfterSec === undefined ? {} : { retryAfterSec }),
-  };
+  const base: Omit<GrokHttpErrorClassification, "kind"> = { status };
+
+  if (body.code) base.code = body.code;
+
+  if (message !== undefined) base.message = message;
+
+  if (shouldRetry !== undefined) base.shouldRetry = shouldRetry;
+
+  if (retryAfterSec !== undefined) base.retryAfterSec = retryAfterSec;
 
   const subscriptionCode = SUBSCRIPTION_CODE_PATTERN.exec(bodyText)?.[0];
 
@@ -662,8 +698,11 @@ export function classifyGrokHttpError(
 
   if (status === 426) {
     const minClientVersion = /\bversion\s+(\d+\.\d+\.\d+)\s+or later/i.exec(bodyText)?.[1];
+    const gate: GrokHttpErrorClassification = { kind: "version_gate", ...base };
 
-    return { kind: "version_gate", ...base, ...(minClientVersion ? { minClientVersion } : {}) };
+    if (minClientVersion) gate.minClientVersion = minClientVersion;
+
+    return gate;
   }
 
   if (status === 429) {

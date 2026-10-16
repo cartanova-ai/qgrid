@@ -3,7 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { getLogger } from "@logtape/logtape";
 import { z } from "zod";
 
-import { type GrokProviderDispatcher } from "../../../application/qgrid/qgrid.dispatcher";
+import {
+  type GrokProviderDispatcher,
+  type GrokTokenRow,
+} from "../../../application/qgrid/qgrid.dispatcher";
 import { QuotaThresholdExceededError } from "../../../application/qgrid/qgrid.types";
 import {
   type GenerateRequest,
@@ -15,12 +18,14 @@ import {
   type ProviderToolCall,
   type ToolDefinition,
   type VoiceDispatcher,
+  type XaiProviderMetadata,
 } from "../common/provider-dispatcher";
-import { type JsonValue } from "../common/provider-types";
+import { isJsonObject, type JsonValue, jsonString } from "../common/provider-types";
 import { SmoothWeightedRoundRobin } from "../common/smooth-weighted-round-robin";
 import { ThinkingValidationError } from "../common/thinking";
 import {
   buildGrokResponsesRequest,
+  type GrokFunctionTool,
   type GrokInputContentPart,
   type GrokInputItem,
   type GrokResponsesRequest,
@@ -393,17 +398,20 @@ function userMessage(req: GenerateRequest): GrokInputItem {
 function grokTools(tools: readonly ToolDefinition[] | undefined): GrokTool[] | undefined {
   if (!tools?.length) return undefined;
 
-  return tools.map((tool) =>
-    tool.type === "function"
-      ? {
-          type: "function",
-          name: tool.name,
-          ...(tool.description === undefined ? {} : { description: tool.description }),
-          parameters: tool.parameters,
-          strict: tool.strict ?? false,
-        }
-      : { type: tool.type },
-  );
+  return tools.map((tool): GrokTool => {
+    if (tool.type !== "function") return { type: tool.type };
+
+    const fn: GrokFunctionTool = {
+      type: "function",
+      name: tool.name,
+      parameters: tool.parameters,
+      strict: tool.strict ?? false,
+    };
+
+    if (tool.description !== undefined) fn.description = tool.description;
+
+    return fn;
+  });
 }
 
 /** Deterministic UUID-shaped id, so one qgrid conversation maps to one Grok conversation. */
@@ -414,10 +422,12 @@ function derivedGuid(namespace: string, key: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
-export function grokConversationIds(promptCacheKey: string | undefined): {
+export interface GrokConversationIds {
   convId: string;
   convGroupId: string;
-} {
+}
+
+export function grokConversationIds(promptCacheKey: string | undefined): GrokConversationIds {
   const convId = promptCacheKey ? derivedGuid("grok-conv", promptCacheKey) : randomUUID();
 
   return { convId, convGroupId: derivedGuid("grok-conv-group", convId) };
@@ -498,12 +508,12 @@ function mapRecord(map: Map<GrokRequestClass, number>, now: number) {
 export type GrokReauthReporter = (
   token: { id: number; name: string; credentials: GrokCredentials },
   reasonCode: string,
-) => Promise<unknown>;
+) => Promise<boolean>;
 
 async function persistGrokReauth(
   token: { id: number; name: string; credentials: GrokCredentials },
   reasonCode: string,
-): Promise<unknown> {
+): Promise<boolean> {
   // Loaded lazily: the token model pulls in the database layer, which the runtime does not need
   // until a token actually dies.
   const { deactivateAuthDeadToken } = await import("../../../application/qgrid/token-death");
@@ -512,14 +522,16 @@ async function persistGrokReauth(
 }
 
 /** Internal `grok:<code>` reason; provider text may carry account data, so only codes pass. */
-function reauthReasonCode(code: unknown): string {
-  return typeof code === "string" && /^[a-z_0-9]{1,80}$/.test(code)
-    ? `grok:${code}`
-    : "grok:unknown";
+function reauthReasonCode(code: string | undefined): string {
+  return code !== undefined && /^[a-z_0-9]{1,80}$/.test(code) ? `grok:${code}` : "grok:unknown";
 }
 
-function oauthErrorOf(cause: unknown): unknown {
-  return cause instanceof Error && "oauthError" in cause ? cause.oauthError : undefined;
+const oauthErrorCodeSchema = z.string();
+
+function oauthErrorOf(cause: unknown): string | undefined {
+  return cause instanceof Error && "oauthError" in cause
+    ? oauthErrorCodeSchema.safeParse(cause.oauthError).data
+    : undefined;
 }
 
 /** The same bearer and refresh token: a failure judged against `b` applies to `a`. */
@@ -552,6 +564,33 @@ type FailureAction =
   | { kind: "refresh"; presented: GrokCredentials }
   | { kind: "retry"; error: unknown }
   | { kind: "failover"; error: unknown; transient: boolean };
+
+/** Names of the tokens that were ineligible for exactly `reason`. */
+function tokenNamesWithReason(
+  reasons: ReadonlyMap<GrokTokenState, IneligibleReason>,
+  reason: IneligibleReason,
+): string[] {
+  return [...reasons].flatMap(([token, tokenReason]) =>
+    tokenReason === reason ? [token.name] : [],
+  );
+}
+
+/** A token row whose stored credentials are validated here, not trusted. */
+type GrokTokenInput = Omit<GrokTokenRow, "credentials"> & { credentials: JsonValue };
+
+export interface GrokChatBody {
+  body: GrokResponsesRequest;
+  model: GrokResolvedModel;
+  convId: string;
+  convGroupId: string;
+  turnIdx: number;
+}
+
+export interface GrokVersionGateState {
+  tripped: boolean;
+  minClientVersion: string | null;
+  trippedAt: number | null;
+}
 
 interface AttemptState {
   upstreamStarted: boolean;
@@ -616,7 +655,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
   onTokenAdded(
     id: number,
     name: string,
-    credentials: unknown,
+    credentials: JsonValue,
     quotaThreshold: number | null,
     weight: number,
   ): void {
@@ -626,7 +665,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
   onTokenUpdated(
     id: number,
     name: string,
-    credentials: unknown,
+    credentials: JsonValue,
     quotaThreshold: number | null,
     weight: number,
   ): void {
@@ -641,15 +680,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     this.pendingSubscription.delete(id);
   }
 
-  replaceTokens(
-    rows: Array<{
-      id: number;
-      name: string;
-      credentials: unknown;
-      quotaThreshold: number | null;
-      weight: number;
-    }>,
-  ): void {
+  replaceTokens(rows: GrokTokenInput[]): void {
     const ids = new Set(rows.map((row) => row.id));
 
     for (const id of this.tokens.keys()) if (!ids.has(id)) this.onTokenRemoved(id);
@@ -661,7 +692,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
   upsertToken(
     id: number,
     name: string,
-    rawCredentials: unknown,
+    rawCredentials: JsonValue,
     quotaThreshold: number | null,
     weight: number,
   ): void {
@@ -837,13 +868,13 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
   }
 
   /** Transient refresh failure for `presented`; ignored when the token already holds newer ones. */
-  markRefreshFailed(token: GrokTokenState, presented: GrokCredentials, error: unknown): void {
+  markRefreshFailed(token: GrokTokenState, presented: GrokCredentials, cause: unknown): void {
     if (this.tokens.get(token.id) !== token || !sameCredentials(token.credentials, presented))
       return;
     token.refreshFailedUntil = this.now() + GROK_REFRESH_FAILED_COOLDOWN_MS;
-    token.refreshFailure = error;
+    token.refreshFailure = cause;
     logger.warn(
-      `grok token ${token.name}[${token.id}] refresh failed; out of selection for ${GROK_REFRESH_FAILED_COOLDOWN_MS}ms: ${error instanceof Error ? error.name : "unknown"}`,
+      `grok token ${token.name}[${token.id}] refresh failed; out of selection for ${GROK_REFRESH_FAILED_COOLDOWN_MS}ms: ${cause instanceof Error ? cause.name : "unknown"}`,
     );
   }
 
@@ -1129,12 +1160,11 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       }
 
       if (present.has("quota")) {
-        const over = [...reasons]
-          .filter(([, reason]) => reason === "quota")
-          .map(([token]) => ({
-            name: token.name,
-            threshold: token.overThreshold ? token.quotaThreshold : null,
-          }));
+        const over = [...reasons].flatMap(([token, reason]) =>
+          reason === "quota"
+            ? [{ name: token.name, threshold: token.overThreshold ? token.quotaThreshold : null }]
+            : [],
+        );
 
         logger.warn("quota_threshold gate: all_exceeded", {
           provider: "grok",
@@ -1144,15 +1174,11 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       }
 
       if (present.has("on_demand")) {
-        throw new GrokOnDemandExcludedError(
-          [...reasons].filter(([, reason]) => reason === "on_demand").map(([token]) => token.name),
-        );
+        throw new GrokOnDemandExcludedError(tokenNamesWithReason(reasons, "on_demand"));
       }
 
       if (present.has("zdr")) {
-        throw new GrokZdrVideoUnavailableError(
-          [...reasons].filter(([, reason]) => reason === "zdr").map(([token]) => token.name),
-        );
+        throw new GrokZdrVideoUnavailableError(tokenNamesWithReason(reasons, "zdr"));
       }
 
       throw new GrokNoWorkersError();
@@ -1237,92 +1263,94 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
   classifyFailure(
     token: GrokTokenState,
     requestClass: GrokRequestClass,
-    error: unknown,
+    cause: unknown,
     presented: GrokCredentials | undefined,
     refreshedThisRequest: boolean,
     refreshBudgetLeft: boolean,
   ): FailureAction {
-    if (error instanceof GrokIdleTimeoutError) {
+    if (cause instanceof GrokIdleTimeoutError) {
       // Reached only before any event: no upstream execution was observed.
       return requestClass === "chat"
-        ? { kind: "failover", error, transient: true }
-        : { kind: "fail", error };
+        ? { kind: "failover", error: cause, transient: true }
+        : { kind: "fail", error: cause };
     }
 
-    if (error instanceof GrokCredentialRefreshError) {
+    if (cause instanceof GrokCredentialRefreshError) {
       // Nothing reached upstream; another token can serve the request.
       // Judged against the credentials this refresh started from: if a concurrent refresh or a
       // subscriber update already replaced them, the failure says nothing about the new ones.
       if (presented) {
-        if (error.reauthRequired)
-          this.markReauthRequired(token, presented, reauthReasonCode(oauthErrorOf(error.cause)));
-        else this.markRefreshFailed(token, presented, error.cause);
+        if (cause.reauthRequired)
+          this.markReauthRequired(token, presented, reauthReasonCode(oauthErrorOf(cause.cause)));
+        else this.markRefreshFailed(token, presented, cause.cause);
       }
 
-      return { kind: "failover", error, transient: false };
+      return { kind: "failover", error: cause, transient: false };
     }
 
-    if (!(error instanceof GrokHttpError)) return { kind: "fail", error };
+    if (!(cause instanceof GrokHttpError)) return { kind: "fail", error: cause };
 
-    if (requestClass === "video" && isGrokZdrVideoRejection(error)) {
+    if (requestClass === "video" && isGrokZdrVideoRejection(cause)) {
       // The ZDR signal was stale or unknown. The 400 is a definite rejection (no job was created),
       // so the start may move to another token under the media entitlement rules.
       this.setZdr(token, true, "upstream video 400");
       token.entitlementBlocks.set("video", this.now() + GROK_ENTITLEMENT_BLOCK_MS);
 
-      return { kind: "failover", error, transient: false };
+      return { kind: "failover", error: cause, transient: false };
     }
 
-    this.applyHttpFailure(token, requestClass, error);
-    const { classification } = error;
+    this.applyHttpFailure(token, requestClass, cause);
+    const { classification } = cause;
 
     if (classification.kind === "version_gate") {
       return { kind: "fail", error: new GrokVersionGateError(classification.minClientVersion) };
     }
 
-    if (classification.shouldRetry === false) return { kind: "fail", error };
+    if (classification.shouldRetry === false) return { kind: "fail", error: cause };
 
     switch (classification.kind) {
       case "auth":
-        if (!presented || !token.credentials) return { kind: "failover", error, transient: false };
+        if (!presented || !token.credentials) {
+          return { kind: "failover", error: cause, transient: false };
+        }
 
         if (token.credentials.accessToken !== presented.accessToken) {
           // Stale 401: a newer bearer was installed while this attempt was in flight. It says
           // nothing about the current credentials, so neither refresh nor mark them; retry them.
-          return { kind: "retry", error };
+          return { kind: "retry", error: cause };
         }
 
         if (refreshedThisRequest) {
           // A 401 with just-refreshed credentials: only a new login recovers.
           this.markReauthRequired(token, presented, "grok:unauthorized_after_refresh");
 
-          return { kind: "failover", error, transient: false };
+          return { kind: "failover", error: cause, transient: false };
         }
 
         if (refreshBudgetLeft) return { kind: "refresh", presented };
 
-        return { kind: "failover", error, transient: false };
+        return { kind: "failover", error: cause, transient: false };
       case "rate_limited":
       case "quota_exhausted":
-        return { kind: "failover", error, transient: false };
+        return { kind: "failover", error: cause, transient: false };
       case "entitlement":
         // Chat 403 is permanent for the request (grok-build rule); media fails over once.
         return requestClass === "chat"
-          ? { kind: "fail", error }
-          : { kind: "failover", error, transient: false };
+          ? { kind: "fail", error: cause }
+          : { kind: "failover", error: cause, transient: false };
       case "transient":
-        if (requestClass === "chat") return { kind: "failover", error, transient: true };
+        if (requestClass === "chat") return { kind: "failover", error: cause, transient: true };
 
         // Media/voice POSTs are never replayed once the body may have been executed. The media
         // and voice clients surface such failures as GrokMediaDeliveryError, GrokMediaTimeoutError
         // or `shouldRetry: false` (all handled above); a status-0 GrokHttpError that reaches this
         // point is a connect failure that provably happened before any byte was sent, so it fails
         // over once (transient: GROK_MAX_TRANSIENT_FAILOVERS). An HTTP 5xx never fails over.
-        return error.status === 0
-          ? { kind: "failover", error, transient: true }
-          : { kind: "fail", error };
+        return cause.status === 0
+          ? { kind: "failover", error: cause, transient: true }
+          : { kind: "fail", error: cause };
       default:
-        return { kind: "fail", error };
+        return { kind: "fail", error: cause };
     }
   }
 
@@ -1346,9 +1374,9 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     void this.reportReauthRequired(
       { id: token.id, name: token.name, credentials },
       reasonCode,
-    ).catch((error: unknown) => {
+    ).catch((cause: unknown) => {
       logger.warn(
-        `grok token ${token.name}[${token.id}] reauth_required persist failed: ${error instanceof Error ? error.name : "unknown"}`,
+        `grok token ${token.name}[${token.id}] reauth_required persist failed: ${cause instanceof Error ? cause.name : "unknown"}`,
       );
     });
   }
@@ -1474,7 +1502,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
           reservation = await this.selectToken(requestClass, {
             excluded,
             signal: selection.signal,
-            ...(selection.deadline === undefined ? {} : { deadline: selection.deadline }),
+            deadline: selection.deadline,
           });
         } catch (selectionError) {
           if (selectionError instanceof GrokNoWorkersError) throw action.error;
@@ -1584,13 +1612,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     }
   }
 
-  buildChatBody(req: GenerateRequest): {
-    body: GrokResponsesRequest;
-    model: GrokResolvedModel;
-    convId: string;
-    convGroupId: string;
-    turnIdx: number;
-  } {
+  buildChatBody(req: GenerateRequest): GrokChatBody {
     if (req.imageGeneration !== undefined && req.imageGeneration !== false) {
       throw new GrokInvalidRequestError(
         "imageGeneration is not supported on grok chat models; use the Grok image endpoint",
@@ -1611,7 +1633,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     // rejected rather than forwarded or silently dropped.
     const xai = req.providerOptions?.xai;
 
-    if (xai !== null && typeof xai === "object" && !Array.isArray(xai)) {
+    if (isJsonObject(xai)) {
       for (const key of ["serviceTier", "parallelToolCalls"] as const) {
         if (xai[key] !== undefined && xai[key] !== null) {
           throw new GrokInvalidRequestError(
@@ -1653,12 +1675,12 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
 
     const body = buildGrokResponsesRequest({
       model: model.id,
-      ...(req.systemPrompt ? { systemPrompt: req.systemPrompt } : {}),
+      systemPrompt: req.systemPrompt,
       history: [...history, userMessage(req)],
       promptCacheKey: convId,
       effort,
-      ...(req.outputSchema === undefined ? {} : { outputSchema: { schema: req.outputSchema } }),
-      ...(tools ? { tools } : {}),
+      outputSchema: req.outputSchema === undefined ? undefined : { schema: req.outputSchema },
+      tools,
     });
 
     return { body, model, convId, convGroupId, turnIdx };
@@ -1675,8 +1697,8 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     return this.withAttempts(
       "chat",
       {
-        ...(req.preferredTokenId === undefined ? {} : { preferredTokenId: req.preferredTokenId }),
-        ...(req.requirePreferredToken ? { requirePreferredToken: true } : {}),
+        preferredTokenId: req.preferredTokenId,
+        requirePreferredToken: req.requirePreferredToken,
         signal,
         deadline,
       },
@@ -1689,7 +1711,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
           convGroupId,
           turnIdx,
           signal,
-          ...(onDelta ? { onDelta } : {}),
+          onDelta,
         }),
     );
   }
@@ -1777,11 +1799,11 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
         const item = event.item;
 
         if (item.type === "function_call") {
-          const callId = item.call_id;
-          const name = item.name;
-          const args = item.arguments;
+          const callId = jsonString(item.call_id);
+          const name = jsonString(item.name);
+          const args = jsonString(item.arguments);
 
-          if (typeof callId === "string" && typeof name === "string" && typeof args === "string") {
+          if (callId !== undefined && name !== undefined && args !== undefined) {
             toolCalls.push({ toolCallId: callId, toolName: name, input: args });
           }
         } else if (
@@ -1791,14 +1813,9 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
           Array.isArray(item.content)
         ) {
           const messageText = item.content
-            .map((part: unknown) =>
-              part !== null &&
-              typeof part === "object" &&
-              "type" in part &&
-              part.type === "output_text" &&
-              "text" in part &&
-              typeof part.text === "string"
-                ? part.text
+            .map((part) =>
+              isJsonObject(part) && part.type === "output_text"
+                ? (jsonString(part.text) ?? "")
                 : "",
             )
             .join("");
@@ -1829,31 +1846,43 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
 
     const contextWindow = stream.headers.contextWindow ?? model.contextWindow;
 
-    return {
+    const resultUsage: GenerateResult["usage"] = {
+      totalTokens: usage?.totalTokens ?? 0,
+      inputTokens: usage?.inputTokens ?? 0,
+      cachedInputTokens: usage?.cachedInputTokens ?? 0,
+      outputTokens: usage?.outputTokens ?? 0,
+      reasoningOutputTokens: usage?.reasoningTokens ?? 0,
+    };
+
+    if (contextTokens !== undefined) resultUsage.contextTokens = contextTokens;
+
+    const xai: XaiProviderMetadata = {};
+
+    if (ticks !== undefined) xai.costInUsdTicks = ticks;
+
+    if (contextWindow !== undefined) xai.contextWindow = contextWindow;
+
+    const result: GenerateResult = {
       text,
       tokenName: token.name,
-      usage: {
-        totalTokens: usage?.totalTokens ?? 0,
-        inputTokens: usage?.inputTokens ?? 0,
-        cachedInputTokens: usage?.cachedInputTokens ?? 0,
-        outputTokens: usage?.outputTokens ?? 0,
-        reasoningOutputTokens: usage?.reasoningTokens ?? 0,
-        ...(contextTokens === undefined ? {} : { contextTokens }),
-      },
+      usage: resultUsage,
       durationMs: this.now() - startedAt,
       ttftMs: firstDeltaAt === undefined ? null : firstDeltaAt - startedAt,
       model: servingModel,
-      ...(servingModel === model.id ? {} : { requestedModel: model.id }),
       threadCoord: { workerId: token.id, threadId: req.promptCacheKey ?? "", epoch: -1 },
-      ...(ticks === undefined ? {} : { costUsd: grokTicksToUsd(ticks), costSource: "provider" }),
-      providerMetadata: {
-        xai: {
-          ...(ticks === undefined ? {} : { costInUsdTicks: ticks }),
-          ...(contextWindow === undefined ? {} : { contextWindow }),
-        },
-      },
-      ...(toolCalls.length ? { toolCalls } : {}),
+      providerMetadata: { xai },
     };
+
+    if (servingModel !== model.id) result.requestedModel = model.id;
+
+    if (ticks !== undefined) {
+      result.costUsd = grokTicksToUsd(ticks);
+      result.costSource = "provider";
+    }
+
+    if (toolCalls.length) result.toolCalls = toolCalls;
+
+    return result;
   }
 
   // ---- Media and voice (§5.7) --------------------------------------------
@@ -1869,10 +1898,8 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     return this.withAttempts(
       requestClass,
       {
-        ...(selection.preferredTokenId === undefined
-          ? {}
-          : { preferredTokenId: selection.preferredTokenId }),
-        ...(selection.requirePreferredToken ? { requirePreferredToken: true } : {}),
+        preferredTokenId: selection.preferredTokenId,
+        requirePreferredToken: selection.requirePreferredToken,
         signal: active,
       },
       async (token, credentials) => ({
@@ -2023,11 +2050,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
   }
 
   /** Chat-proxy version gate state for the usage endpoint. */
-  versionGateState(): {
-    tripped: boolean;
-    minClientVersion: string | null;
-    trippedAt: number | null;
-  } {
+  versionGateState(): GrokVersionGateState {
     return {
       tripped: this.versionGate !== undefined,
       minClientVersion: this.versionGate?.minClientVersion ?? null,

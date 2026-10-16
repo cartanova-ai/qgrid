@@ -8,14 +8,23 @@
  *  - recursive 처리 (nested objects, arrays, allOf/anyOf/oneOf)
  */
 
+import { z } from "zod";
+
 import {
   SCHEMA_ARRAY_KEYWORDS,
   SCHEMA_MAP_KEYWORDS,
   SCHEMA_SINGLE_KEYWORDS,
   UNSUPPORTED_REFERENCE_KEYWORDS,
 } from "./json-schema-keywords";
+import {
+  isJsonObject,
+  type JsonObject,
+  type JsonValue,
+  type ReadonlyJsonObject,
+} from "./provider-types";
 
-export type JsonSchema = Record<string, unknown>;
+/** An object-form JSON Schema node. Boolean schemas and malformed members stay plain JSON values. */
+export type JsonSchema = JsonObject;
 
 export interface StrictifierOptions {
   provider?: string;
@@ -31,7 +40,14 @@ export class StrictifierError extends Error {
   }
 }
 
-export function strictify(schema: JsonSchema, options: StrictifierOptions = {}): JsonSchema {
+export function strictify(input: ReadonlyJsonObject, options: StrictifierOptions = {}): JsonSchema {
+  // Work on the JSON the provider will receive: a fresh copy, with undefined members dropped as
+  // serialization drops them. JSON.parse without a reviver yields only JSON values.
+  const serialized: JsonValue = JSON.parse(JSON.stringify(input));
+
+  if (!isSchemaObject(serialized)) throw new StrictifierError("schema must be an object", "$");
+  const schema = serialized;
+
   if (options.provider === "openai" || options.provider === "anthropic") {
     assertNormalizationCompatibility(schema, options.provider);
   }
@@ -108,7 +124,7 @@ function assertNormalizationCompatibility(
     collectSchemaReference(current, references);
 
     if (legacyTuple || prefixTuple) {
-      const tuple = (legacyTuple ? itemsValue : prefixItemsValue) as unknown[];
+      const tuple = legacyTuple ? itemsValue : prefixTuple ? prefixItemsValue : [];
 
       if (provider === "anthropic" && tuple.length > 0) {
         throw new StrictifierError(
@@ -238,8 +254,9 @@ function collectSchemaReference(
   if (!Object.hasOwn(current.node, "$ref")) return;
 
   const reference = current.node.$ref;
+  const referenceText = z.string().safeParse(reference);
 
-  if (typeof reference !== "string") {
+  if (!referenceText.success) {
     throw new StrictifierError("$ref must be a string", `${current.path}.$ref`);
   }
 
@@ -250,7 +267,7 @@ function collectSchemaReference(
     );
   }
 
-  references.push({ value: reference, path: `${current.path}.$ref` });
+  references.push({ value: referenceText.data, path: `${current.path}.$ref` });
 }
 
 function assertReferenceTargets(
@@ -364,11 +381,9 @@ function decodeJsonPointerToken(rawToken: string, path: string): string {
 }
 
 function strictifyNode(node: JsonSchema, path: string, provider?: string): JsonSchema {
-  if (typeof node !== "object" || node === null) return node;
-
   const dialectNeutralNode = provider === "openai" ? omitKeys(node, ["$schema"]) : node;
   let result = strictifySchemaMaps(dialectNeutralNode, path, provider);
-  const type = ownValue(result, "type") as string | undefined;
+  const type = ownValue(result, "type");
 
   if (type === "object" || Object.hasOwn(result, "properties")) {
     result = strictifyObject(result, path, provider);
@@ -379,6 +394,11 @@ function strictifyNode(node: JsonSchema, path: string, provider?: string): JsonS
   }
 
   return strictifySchemaArrays(result, path, provider);
+}
+
+/** Boolean and other non-object subschemas pass through unchanged. */
+function strictifySubschema(schema: JsonValue, path: string, provider?: string): JsonValue {
+  return isSchemaObject(schema) ? strictifyNode(schema, path, provider) : schema;
 }
 
 // 재작성 패스는 정의 맵만 재귀한다. properties 는 strictifyObject 가 별도로 처리하므로
@@ -396,9 +416,9 @@ function strictifySchemaMaps(node: JsonSchema, path: string, provider?: string):
     result[keyword] = Object.fromEntries(
       Object.entries(schemas).map(([name, schema]) => [
         name,
-        isSchemaObject(schema)
-          ? strictifyNode(schema, `${path}.${keyword}.${name}`, provider)
-          : schema,
+        schema === undefined
+          ? schema
+          : strictifySubschema(schema, `${path}.${keyword}.${name}`, provider),
       ]),
     );
   }
@@ -416,8 +436,13 @@ function strictifySchemaArrays(node: JsonSchema, path: string, provider?: string
     const schemas = ownValue(node, keyword);
 
     if (!schemas) continue;
-    result[keyword] = (schemas as JsonSchema[]).map((schema, index) =>
-      strictifyNode(schema, `${path}.${keyword}[${index}]`, provider),
+
+    if (!Array.isArray(schemas)) {
+      throw new StrictifierError(`${keyword} must be an array of schemas`, `${path}.${keyword}`);
+    }
+
+    result[keyword] = schemas.map((schema, index) =>
+      strictifySubschema(schema, `${path}.${keyword}[${index}]`, provider),
     );
   }
 
@@ -425,36 +450,48 @@ function strictifySchemaArrays(node: JsonSchema, path: string, provider?: string
 }
 
 function strictifyObject(node: JsonSchema, path: string, provider?: string): JsonSchema {
-  const properties = ownValue(node, "properties") as Record<string, JsonSchema> | undefined;
+  const properties = ownValue(node, "properties");
 
   if (!properties) {
     return { ...node, additionalProperties: false };
   }
 
-  const existingRequired = new Set((ownValue(node, "required") as string[] | undefined) ?? []);
+  if (!isSchemaObject(properties)) {
+    throw new StrictifierError("properties must be an object", `${path}.properties`);
+  }
+
+  const required = ownValue(node, "required");
+
+  const existingRequired = new Set(
+    Array.isArray(required) ? required.flatMap((key) => z.string().safeParse(key).data ?? []) : [],
+  );
+
   const allKeys = Object.keys(properties);
 
+  // Object.fromEntries defines own data properties, so names such as "__proto__" stay ordinary keys.
   const strictProps = Object.fromEntries(
-    allKeys.map((key) => {
-      const prop = properties[key]!;
-      const strictProp = strictifyNode(prop, `${path}.${key}`, provider);
+    allKeys.flatMap((key) => {
+      const prop = properties[key];
 
-      return [key, existingRequired.has(key) ? strictProp : makeNullable(strictProp)];
+      if (prop === undefined) return [];
+      const strictProp = strictifySubschema(prop, `${path}.${key}`, provider);
+
+      return [[key, existingRequired.has(key) ? strictProp : makeNullable(strictProp)]];
     }),
-  ) as Record<string, JsonSchema>;
+  );
 
-  const result: JsonSchema = {
+  return {
     ...node,
     type: "object",
     properties: strictProps,
     required: allKeys,
     additionalProperties: false,
   };
-
-  return result;
 }
 
-const UNREACHABLE_TUPLE_TAIL_SCHEMA: JsonSchema = { type: "string" };
+function unreachableTupleTailSchema(): JsonSchema {
+  return { type: "string" };
+}
 
 function strictifyArray(node: JsonSchema, path: string, provider?: string): JsonSchema {
   if (
@@ -465,21 +502,21 @@ function strictifyArray(node: JsonSchema, path: string, provider?: string): Json
   }
 
   const result = { ...node };
-  const items = ownValue(node, "items") as JsonSchema | JsonSchema[] | undefined;
+  const items = ownValue(node, "items");
 
   if (Array.isArray(items)) {
     result.items = items.map((schema, index) =>
-      strictifyNode(schema, `${path}.items[${index}]`, provider),
+      strictifySubschema(schema, `${path}.items[${index}]`, provider),
     );
   } else if (items !== undefined) {
-    result.items = strictifyNode(items, `${path}.items`, provider);
+    result.items = strictifySubschema(items, `${path}.items`, provider);
   }
 
-  const prefixItems = ownValue(node, "prefixItems") as JsonSchema[] | undefined;
+  const prefixItems = ownValue(node, "prefixItems");
 
   if (Array.isArray(prefixItems)) {
     result.prefixItems = prefixItems.map((schema, index) =>
-      strictifyNode(schema, `${path}.prefixItems[${index}]`, provider),
+      strictifySubschema(schema, `${path}.prefixItems[${index}]`, provider),
     );
   }
 
@@ -504,7 +541,7 @@ function normalizeTuple(
     throw new StrictifierError("additionalItems cannot be combined with prefixItems", path);
   }
 
-  const rawTuple = (legacyTuple ? items : prefixItems) as unknown[];
+  const rawTuple = legacyTuple ? items : prefixTuple ? prefixItems : [];
   const tuplePath = legacyTuple ? `${path}.items` : `${path}.prefixItems`;
 
   const tuple = rawTuple.map((schema, index) => {
@@ -548,17 +585,30 @@ function normalizeTuple(
 
   const tailMode = tail !== undefined ? "typed" : rawTail === false ? "closed" : "implicit";
   const bounds = normalizeTupleBounds(node, tuple.length, tailMode, path);
-  const base = omitKeys(node, ["items", "prefixItems", "additionalItems", "minItems", "maxItems"]);
+
+  const result = omitKeys(node, [
+    "items",
+    "prefixItems",
+    "additionalItems",
+    "minItems",
+    "maxItems",
+  ]);
 
   // Anthropic 은 assertNormalizationCompatibility 가 비어 있지 않은 tuple 을 이미 거부했으므로
-  // 여기 도달하는 tuple 은 빈 tuple 뿐이고, 그 경우 prefixItems spread 는 자연히 생략된다 —
+  // 여기 도달하는 tuple 은 빈 tuple 뿐이고, 그 경우 prefixItems 는 생략된다 —
   // provider 분기 없이 한 형태로 두 provider 모두를 표현한다.
-  return {
-    ...base,
-    ...(tuple.length > 0 ? { prefixItems: tuple } : {}),
-    items: tail ?? UNREACHABLE_TUPLE_TAIL_SCHEMA,
-    ...bounds,
-  };
+  if (tuple.length > 0) result.prefixItems = tuple;
+  result.items = tail ?? unreachableTupleTailSchema();
+  result.minItems = bounds.minItems;
+
+  if (bounds.maxItems !== undefined) result.maxItems = bounds.maxItems;
+
+  return result;
+}
+
+interface TupleBounds {
+  minItems: number;
+  maxItems?: number;
 }
 
 function normalizeTupleBounds(
@@ -566,7 +616,7 @@ function normalizeTupleBounds(
   tupleLength: number,
   tailMode: "typed" | "closed" | "implicit",
   path: string,
-): { minItems: number; maxItems?: number } {
+): TupleBounds {
   const callerMinItems = integerBound(ownValue(node, "minItems"), "minItems", path);
   const callerMaxItems = integerBound(ownValue(node, "maxItems"), "maxItems", path);
 
@@ -586,27 +636,37 @@ function normalizeTupleBounds(
     throw new StrictifierError("tuple minItems cannot exceed maxItems", path);
   }
 
-  return {
-    minItems,
-    ...(maxItems !== undefined ? { maxItems } : {}),
-  };
+  const bounds: TupleBounds = { minItems };
+
+  if (maxItems !== undefined) bounds.maxItems = maxItems;
+
+  return bounds;
 }
 
-function integerBound(value: unknown, keyword: string, path: string): number | undefined {
-  if (value === undefined) return undefined;
+const nonNegativeSafeInteger = z
+  .number()
+  .refine((value) => Number.isSafeInteger(value) && value >= 0);
 
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+function integerBound(
+  value: JsonValue | undefined,
+  keyword: string,
+  path: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  const bound = nonNegativeSafeInteger.safeParse(value);
+
+  if (!bound.success) {
     throw new StrictifierError(`${keyword} must be a non-negative safe integer`, path);
   }
 
-  return value as number;
+  return bound.data;
 }
 
-function isSchemaObject(value: unknown): value is JsonSchema {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function isSchemaObject(value: JsonValue | undefined): value is JsonSchema {
+  return isJsonObject(value);
 }
 
-function ownValue(schema: JsonSchema, keyword: string): unknown {
+function ownValue(schema: JsonSchema, keyword: string): JsonValue | undefined {
   return Object.hasOwn(schema, keyword) ? schema[keyword] : undefined;
 }
 
@@ -629,30 +689,34 @@ function omitKeys(node: JsonSchema, keys: readonly string[]): JsonSchema {
   return Object.fromEntries(Object.entries(node).filter(([key]) => !omitted.has(key)));
 }
 
-function makeNullable(schema: JsonSchema): JsonSchema {
+function hasNullVariant(variants: JsonValue[]): boolean {
+  return variants.some(
+    (variant) => isSchemaObject(variant) && ownValue(variant, "type") === "null",
+  );
+}
+
+function makeNullable(schema: JsonValue): JsonValue {
+  const nullSchema: JsonSchema = { type: "null" };
+
+  if (!isSchemaObject(schema)) return { anyOf: [schema, nullSchema] };
+
   if (ownValue(schema, "type") === "null") return schema;
 
   const anyOf = ownValue(schema, "anyOf");
 
   if (anyOf) {
-    const variants = anyOf as JsonSchema[];
-    const hasNull = variants.some((v) => ownValue(v, "type") === "null");
+    if (!Array.isArray(anyOf)) throw new StrictifierError("anyOf must be an array of schemas", "$");
 
-    if (hasNull) return schema;
-
-    return { anyOf: [...variants, { type: "null" }] };
+    return hasNullVariant(anyOf) ? schema : { anyOf: [...anyOf, nullSchema] };
   }
 
   const oneOf = ownValue(schema, "oneOf");
 
   if (oneOf) {
-    const variants = oneOf as JsonSchema[];
-    const hasNull = variants.some((v) => ownValue(v, "type") === "null");
+    if (!Array.isArray(oneOf)) throw new StrictifierError("oneOf must be an array of schemas", "$");
 
-    if (hasNull) return schema;
-
-    return { oneOf: [...variants, { type: "null" }] };
+    return hasNullVariant(oneOf) ? schema : { oneOf: [...oneOf, nullSchema] };
   }
 
-  return { anyOf: [schema, { type: "null" }] };
+  return { anyOf: [schema, nullSchema] };
 }
