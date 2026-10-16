@@ -358,6 +358,103 @@ describe("QgridDispatcherClass", () => {
     ).rejects.toMatchObject({ statusCode: 503 });
   });
 
+  it("grok without a registered dispatcher returns the Grok not-ready error", async () => {
+    const dispatcher = new QgridDispatcherClass();
+    dispatcher.openaiDispatcher = { generate: vi.fn(), generateStream: vi.fn() } as never;
+
+    expect(dispatcher.dispatchers.has("grok")).toBe(false);
+    await expect(dispatcher.query({ prompt: "hi", model: "grok/grok-4.7" })).rejects.toMatchObject({
+      statusCode: 503,
+      message: expect.stringContaining("Grok"),
+    });
+    await expect(
+      dispatcher.queryStream(
+        { prompt: "hi", model: "grok/grok-4.7" },
+        { onDelta: vi.fn(), onComplete: vi.fn(), onError: vi.fn() },
+      ),
+    ).rejects.toMatchObject({ statusCode: 503 });
+
+    dispatcher.startupState.grok = "failed";
+    await expect(dispatcher.query({ prompt: "hi", model: "grok/grok-4.7" })).rejects.toMatchObject({
+      statusCode: 500,
+    });
+  });
+
+  it("an unsupported provider prefix keeps the existing ProcessError", async () => {
+    const dispatcher = new QgridDispatcherClass();
+
+    await expect(dispatcher.query({ prompt: "hi", model: "mistral/large" })).rejects.toThrow(
+      /Direct LLM API fallback not implemented/,
+    );
+  });
+
+  it("assigning a provider dispatcher keeps the registry in sync", () => {
+    const dispatcher = new QgridDispatcherClass();
+    const anthropic = { generate: vi.fn(), generateStream: vi.fn() } as never;
+
+    dispatcher.anthropicDispatcher = anthropic;
+    expect(dispatcher.dispatchers.get("anthropic")).toBe(anthropic);
+    dispatcher.anthropicDispatcher = null;
+    expect(dispatcher.dispatchers.has("anthropic")).toBe(false);
+  });
+
+  it.each([false, true])(
+    "a constructor-injected grok dispatcher receives direct affinity requests (stream=%s)",
+    async (stream) => {
+      const cacheAffinityKey = "g".repeat(64);
+      const result = providerResult({
+        model: "grok-4.7",
+        tokenName: "grok-a",
+        threadCoord: { workerId: 21, threadId: "upstream", epoch: 0 },
+      });
+      const generate = vi.fn(async (_req: GenerateRequest) => result);
+      const generateStream = vi.fn(async (_req: GenerateRequest, cb: GenerateStreamCallbacks) =>
+        cb.onComplete(result),
+      );
+      const grok = {
+        generate,
+        generateStream,
+        start: vi.fn(async () => {}),
+        stop: vi.fn(async () => {}),
+        onTokenAdded: vi.fn(),
+        onTokenUpdated: vi.fn(),
+        onTokenRemoved: vi.fn(),
+        replaceTokens: vi.fn(),
+      };
+      const dispatcher = new QgridDispatcherClass({ grokDispatcher: grok });
+      const input = { prompt: "hi", model: "grok/grok-4.7", system: "sys", cacheAffinityKey };
+
+      let output: QueryOutput | undefined;
+      if (stream) {
+        await dispatcher.queryStream(input, {
+          onDelta: () => {},
+          onComplete: (value) => {
+            output = value;
+          },
+          onError: (error) => {
+            throw error;
+          },
+        });
+      } else {
+        output = await dispatcher.query(input);
+      }
+
+      const req = (stream ? generateStream : generate).mock.calls[0]?.[0];
+      expect(req).toMatchObject({
+        model: "grok-4.7",
+        systemPrompt: "sys",
+        promptCacheKey: cacheAffinityKey,
+      });
+      expect(output?.runContext?.threadCoord).toEqual({
+        workerId: 21,
+        threadId: cacheAffinityKey,
+        epoch: -1,
+        systemHash: systemHash("sys", "grok/grok-4.7"),
+      });
+      expect(dispatcher.requestCounts.get("grok\0grok-a")).toBe(1);
+    },
+  );
+
   it("provider prefix 없는 모델은 AnthropicDispatcher 로 암묵 라우팅하지 않는다", async () => {
     const dispatcher = new QgridDispatcherClass();
     const generate = vi.fn();

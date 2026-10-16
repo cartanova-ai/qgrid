@@ -1,3 +1,11 @@
+// qgrid provider route prefix (`<provider>/<model>`). 새 provider 는 여기에만 추가한다.
+export const PROVIDER_IDS = ["openai", "anthropic", "grok"] as const;
+export type ProviderId = (typeof PROVIDER_IDS)[number];
+
+export function isProviderId(value: string | undefined): value is ProviderId {
+  return PROVIDER_IDS.some((id) => id === value);
+}
+
 export type JsonValue =
   | number
   | string

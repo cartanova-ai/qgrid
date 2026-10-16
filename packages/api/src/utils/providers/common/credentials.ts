@@ -13,7 +13,12 @@ export function getRefreshToken(creds: TokenCredentials): string | undefined {
 }
 
 export function getExpiresAt(creds: TokenCredentials): number {
-  if ("expiresAt" in creds) return creds.expiresAt;
+  if ("expiresAt" in creds) {
+    if (typeof creds.expiresAt === "number") return creds.expiresAt;
+    // Grok stores RFC 3339; an unparseable value reads as already expired.
+    const parsed = Date.parse(creds.expiresAt);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
   return creds.accessTokenExpiresAt;
 }
 

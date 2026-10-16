@@ -10,6 +10,8 @@ import { type LogsSearch } from "@/routes/logs";
 import { QgridService, RequestLogService, TokenService } from "@/services/services.generated";
 import { RequestLogOrderBy } from "@/services/sonamu.generated";
 
+import { unpricedRequestLabel, unpricedRequestTitle } from "./total-cost";
+
 const PAGE_SIZE = 50;
 const UNASSIGNED = "__unassigned__";
 
@@ -237,6 +239,14 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
         ) : (
           <span className="text-[11px] tabular-nums font-medium text-sienna-600">
             {costData ? formatUsd(costData.usd) : "—"}
+            {costData && unpricedRequestLabel(costData) ? (
+              <span
+                className="ml-1 font-normal text-sand-400"
+                title={unpricedRequestTitle(costData) ?? undefined}
+              >
+                {unpricedRequestLabel(costData)}
+              </span>
+            ) : null}
           </span>
         )}
       </div>

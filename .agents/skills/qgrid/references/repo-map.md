@@ -25,6 +25,7 @@ Use this map to orient qgrid work quickly.
 - Token trigger setup: `packages/api/src/application/qgrid/token-trigger-setup.ts`.
 - OpenAI direct backend transport, OAuth, quota, and dispatcher: `packages/api/src/utils/providers/openai/*`.
 - Anthropic Claude Code runtime: `packages/api/src/utils/providers/anthropic/*`.
+- Grok chat fingerprint/transport, OAuth/refresh, quota/models, dispatcher, media, and voice: `packages/api/src/utils/providers/grok/{grok-constants.ts,grok-headers.ts,grok-backend-protocol.ts,grok-direct-client.ts,grok-oauth.ts,grok-refresh.ts,grok-quota.ts,grok-models.ts,grok-dispatcher.ts,grok-media-client.ts,grok-voice-client.ts,grok-types.ts}`. See `packages/cli/skills/qgrid/references/grok-runtime.md`.
 - Cost/usage accounting: `packages/api/src/utils/providers/common/model-cost.ts`.
 - Weighted token selection: `packages/api/src/utils/providers/common/smooth-weighted-round-robin.ts`.
 - Boot order and startup migrations: `packages/api/src/server-bootstrap.ts`, `packages/api/src/startup-migrations.ts`.
@@ -38,3 +39,12 @@ Use this map to orient qgrid work quickly.
 - Generated API files: `packages/api/src/application/sonamu.generated*`, `packages/web/src/services` when present, generated route/client files.
 - Dashboard components: `packages/web/src/components/qgrid/*`.
 - Dashboard routes: `packages/web/src/routes/*`.
+
+## Grok SDK and API surfaces
+
+- Public AI SDK language/options integration: `packages/ai-sdk/src/index.ts`, `index.types.ts`, `grok-options.ts`.
+- Grok image/video/transcription/speech adapters: `packages/ai-sdk/src/image-model.ts`, `video-model.ts`, `transcription-model.ts`, `speech-model.ts`.
+- Grok OAuth, media, voice, limits, and video job handles: `packages/api/src/application/qgrid/qgrid.frame.ts`, `qgrid.types.ts`.
+- Grok dispatcher construction and lifecycle: `packages/api/src/sonamu.config.ts`.
+
+These paths are documented by `packages/ai-sdk/README.md` and `packages/cli/skills/qgrid/references/grok-runtime.md`.

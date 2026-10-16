@@ -40,6 +40,19 @@ const TokenCredentials = z.union([
     accountId: z.string(),
     planType: z.string().optional(),
   }),
+  z.object({
+    authMode: z.literal("oauth"),
+    accessToken: z.string(),
+    refreshToken: z.string(),
+    expiresAt: z.string(),
+    issuer: z.literal("https://auth.x.ai"),
+    clientId: z.string(),
+    scopes: z.array(z.string()),
+    userId: z.string(),
+    sessionId: z.string(),
+    agentId: z.string(),
+    subscriptionTier: z.string().optional(),
+  }),
 ]);
 type TokenCredentials = z.infer<typeof TokenCredentials>;
 

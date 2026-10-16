@@ -9,6 +9,18 @@ import {
   type ImageGenerationOptions,
   type QgridContent,
 } from "../../../application/qgrid/qgrid.types";
+import {
+  type GrokImageEditRequest,
+  type GrokImageGenerateRequest,
+  type GrokImageResponse,
+  type GrokSpeechResult,
+  type GrokSttResponse,
+  type GrokTranscribeRequest,
+  type GrokTtsRequest,
+  type GrokVideoStart,
+  type GrokVideoStartRequest,
+  type GrokVideoStatus,
+} from "../grok/grok-types";
 import { type JsonValue, type TokenUsageBreakdown, type UserInput } from "./provider-types";
 
 // qgrid provider 내부 표준 usage. provider 전용 cache write 세부 필드는 여기서 확장해 보존한다.
@@ -16,7 +28,35 @@ export type ProviderTokenUsageBreakdown = TokenUsageBreakdown & {
   cacheCreationInputTokens?: number;
   cacheCreationInputTokens5m?: number;
   cacheCreationInputTokens1h?: number;
+  // Live context size reported by the provider (Grok `usage.context_details`), distinct from
+  // the cumulative input token count.
+  contextTokens?: number;
 };
+
+// Native provider tools. Function tools follow the Responses API shape; built-in tools are
+// executed server-side by the provider (Grok `web_search` / `x_search`).
+export type ProviderFunctionToolDefinition = {
+  type: "function";
+  name: string;
+  description?: string;
+  parameters: JsonValue;
+  strict?: boolean;
+};
+export type ProviderBuiltinToolDefinition = { type: "web_search" } | { type: "x_search" };
+export type ToolDefinition = ProviderFunctionToolDefinition | ProviderBuiltinToolDefinition;
+
+// A native function call returned by the provider (not the qgrid tool-emulation envelope).
+export interface ProviderToolCall {
+  toolCallId: string;
+  toolName: string;
+  // Raw JSON argument string as returned by the provider.
+  input: string;
+}
+
+export interface XaiProviderMetadata {
+  costInUsdTicks?: number;
+  contextWindow?: number;
+}
 
 // 공개 thread 좌표의 provider 결과 부분. 이름은 호환성을 위해 유지한다.
 export interface ReuseThreadCoord {
@@ -78,6 +118,11 @@ export interface GenerateRequest {
   // 이 플래그가 있으면 OpenAI prompt-cache affinity 라우팅을 건너뛴다.
   imageGeneration?: boolean | "auto";
   imageGenerationOptions?: ImageGenerationOptions;
+  // Opaque provider namespaces (for example `providerOptions.xai`). Each dispatcher validates its
+  // own namespace; other providers ignore it.
+  providerOptions?: { [key: string]: JsonValue | undefined };
+  // Native tools for providers that accept them on the wire (Grok).
+  tools?: ToolDefinition[];
 }
 
 export interface GenerateResult {
@@ -97,6 +142,11 @@ export interface GenerateResult {
   threadCoord: ReuseThreadCoord;
   // 이미지 turn 에서만 채워짐(OpenAI 경로). 완성 이미지가 없으면 undefined.
   images?: GeneratedImage[];
+  // Origin of costUsd; "provider" when the provider reported the cost itself.
+  costSource?: CostSource;
+  providerMetadata?: { xai?: XaiProviderMetadata };
+  // Native function calls returned by providers that accept `GenerateRequest.tools`.
+  toolCalls?: ProviderToolCall[];
 }
 
 // 스트림 콜백 컨테이너. 계층별로 onComplete payload 만 다르고, 스트림 이벤트 shape 는 동일하다.
@@ -116,4 +166,46 @@ export interface ProviderDispatcher {
   generate(req: GenerateRequest): Promise<GenerateResult>;
   start(): Promise<void>;
   stop(): Promise<void>;
+}
+
+// Token selection hints for media/voice requests. There is no cache affinity; a caller may still
+// pin an exact token.
+export interface MediaTokenSelection {
+  preferredTokenId?: number;
+  requirePreferredToken?: boolean;
+}
+
+export interface MediaDispatchResult<T> {
+  result: T;
+  tokenId: number;
+  tokenName: string;
+}
+
+// Optional capability: image and video generation. Video polling always goes to the token that
+// started the job.
+export interface MediaDispatcher {
+  generateImages(
+    request: GrokImageGenerateRequest & MediaTokenSelection,
+  ): Promise<MediaDispatchResult<GrokImageResponse>>;
+  editImages(
+    request: GrokImageEditRequest & MediaTokenSelection,
+  ): Promise<MediaDispatchResult<GrokImageResponse>>;
+  startVideo(
+    request: GrokVideoStartRequest & MediaTokenSelection,
+  ): Promise<MediaDispatchResult<GrokVideoStart>>;
+  getVideo(
+    tokenId: number,
+    requestId: string,
+    signal?: AbortSignal,
+  ): Promise<MediaDispatchResult<GrokVideoStatus>>;
+}
+
+// Optional capability: speech-to-text and text-to-speech.
+export interface VoiceDispatcher {
+  transcribe(
+    request: GrokTranscribeRequest & MediaTokenSelection,
+  ): Promise<MediaDispatchResult<GrokSttResponse>>;
+  speak(
+    request: GrokTtsRequest & { signal?: AbortSignal } & MediaTokenSelection,
+  ): Promise<MediaDispatchResult<GrokSpeechResult>>;
 }
