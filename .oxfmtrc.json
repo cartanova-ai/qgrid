@@ -31,6 +31,19 @@
     "**/*.md",
     "**/*.d.ts",
     "output/**",
-    ".playwright-cli/**"
+    ".playwright-cli/**",
+    ".agent/**",
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".continue/**",
+    ".cursor/**",
+    ".gemini/**",
+    ".opencode/**",
+    ".pi/**",
+    ".roo/**",
+    ".superpowers/**",
+    ".windsurf/**",
+    "tools/oxlint/anti-slop/**"
   ]
 }
