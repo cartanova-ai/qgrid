@@ -72,6 +72,10 @@ export const GROK_VERSION_GATE_REPROBE_MS = 600_000;
 export const GROK_MAX_HOPS = 2;
 export const GROK_MAX_REFRESHES = 1;
 export const GROK_MAX_TRANSIENT_FAILOVERS = 1;
+/** A token whose pre-lookup refresh failed transiently sits out selection this long (§5.1). */
+export const GROK_REFRESH_FAILED_COOLDOWN_MS = 5_000;
+/** Retries with the token's current credentials after a 401 that a newer bearer superseded. */
+export const GROK_MAX_STALE_AUTH_RETRIES = 1;
 const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 300_000;
 
@@ -244,6 +248,7 @@ type Cached<T> = { value: T; fetchedAt: number; generation: number };
 type IneligibleReason =
   | "inactive"
   | "reauth"
+  | "refresh_failed"
   | "on_demand"
   | "zdr"
   | "entitlement"
@@ -264,6 +269,12 @@ export interface GrokTokenState {
   quotaBlocks: Map<GrokRequestClass, number>;
   entitlementBlocks: Map<GrokRequestClass, number>;
   reauthRequired: boolean;
+  /**
+   * Until when the token is out of selection after a transient pre-lookup refresh failure: its
+   * gating lookups could not run with a valid bearer, so the gates are unknown.
+   */
+  refreshFailedUntil: number;
+  refreshFailure: unknown;
   billing: Cached<GrokQuotaUsageResult> | undefined;
   billingNotBefore: number;
   settings: Cached<GrokSettingsResult> | undefined;
@@ -488,6 +499,11 @@ function oauthErrorOf(cause: unknown): unknown {
   return cause instanceof Error && "oauthError" in cause ? cause.oauthError : undefined;
 }
 
+/** The same bearer and refresh token: a failure judged against `b` applies to `a`. */
+function sameCredentials(a: GrokCredentials | undefined, b: GrokCredentials): boolean {
+  return a?.accessToken === b.accessToken && a.refreshToken === b.refreshToken;
+}
+
 // ---------------------------------------------------------------------------
 // Dispatcher
 // ---------------------------------------------------------------------------
@@ -510,12 +526,15 @@ export interface GrokDispatcherOptions {
 
 type FailureAction =
   | { kind: "fail"; error: unknown }
-  | { kind: "refresh" }
+  | { kind: "refresh"; presented: GrokCredentials }
+  | { kind: "retry"; error: unknown }
   | { kind: "failover"; error: unknown; transient: boolean };
 
 interface AttemptState {
   upstreamStarted: boolean;
   forwarded: boolean;
+  /** The exact credentials this attempt presented (or tried to refresh); failures judge these. */
+  presented: GrokCredentials | undefined;
 }
 
 export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, VoiceDispatcher {
@@ -649,6 +668,8 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       }
       if (credentialsChanged) {
         old.reauthRequired = false;
+        old.refreshFailedUntil = 0;
+        old.refreshFailure = undefined;
         // New credentials may belong to another account; ZDR is account-level.
         old.zdr = null;
       }
@@ -666,6 +687,8 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
         quotaBlocks: new Map(),
         entitlementBlocks: new Map(),
         reauthRequired: false,
+        refreshFailedUntil: 0,
+        refreshFailure: undefined,
         billing: undefined,
         billingNotBefore: 0,
         settings: undefined,
@@ -686,13 +709,16 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
 
   // ---- Eligibility (§5.1) -------------------------------------------------
 
+  /** `held` counts reservations the caller already holds on `token` (re-checks mid-request). */
   ineligibility(
     token: GrokTokenState,
     requestClass: GrokRequestClass,
     now: number,
+    held = 0,
   ): IneligibleReason | undefined {
     if (!token.credentials || token.invalidReason) return "inactive";
     if (token.reauthRequired) return "reauth";
+    if (token.refreshFailedUntil > now) return "refresh_failed";
     const settings = token.settings?.value;
     if (settings?.kind === "ok" && settings.onDemandEnabled === true) return "on_demand";
     if (requestClass === "video" && token.zdr === true) return "zdr";
@@ -700,7 +726,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     if ((token.quotaBlocks.get(requestClass) ?? 0) > now) return "quota";
     if (token.quotaThreshold !== null && token.overThreshold) return "quota";
     if ((token.cooldowns.get(requestClass) ?? 0) > now) return "cooldown";
-    if (this.maxInflightPerToken !== undefined && token.inFlight >= this.maxInflightPerToken)
+    if (this.maxInflightPerToken !== undefined && token.inFlight - held >= this.maxInflightPerToken)
       return "capacity";
     return undefined;
   }
@@ -711,7 +737,8 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
 
   /**
    * Refreshes the 60 s settings/subscription/billing caches. Lookup failures fail open, so an
-   * expired bearer is refreshed first: a lookup with it would fail and open every gate.
+   * expired bearer is refreshed first: a lookup with it would fail and open every gate. A failed
+   * refresh therefore takes the token out of selection (`refresh_failed`) instead of failing open.
    */
   async prefetch(token: GrokTokenState, signal?: AbortSignal): Promise<void> {
     if (!token.credentials || token.invalidReason || token.reauthRequired) return;
@@ -728,13 +755,18 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     if (!stale(token.settings) && !stale(token.subscription) && !billingDue()) return;
 
     if (grokNeedsRefresh(token.credentials, now)) {
+      // Do not hammer the IdP: the cooldown expires before the next refresh is tried.
+      if (token.refreshFailedUntil > now) return;
       const presented = token.credentials;
       try {
         await this.freshCredentials(token, signal ?? new AbortController().signal);
       } catch (error) {
-        // The attempt refreshes again and fails over; lookups with this bearer would fail open.
-        if (!signal?.aborted && error instanceof Error && error.name === "GrokReauthRequiredError")
+        // Lookups with this bearer would fail open, so the gates stay unknown and the token sits
+        // out selection until a later refresh succeeds.
+        if (signal?.aborted) return;
+        if (error instanceof Error && error.name === "GrokReauthRequiredError")
           this.markReauthRequired(token, presented, reauthReasonCode(oauthErrorOf(error)));
+        else this.markRefreshFailed(token, presented, error);
         return;
       }
       if (!token.credentials || token.reauthRequired || this.tokens.get(token.id) !== token) return;
@@ -748,6 +780,17 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       if (now >= token.billingNotBefore) tasks.push(this.loadBilling(token));
     }
     await Promise.all(tasks);
+  }
+
+  /** Transient refresh failure for `presented`; ignored when the token already holds newer ones. */
+  markRefreshFailed(token: GrokTokenState, presented: GrokCredentials, error: unknown): void {
+    if (this.tokens.get(token.id) !== token || !sameCredentials(token.credentials, presented))
+      return;
+    token.refreshFailedUntil = this.now() + GROK_REFRESH_FAILED_COOLDOWN_MS;
+    token.refreshFailure = error;
+    logger.warn(
+      `grok token ${token.name}[${token.id}] refresh failed; out of selection for ${GROK_REFRESH_FAILED_COOLDOWN_MS}ms: ${error instanceof Error ? error.name : "unknown"}`,
+    );
   }
 
   loadSettings(token: GrokTokenState): Promise<void> {
@@ -914,11 +957,26 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     if (options.preferredTokenId !== undefined) {
       const preferred = this.tokens.get(options.preferredTokenId);
       if (preferred && !excluded.has(preferred.id)) {
-        await this.prefetch(preferred, options.signal);
-        options.signal?.throwIfAborted();
-        const reason = this.ineligibility(preferred, requestClass, this.now());
-        if (!reason) return this.reserve(preferred);
-        if (options.requirePreferredToken) throw this.preferredError(preferred, reason);
+        for (let round = 0; ; round++) {
+          await this.prefetch(preferred, options.signal);
+          options.signal?.throwIfAborted();
+          const now = this.now();
+          const reason = this.ineligibility(preferred, requestClass, now);
+          if (!reason) return this.reserve(preferred);
+          if (!options.requirePreferredToken) break;
+          // An exact target has no alternative: wait out one failed refresh, like a cooldown.
+          const waitMs = preferred.refreshFailedUntil - now;
+          if (
+            reason === "refresh_failed" &&
+            round === 0 &&
+            waitMs <= GROK_MAX_COOLDOWN_WAIT_MS &&
+            (options.deadline === undefined || now + waitMs < options.deadline)
+          ) {
+            await this.sleep(Math.max(0, waitMs), options.signal);
+            continue;
+          }
+          throw this.preferredError(preferred, reason);
+        }
       } else if (options.requirePreferredToken) {
         throw new GrokNoWorkersError(
           `Preferred grok token ${options.preferredTokenId} is not available`,
@@ -947,19 +1005,28 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
 
       const present = new Set(reasons.values());
       if (present.has("capacity")) throw new GrokCapacityError();
-      if (present.has("cooldown")) {
-        const soonest = Math.min(
-          ...[...reasons]
-            .filter(([, reason]) => reason === "cooldown")
-            .map(([token]) => token.cooldowns.get(requestClass) ?? now),
-        );
+      if (present.has("cooldown") || present.has("refresh_failed")) {
+        // A failed refresh is a short transient cooldown: wait once, then re-run the lookups.
+        const until = (token: GrokTokenState, reason: IneligibleReason) =>
+          reason === "cooldown"
+            ? (token.cooldowns.get(requestClass) ?? now)
+            : reason === "refresh_failed"
+              ? token.refreshFailedUntil
+              : Number.POSITIVE_INFINITY;
+        const soonest = Math.min(...[...reasons].map(([token, reason]) => until(token, reason)));
         const waitMs = Math.max(0, Math.min(soonest - now, GROK_MAX_COOLDOWN_WAIT_MS));
         const withinDeadline = options.deadline === undefined || now + waitMs < options.deadline;
         if (round === 0 && withinDeadline) {
           await this.sleep(waitMs, options.signal);
           continue;
         }
-        throw new GrokRateLimitedError(Math.max(1, Math.ceil((soonest - now) / 1000)));
+        const cooling = [...reasons].filter(([, reason]) => reason === "cooldown");
+        if (cooling.length) {
+          const soonestCooldown = Math.min(...cooling.map(([token]) => until(token, "cooldown")));
+          throw new GrokRateLimitedError(Math.max(1, Math.ceil((soonestCooldown - now) / 1000)));
+        }
+        const failed = [...reasons].find(([, reason]) => reason === "refresh_failed");
+        throw new GrokCredentialRefreshError(failed?.[0].refreshFailure ?? "refresh failed", false);
       }
       if (present.has("quota")) {
         const over = [...reasons]
@@ -1002,6 +1069,8 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       return new GrokRateLimitedError(Math.max(1, Math.ceil((until - now) / 1000)));
     }
     if (reason === "capacity") return new GrokCapacityError();
+    if (reason === "refresh_failed")
+      return new GrokCredentialRefreshError(token.refreshFailure ?? "refresh failed", false);
     if (reason === "on_demand") return new GrokOnDemandExcludedError([token.name]);
     if (reason === "zdr") return new GrokZdrVideoUnavailableError([token.name]);
     return new GrokNoWorkersError(`Preferred grok token ${token.id} is not available (${reason})`);
@@ -1053,6 +1122,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     token: GrokTokenState,
     requestClass: GrokRequestClass,
     error: unknown,
+    presented: GrokCredentials | undefined,
     refreshedThisRequest: boolean,
     refreshBudgetLeft: boolean,
   ): FailureAction {
@@ -1064,13 +1134,12 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     }
     if (error instanceof GrokCredentialRefreshError) {
       // Nothing reached upstream; another token can serve the request.
-      // A failed refresh leaves token.credentials as the ones it presented.
-      if (error.reauthRequired && token.credentials) {
-        this.markReauthRequired(
-          token,
-          token.credentials,
-          reauthReasonCode(oauthErrorOf(error.cause)),
-        );
+      // Judged against the credentials this refresh started from: if a concurrent refresh or a
+      // subscriber update already replaced them, the failure says nothing about the new ones.
+      if (presented) {
+        if (error.reauthRequired)
+          this.markReauthRequired(token, presented, reauthReasonCode(oauthErrorOf(error.cause)));
+        else this.markRefreshFailed(token, presented, error.cause);
       }
       return { kind: "failover", error, transient: false };
     }
@@ -1090,13 +1159,18 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     if (classification.shouldRetry === false) return { kind: "fail", error };
     switch (classification.kind) {
       case "auth":
+        if (!presented || !token.credentials) return { kind: "failover", error, transient: false };
+        if (token.credentials.accessToken !== presented.accessToken) {
+          // Stale 401: a newer bearer was installed while this attempt was in flight. It says
+          // nothing about the current credentials, so neither refresh nor mark them; retry them.
+          return { kind: "retry", error };
+        }
         if (refreshedThisRequest) {
           // A 401 with just-refreshed credentials: only a new login recovers.
-          if (token.credentials)
-            this.markReauthRequired(token, token.credentials, "grok:unauthorized_after_refresh");
+          this.markReauthRequired(token, presented, "grok:unauthorized_after_refresh");
           return { kind: "failover", error, transient: false };
         }
-        if (refreshBudgetLeft) return { kind: "refresh" };
+        if (refreshBudgetLeft) return { kind: "refresh", presented };
         return { kind: "failover", error, transient: false };
       case "rate_limited":
       case "quota_exhausted":
@@ -1124,7 +1198,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
   /**
    * Marks `token` dead in memory and, on the first transition, persists `tokens.reauth_required`.
    * `credentials` are the ones the failed attempt presented; a token already holding newer ones
-   * is left alone.
+   * (another bearer or refresh token) is left alone.
    */
   markReauthRequired(
     token: GrokTokenState,
@@ -1132,7 +1206,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     reasonCode: string,
   ): void {
     if (this.tokens.get(token.id) !== token) return;
-    if (token.credentials?.accessToken !== credentials.accessToken) return;
+    if (!sameCredentials(token.credentials, credentials)) return;
     if (token.reauthRequired) return;
     token.reauthRequired = true;
     logger.warn(`grok token ${token.name}[${token.id}] requires re-authentication (${reasonCode})`);
@@ -1150,6 +1224,11 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
    * Runs `attempt` with the §5.1 attempt budget: one forced refresh, at most GROK_MAX_HOPS
    * failovers (one of them transient). `canRetry` reports whether upstream execution may have
    * started, in which case nothing is retried.
+   *
+   * The reservation is held from selection until the request leaves the token (failover) or ends,
+   * so a refresh and its same-token retry never step outside the in-flight cap. Whenever the
+   * attempt is about to present credentials other than the ones the token's gates were evaluated
+   * with (a refresh happened), the lookups and gates are re-run before anything is sent.
    */
   async withAttempts<T>(
     requestClass: GrokRequestClass,
@@ -1166,71 +1245,109 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     let hops = 0;
     let transientFailovers = 0;
     let attempts = 0;
+    let staleRetries = 0;
     let reservation = await this.selectToken(requestClass, { ...selection, excluded });
-    for (;;) {
-      const token = reservation.token;
-      const state: AttemptState = { upstreamStarted: false, forwarded: false };
-      let action: FailureAction;
-      attempts++;
-      try {
-        let credentials: GrokCredentials;
+    // The credentials the current token's gates were last evaluated with.
+    let gated = reservation.token.credentials;
+    try {
+      for (;;) {
+        const token = reservation.token;
+        const state: AttemptState = {
+          upstreamStarted: false,
+          forwarded: false,
+          presented: token.credentials,
+        };
+        let action: FailureAction;
+        attempts++;
         try {
-          credentials = await this.freshCredentials(token, selection.signal);
+          let credentials: GrokCredentials;
+          try {
+            credentials = await this.freshCredentials(token, selection.signal);
+          } catch (error) {
+            if (selection.signal.aborted) throw error;
+            throw new GrokCredentialRefreshError(error);
+          }
+          state.presented = credentials;
+          const blocked =
+            credentials.accessToken === gated?.accessToken
+              ? undefined
+              : await this.regate(token, requestClass, selection.signal);
+          gated = credentials;
+          if (blocked) action = { kind: "failover", error: blocked, transient: false };
+          else return await attempt(token, credentials, state);
         } catch (error) {
-          if (selection.signal.aborted) throw error;
-          throw new GrokCredentialRefreshError(error);
+          if (selection.signal.aborted) throw abortReason(selection.signal);
+          if (state.forwarded || state.upstreamStarted) throw error;
+          action = this.classifyFailure(
+            token,
+            requestClass,
+            error,
+            state.presented,
+            refreshed.has(token.id),
+            refreshes < GROK_MAX_REFRESHES,
+          );
         }
-        return await attempt(token, credentials, state);
-      } catch (error) {
-        if (selection.signal.aborted) throw abortReason(selection.signal);
-        if (state.forwarded || state.upstreamStarted) throw error;
-        action = this.classifyFailure(
-          token,
-          requestClass,
-          error,
-          refreshed.has(token.id),
-          refreshes < GROK_MAX_REFRESHES,
-        );
-      } finally {
-        reservation.release();
-      }
 
-      if (action.kind === "fail") throw action.error;
-      if (action.kind === "refresh") {
-        refreshes++;
-        refreshed.add(token.id);
-        const next = await this.tryRefresh(token, selection.signal);
-        if (next.kind === "refreshed") {
-          reservation = this.reserve(token);
-          continue;
+        if (action.kind === "fail") throw action.error;
+        if (action.kind === "retry") {
+          // Same token, current credentials, reservation still held.
+          if (staleRetries++ < GROK_MAX_STALE_AUTH_RETRIES) continue;
+          action = { kind: "failover", error: action.error, transient: false };
         }
-        action = { kind: "failover", error: next.error, transient: false };
-      }
+        if (action.kind === "refresh") {
+          refreshes++;
+          refreshed.add(token.id);
+          // The reservation stays held across the refresh: the retry is part of this attempt.
+          const next = await this.tryRefresh(token, action.presented, selection.signal);
+          if (next.kind === "refreshed") continue;
+          action = { kind: "failover", error: next.error, transient: false };
+        }
 
-      // Failover: never past an exact target, the hop budget, or one transient retry.
-      if (selection.requirePreferredToken) throw action.error;
-      if (action.transient && ++transientFailovers > GROK_MAX_TRANSIENT_FAILOVERS)
-        throw action.error;
-      if (++hops > GROK_MAX_HOPS) throw new GrokAttemptBudgetExceededError(attempts, action.error);
-      // Rate-limit/quota/reauth state already excludes the token; failures that leave no state
-      // behind must not be retried on the same token within this request.
-      if (action.transient || action.error instanceof GrokCredentialRefreshError)
-        excluded.add(token.id);
-      token.failoverCount++;
-      logger.info(`grok failover from ${token.name}[${token.id}] (${requestClass})`, {
-        reason: action.error instanceof Error ? action.error.message : String(action.error),
-      });
-      try {
-        reservation = await this.selectToken(requestClass, {
-          excluded,
-          signal: selection.signal,
-          ...(selection.deadline === undefined ? {} : { deadline: selection.deadline }),
+        // Failover: never past an exact target, the hop budget, or one transient retry.
+        if (selection.requirePreferredToken) throw action.error;
+        if (action.transient && ++transientFailovers > GROK_MAX_TRANSIENT_FAILOVERS)
+          throw action.error;
+        if (++hops > GROK_MAX_HOPS)
+          throw new GrokAttemptBudgetExceededError(attempts, action.error);
+        // Rate-limit/quota/reauth state already excludes the token; failures that leave no state
+        // behind must not be retried on the same token within this request.
+        if (action.transient || action.error instanceof GrokCredentialRefreshError)
+          excluded.add(token.id);
+        token.failoverCount++;
+        logger.info(`grok failover from ${token.name}[${token.id}] (${requestClass})`, {
+          reason: action.error instanceof Error ? action.error.message : String(action.error),
         });
-      } catch (selectionError) {
-        if (selectionError instanceof GrokNoWorkersError) throw action.error;
-        throw selectionError;
+        reservation.release();
+        try {
+          reservation = await this.selectToken(requestClass, {
+            excluded,
+            signal: selection.signal,
+            ...(selection.deadline === undefined ? {} : { deadline: selection.deadline }),
+          });
+        } catch (selectionError) {
+          if (selectionError instanceof GrokNoWorkersError) throw action.error;
+          throw selectionError;
+        }
+        gated = reservation.token.credentials;
       }
+    } finally {
+      reservation.release();
     }
+  }
+
+  /**
+   * Re-runs the lookups and gates for a token whose credentials changed after selection. Returns
+   * the gate's error when the token is no longer eligible; the caller still holds one reservation.
+   */
+  private async regate(
+    token: GrokTokenState,
+    requestClass: GrokRequestClass,
+    signal: AbortSignal,
+  ): Promise<Error | undefined> {
+    await this.prefetch(token, signal);
+    signal.throwIfAborted();
+    const reason = this.ineligibility(token, requestClass, this.now(), 1);
+    return reason ? this.preferredError(token, reason) : undefined;
   }
 
   /**
@@ -1240,9 +1357,9 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
    */
   private async tryRefresh(
     token: GrokTokenState,
+    presented: GrokCredentials,
     signal: AbortSignal,
   ): Promise<{ kind: "refreshed" } | { kind: "failover"; error: GrokCredentialRefreshError }> {
-    const presented = token.credentials!;
     let result: Awaited<ReturnType<GrokRefresher["refreshAfterUnauthorized"]>>;
     try {
       result = await this.refresher.refreshAfterUnauthorized(

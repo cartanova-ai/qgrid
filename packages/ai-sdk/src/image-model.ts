@@ -106,6 +106,15 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }
 
+/**
+ * Rethrows `error` when it is an abort. When `signal` fired, its own reason is thrown so callers
+ * that compare reasons (the video poll deadline) can tell which abort it was.
+ */
+function rethrowAbort(error: unknown, signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw signal.reason ?? error;
+  if (isAbortError(error)) throw error;
+}
+
 /** Non-2xx response from a qgrid media endpoint. */
 export class QgridMediaHttpError extends Error {
   readonly status: number;
@@ -143,14 +152,17 @@ export async function postMediaEndpoint<T>(args: {
       ...(args.signal ? { signal: args.signal } : {}),
     });
   } catch (error) {
-    if (isAbortError(error)) throw error;
+    rethrowAbort(error, args.signal);
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`${args.label}: ${args.endpoint} transport failed: ${detail}`, {
       cause: error,
     });
   }
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
+    const text = await response.text().catch((error: unknown) => {
+      rethrowAbort(error, args.signal);
+      return "";
+    });
     if (response.status === 413) {
       throw new QgridMediaHttpError(
         `${args.label}: the qgrid server rejected the request as too large (413); inline media is limited to ${formatMiB(QGRID_MAX_INLINE_MEDIA_BYTES)} decoded per request. ${text.slice(0, ERROR_BODY_PREVIEW_CHARS)}`,
@@ -162,7 +174,11 @@ export async function postMediaEndpoint<T>(args: {
       response.status,
     );
   }
-  const json: unknown = await response.json().catch(() => undefined);
+  // Only a body that is not JSON becomes the schema error below; an abort mid-body propagates.
+  const json: unknown = await response.json().catch((error: unknown) => {
+    rethrowAbort(error, args.signal);
+    return undefined;
+  });
   const parsed = args.schema.safeParse(json);
   if (!parsed.success) {
     throw new Error(

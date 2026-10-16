@@ -168,6 +168,28 @@ describe("qgrid.video with AI SDK experimental_generateVideo", () => {
     expect(signals[0]!.aborted).toBe(true);
   });
 
+  it("aborts a status body stalled past the poll deadline with QgridVideoTimeoutError", async () => {
+    // 200 headers arrive, then the body never completes; fetch errors the body with the abort reason.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const signal = init.signal!;
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"status":'));
+            signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+          },
+        });
+        return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+    const error = await resumeQgridVideo(JOB, { pollIntervalMs: 1, pollTimeoutMs: 50 }).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(QgridVideoTimeoutError);
+    expect((error as QgridVideoTimeoutError).jobHandle).toBe(JOB);
+  });
+
   it("times out with the job handle and resumes it by handle", async () => {
     mockServer([pending]);
     const error = await generateVideo({

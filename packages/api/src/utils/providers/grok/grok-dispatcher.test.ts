@@ -441,10 +441,12 @@ describe("GrokDispatcher selection", () => {
     await h.dispatcher.generate(request());
     const token = h.dispatcher.tokens.get(1)!;
     expect(token.credentials?.accessToken).toBe(credentialsFor(1, 1).accessToken);
-    h.events.length = 0;
-    await h.dispatcher.prefetch(token);
+    // The same-token retry re-gates with the refreshed bearer before it is sent.
     expect(h.events).toContain(`/settings ${credentialsFor(1, 1).accessToken}`);
     expect(h.events).toContain(`/user? ${credentialsFor(1, 1).accessToken}`);
+    h.events.length = 0;
+    await h.dispatcher.prefetch(token);
+    expect(h.events).toEqual([]);
   });
 
   it("blocks over-threshold tokens and reports QuotaThresholdExceededError", async () => {
@@ -1181,5 +1183,163 @@ describe("GrokDispatcher zero data retention", () => {
     h.dispatcher.onTokenUpdated(1, "t1", credentialsFor(1, 2), null, 1);
     const reservation = await h.dispatcher.selectToken("video");
     expect(reservation.token.zdr).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Credential snapshots, re-gating, and reservations across refreshes
+// ---------------------------------------------------------------------------
+
+describe("GrokDispatcher refresh recovery", () => {
+  const far = "2031-01-01T00:00:00Z";
+
+  /** Records "send <bearer>" in h.events for every chat request, and runs `after` once it settles. */
+  function traceSends(h: Harness, after?: (send: number) => void): void {
+    const client = h.dispatcher.client;
+    const original = client.stream.bind(client);
+    let sends = 0;
+    vi.spyOn(client, "stream").mockImplementation(async (args) => {
+      const send = ++sends;
+      h.events.push(`send ${args.headers.authorization ?? ""}`);
+      try {
+        return await original(args);
+      } finally {
+        after?.(send);
+      }
+    });
+  }
+
+  it("keeps a token whose pre-lookup refresh failed out of selection until its gates are read", async () => {
+    const h = createHarness();
+    h.add(1);
+    const fresh = { ...credentialsFor(1, 1), expiresAt: far };
+    h.revoked.add(credentialsFor(1).accessToken);
+    h.settings.set(1, { on_demand_enabled: true });
+    h.refresher.ensureFresh
+      .mockImplementationOnce(async () => {
+        throw new Error("network");
+      })
+      .mockImplementation(async (token) =>
+        token.credentials.accessToken === credentialsFor(1).accessToken ? fresh : token.credentials,
+      );
+    traceSends(h);
+    await expect(h.dispatcher.generate(request())).rejects.toBeInstanceOf(
+      GrokOnDemandExcludedError,
+    );
+    expect(h.refresher.ensureFresh).toHaveBeenCalledTimes(2);
+    expect(h.events).toContain(`/settings ${fresh.accessToken}`);
+    expect(h.events.some((event) => event.startsWith("send"))).toBe(false);
+    expect(h.dispatcher.tokens.get(1)!.inFlight).toBe(0);
+
+    // With the gate open, the lookups still precede the send.
+    const ok = createHarness();
+    ok.add(1);
+    ok.refresher.ensureFresh
+      .mockImplementationOnce(async () => {
+        throw new Error("network");
+      })
+      .mockImplementation(async (token) =>
+        token.credentials.accessToken === credentialsFor(1).accessToken ? fresh : token.credentials,
+      );
+    traceSends(ok);
+    await ok.dispatcher.generate(request());
+    const settingsAt = ok.events.indexOf(`/settings ${fresh.accessToken}`);
+    const sendAt = ok.events.indexOf(`send Bearer ${fresh.accessToken}`);
+    expect(settingsAt).toBeGreaterThanOrEqual(0);
+    expect(sendAt).toBeGreaterThan(settingsAt);
+  });
+
+  it("re-gates a token whose bearer the attempt refreshed after selection", async () => {
+    const h = createHarness();
+    const a0 = { ...credentialsFor(1), expiresAt: far };
+    const a1 = { ...credentialsFor(1, 1), expiresAt: far };
+    h.dispatcher.onTokenAdded(1, "t1", a0, null, 1);
+    h.add(2);
+    h.refresher.ensureFresh.mockImplementation(async (token) => {
+      if (token.credentials.accessToken !== a0.accessToken) return token.credentials;
+      // The refresh lands between selection and send; the account turned on-demand meanwhile.
+      h.settings.set(1, { on_demand_enabled: true });
+      return a1;
+    });
+    traceSends(h);
+    const result = await h.dispatcher.generate(request({ preferredTokenId: 1 }));
+    expect(result.tokenName).toBe("t2");
+    expect(h.chatCalls()).toEqual([2]);
+    expect(h.events).toContain(`/settings ${a1.accessToken}`);
+    expect(h.events).not.toContain(`send Bearer ${a1.accessToken}`);
+    expect(h.dispatcher.tokens.get(1)!.inFlight).toBe(0);
+  });
+
+  it("ignores a 401 for a bearer a concurrent refresh already replaced and retries the new one", async () => {
+    const h = createHarness();
+    h.add(1);
+    const token = h.dispatcher.tokens.get(1)!;
+    const a2 = credentialsFor(1, 2);
+    h.chat.set(1, [
+      { kind: "http", status: 401 },
+      { kind: "http", status: 401 },
+    ]);
+    // Request A presents A1 after its forced refresh; A2 is installed while that send is in flight.
+    traceSends(h, (send) => {
+      if (send === 2) h.dispatcher.storeCredentials(token, a2);
+    });
+    const result = await h.dispatcher.generate(request());
+    expect(result.tokenName).toBe("t1");
+    expect(token.reauthRequired).toBe(false);
+    expect(h.reauth).not.toHaveBeenCalled();
+    expect(h.refresher.refreshAfterUnauthorized).toHaveBeenCalledTimes(1);
+    expect(h.requests.map((r) => r.headers.get("authorization"))).toEqual([
+      `Bearer ${credentialsFor(1).accessToken}`,
+      `Bearer ${credentialsFor(1, 1).accessToken}`,
+      `Bearer ${a2.accessToken}`,
+    ]);
+  });
+
+  it("does not mark newer credentials dead when a stale refresh reports reauth", async () => {
+    const h = createHarness();
+    h.add(1);
+    h.add(2);
+    const token = h.dispatcher.tokens.get(1)!;
+    const a2 = credentialsFor(1, 2);
+    let calls = 0;
+    h.refresher.ensureFresh.mockImplementation(async (ref) => {
+      if (ref.credentials.accessToken !== credentialsFor(1).accessToken) return ref.credentials;
+      if (++calls === 1) return ref.credentials;
+      // The attempt's refresh of A0 dies after another path already installed A2.
+      h.dispatcher.storeCredentials(token, a2);
+      throw Object.assign(new Error("invalid_grant"), { name: "GrokReauthRequiredError" });
+    });
+    const result = await h.dispatcher.generate(request({ preferredTokenId: 1 }));
+    expect(result.tokenName).toBe("t2");
+    expect(token.reauthRequired).toBe(false);
+    expect(h.reauth).not.toHaveBeenCalled();
+  });
+
+  it("holds the reservation across the 401 refresh so the retry stays within the in-flight cap", async () => {
+    const h = createHarness({ maxInflightPerToken: 1 });
+    h.add(1);
+    const token = h.dispatcher.tokens.get(1)!;
+    h.chat.set(1, [{ kind: "http", status: 401 }]);
+    let finishRefresh: (() => void) | undefined;
+    h.refresher.refreshAfterUnauthorized.mockImplementationOnce(
+      () =>
+        new Promise<GrokRefreshResult>((resolve) => {
+          finishRefresh = () => resolve({ status: "refreshed", credentials: credentialsFor(1, 1) });
+        }),
+    );
+    const observed: number[] = [];
+    traceSends(h, () => observed.push(token.inFlight));
+    const a = h.dispatcher.generate(request());
+    await vi.waitFor(() => expect(finishRefresh).toBeDefined());
+    observed.push(token.inFlight);
+    // B arrives while A refreshes: the cap is still held by A.
+    await expect(h.dispatcher.selectToken("chat")).rejects.toBeInstanceOf(GrokCapacityError);
+    observed.push(token.inFlight);
+    finishRefresh!();
+    const result = await a;
+    expect(result.tokenName).toBe("t1");
+    // 401 send, during the refresh, B's rejected selection, the retry send.
+    expect(observed).toEqual([1, 1, 1, 1]);
+    expect(token.inFlight).toBe(0);
   });
 });
