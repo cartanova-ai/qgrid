@@ -66,6 +66,8 @@ When helping a user set up qgrid locally, check for `QGRID_PROJECT_NAME` or conf
 |---|---:|---|
 | `QGRID_OPENAI_TRANSPORT` | `websocket` | OpenAI transport selector (`https` or `websocket`). Invalid values fail at dispatcher configuration time. This is the only OpenAI runtime knob; there is no concurrency cap. |
 | `QGRID_OPENAI_AUTOSCALE` / `QGRID_OPENAI_MIN_WORKERS_PER_TOKEN` / `QGRID_OPENAI_MAX_WORKERS_PER_TOKEN` / `QGRID_OPENAI_PERMITS_PER_TOKEN` | ignored | Removed. OpenAI requests run uncapped like Anthropic (stateless per-request execution); setting these has no effect. |
+| `QGRID_GROK_MAX_INFLIGHT_PER_TOKEN` | unset (uncapped) | Optional positive-integer per-account Grok cap. Accounts at the cap are excluded from selection rather than queued. Invalid values are ignored with a warning (`packages/api/src/utils/providers/grok/grok-dispatcher.ts`). |
+| `QGRID_GROK_LIVE_TOKEN_ID` | unset | Reserved token-row selector for opt-in Grok live tests. Keep it unset in CI and ordinary server runs. The live-test gate is specified in `docs/plans/2026-10-16-grok-provider-integration-plan.md` §7; no current server runtime behavior reads it. |
 | `QGRID_TOKEN_WINDOW_KEEPALIVE_ENABLED` | off | Marks this instance as the Anthropic 5-hour window keepalive runner (2.8.0, `ea7feb3`). Only the literal `true` enables it; set it on exactly one instance per shared DB so developer instances do not fire duplicates. Two more gates apply: the global setting `qgrid.tokenWindowKeepaliveEnabled` (`false` turns everything off; changing it reschedules immediately) and the per-token `tokens.keepalive_enabled` flag (default `false`, dashboard settings-panel toggle). In 2.7.6 this env was a default-on global switch with no per-token opt-in. |
 | `MAX_STRUCTURED_OUTPUT_RETRIES` | `1` for structured Anthropic streaming calls | Claude Code structured-output retry count for streaming only, clamped to at least 1 by qgrid. Non-streaming `generate` leaves the variable unset and uses Claude Code's default retry budget. |
 
@@ -81,7 +83,8 @@ When helping a user set up qgrid locally, check for `QGRID_PROJECT_NAME` or conf
    1. Ensures PostgreSQL `tokens_changed` triggers.
    2. Starts `TokenSubscriber` for LISTEN/NOTIFY plus periodic reconcile.
    3. Starts `OpenAIDispatcher` and `AnthropicDispatcher`.
-   4. Logs server URL and provider readiness counts.
+   4. Constructs `GrokRefreshCoordinator`, `GrokMediaClient`, and `GrokVoiceClient`, injects them into `GrokDispatcher`, starts it, then reconciles Grok tokens (`packages/api/src/sonamu.config.ts`).
+   5. Logs server URL and provider readiness counts.
 
 On shutdown, it stops provider dispatchers and the token subscriber.
 

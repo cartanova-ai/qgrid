@@ -27,7 +27,12 @@
       "id": "ai-sdk",
       "code": [
         "packages/ai-sdk/src/index.ts",
-        "packages/ai-sdk/src/index.types.ts"
+        "packages/ai-sdk/src/index.types.ts",
+        "packages/ai-sdk/src/grok-options.ts",
+        "packages/ai-sdk/src/image-model.ts",
+        "packages/ai-sdk/src/video-model.ts",
+        "packages/ai-sdk/src/transcription-model.ts",
+        "packages/ai-sdk/src/speech-model.ts"
       ],
       "skill": [
         "packages/cli/skills/qgrid/references/ai-sdk-provider-contract.md"
@@ -41,11 +46,16 @@
       "id": "provider-runtimes",
       "code": [
         "packages/api/src/utils/providers/openai/openai-dispatcher.ts",
-        "packages/api/src/utils/providers/anthropic/anthropic-dispatcher.ts"
+        "packages/api/src/utils/providers/anthropic/anthropic-dispatcher.ts",
+        "packages/api/src/utils/providers/grok/grok-dispatcher.ts",
+        "packages/api/src/utils/providers/grok/grok-oauth.ts",
+        "packages/api/src/utils/providers/grok/grok-media-client.ts",
+        "packages/api/src/utils/providers/grok/grok-voice-client.ts"
       ],
       "skill": [
         "packages/cli/skills/qgrid/references/openai-codex-runtime.md",
-        "packages/cli/skills/qgrid/references/anthropic-claude-code-runtime.md"
+        "packages/cli/skills/qgrid/references/anthropic-claude-code-runtime.md",
+        "packages/cli/skills/qgrid/references/grok-runtime.md"
       ],
       "notion": {
         "title": "Provider 런타임",
@@ -56,7 +66,9 @@
       "id": "token-routing",
       "code": [
         "packages/api/src/application/token/token.entity.json",
-        "packages/api/src/utils/providers/common/smooth-weighted-round-robin.ts"
+        "packages/api/src/application/token/token.model.ts",
+        "packages/api/src/utils/providers/common/smooth-weighted-round-robin.ts",
+        "packages/api/src/utils/providers/grok/grok-quota.ts"
       ],
       "skill": [
         "packages/cli/skills/qgrid/references/token-auth-quota-lifecycle.md"
@@ -161,7 +173,8 @@
       "code": [
         "packages/cli/src/cli.ts",
         "packages/api/src/server-bootstrap.ts",
-        "packages/api/src/startup-migrations.ts"
+        "packages/api/src/startup-migrations.ts",
+        "packages/api/src/sonamu.config.ts"
       ],
       "skill": [
         "packages/cli/skills/qgrid/references/cli-env-and-server-boot.md"
