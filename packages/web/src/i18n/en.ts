@@ -65,6 +65,8 @@ export default {
   "qgrid.grokLoginFailed": (detail: string) => `Grok login failed: ${detail}`,
   "qgrid.grokNotOAuthToken": "Grok login returned credentials that are not an xAI OAuth token",
   "qgrid.grokNoWorkers": (detail: string) => `No Grok token is available: ${detail}`,
+  "qgrid.grokRateLimited": (retryAfterSec: number) =>
+    `All Grok tokens are rate limited. Retry after ${retryAfterSec} seconds`,
   "qgrid.grokOnDemandExcluded": (tokens: string) =>
     `All Grok tokens are excluded because on-demand billing is enabled at xAI: ${tokens}. Turn off on-demand billing, or add another account`,
   "qgrid.grokZdrVideoUnavailable": (tokens: string) =>

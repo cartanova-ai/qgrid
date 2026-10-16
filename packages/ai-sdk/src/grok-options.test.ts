@@ -78,14 +78,22 @@ describe("mapXaiProviderOptions", () => {
     expect(mapped.request).toEqual({
       effort: "high",
       promptCacheKey: "conv-1",
-      serviceTier: "priority",
-      parallelToolCalls: false,
     });
     const faithfulTargets = Object.values(XAI_PROVIDER_OPTION_CLASSIFICATION)
       .filter((c) => c.kind !== "rejected")
       .map((c) => c.target)
       .sort();
     expect(Object.keys(mapped.request).sort()).toEqual(faithfulTargets);
+  });
+
+  it("rejects serviceTier and parallelToolCalls with a warning instead of forwarding them", () => {
+    const mapped = mapXaiProviderOptions(
+      { serviceTier: "priority", parallelToolCalls: false },
+      "grok/grok-4.7",
+    );
+    expect(mapped.request).toEqual({});
+    expect(mapped.rejected).toEqual(["serviceTier", "parallelToolCalls"]);
+    expect(mapped.warnings.map((w) => w.key)).toEqual(["serviceTier", "parallelToolCalls"]);
   });
 
   it("does not warn for rejected keys that are explicitly undefined or null", () => {

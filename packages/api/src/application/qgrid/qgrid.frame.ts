@@ -43,6 +43,7 @@ import {
   GrokInvalidRequestError,
   GrokNoWorkersError,
   GrokOnDemandExcludedError,
+  GrokRateLimitedError,
   GrokZdrVideoUnavailableError,
   completeGrokOAuth,
   GrokCredentials as StrictGrokCredentials,
@@ -463,10 +464,34 @@ function grokVoice(): VoiceDispatcher {
   return dispatcher;
 }
 
+class TooManyRequestsException extends SoException {
+  constructor(message: LocalizedString) {
+    super(429, message);
+  }
+}
+
 /**
- * Caller-fault Grok errors become 400/503 at the chat and media boundaries; upstream and provider
- * failures propagate unchanged (500 by the server error handler). "No eligible token for this
- * request class" (no workers, in-flight cap, on-demand D6, ZDR video) is a 503, not a server fault.
+ * Every Grok token is cooling down. A 429 rather than a 503: the server error handler pins 503's
+ * Retry-After to its startup interval, while this delay comes from the upstream cooldown.
+ */
+function grokRateLimited(error: GrokRateLimitedError): TooManyRequestsException {
+  let reply: FastifyReply | undefined;
+  try {
+    const ctx = Sonamu.getContext();
+    if (ctx.transport === "http") reply = ctx.reply;
+  } catch {
+    // Direct frame calls (for example unit tests) have no HTTP context and no header to set.
+  }
+  // An SSE stream has already sent its headers; the error event then carries the delay alone.
+  if (reply && !reply.raw.headersSent) reply.header("Retry-After", String(error.retryAfterSec));
+  return new TooManyRequestsException(SD("qgrid.grokRateLimited")(error.retryAfterSec));
+}
+
+/**
+ * Caller-fault Grok errors become 400/429/503 at the chat and media boundaries; upstream and
+ * provider failures propagate unchanged (500 by the server error handler). "No eligible token for
+ * this request class" (no workers, in-flight cap, on-demand D6, ZDR video) is a 503, not a server
+ * fault; every token cooling down is a 429 with the soonest retry delay.
  */
 function mapGrokCallerError(error: unknown): unknown {
   if (error instanceof GrokInvalidRequestError) {
@@ -491,6 +516,7 @@ function mapGrokCallerError(error: unknown): unknown {
   if (error instanceof GrokCapacityError) {
     return new ServiceUnavailableException(SD("qgrid.grokCapacity"));
   }
+  if (error instanceof GrokRateLimitedError) return grokRateLimited(error);
   if (error instanceof GrokNoWorkersError) {
     return new ServiceUnavailableException(SD("qgrid.grokNoWorkers")(error.message));
   }
@@ -629,7 +655,7 @@ function mediaCostFields(kind: MediaKind, model: string, cost: GrokMediaCost | u
         : null,
     };
   }
-  return { cost_usd: microUsd(cost?.costUsd) ?? 0, cost_source: cost?.costSource ?? null };
+  return { cost_usd: microUsd(cost?.costUsd) ?? null, cost_source: cost?.costSource ?? null };
 }
 
 function mediaFinishFields(success: Omit<MediaLogSuccess, "steps">) {
@@ -1075,7 +1101,7 @@ class QgridFrameClass extends BaseFrameClass {
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
   async totalCost(
     params?: RequestLogListParams,
-  ): Promise<{ usd: number; unknownImageCostCount: number }> {
+  ): Promise<{ usd: number; unknownImageCostCount: number; unknownCostCount: number }> {
     return RequestLogModel.totalCost(params);
   }
 

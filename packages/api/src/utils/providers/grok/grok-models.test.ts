@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { GrokModelCatalog, GrokUnknownModelError } from "./grok-models";
+import { GrokModelCatalog } from "./grok-models";
 
 const credentials = {
   accessToken: "header.payload.sig",
@@ -15,14 +15,24 @@ describe("GrokModelCatalog", () => {
       contextWindow: 256000,
       efforts: ["xhigh", "high", "medium", "low"],
       defaultEffort: "high",
+      known: true,
     });
     expect(catalog.resolve("grok-4.5").id).toBe("grok-4.5");
     expect(catalog.resolve(undefined).id).toBe("grok-4.7");
   });
 
-  it("throws a typed error for unknown models", () => {
+  it("forwards an unlisted id with every effort instead of rejecting it", () => {
     const catalog = new GrokModelCatalog();
-    expect(() => catalog.resolve("grok/grok-9")).toThrow(GrokUnknownModelError);
+    expect(catalog.resolve("grok/grok-composer-2.5")).toEqual({
+      id: "grok-composer-2.5",
+      contextWindow: undefined,
+      efforts: ["xhigh", "high", "medium", "low"],
+      defaultEffort: "high",
+      known: false,
+    });
+    expect(catalog.validateEffort("grok-composer-2.5", "low")).toBe("low");
+    expect(catalog.validateEffort("grok-composer-2.5", "max")).toBeUndefined();
+    expect(catalog.models.has("grok-composer-2.5")).toBe(false);
   });
 
   it("validates efforts per model", () => {
@@ -64,9 +74,11 @@ describe("GrokModelCatalog", () => {
       contextWindow: 500000,
       efforts: ["high", "medium"],
       defaultEffort: "medium",
+      known: true,
     });
     expect(catalog.validateEffort("grok-4.8", "xhigh")).toBeUndefined();
-    expect(() => catalog.resolve("legacy")).toThrow(GrokUnknownModelError);
+    // A non-responses backend is not merged; the id is forwarded unlisted.
+    expect(catalog.resolve("legacy").known).toBe(false);
     // Seeds absent from the live list remain.
     expect(catalog.resolve("grok-4.6").id).toBe("grok-4.6");
     expect(catalog.isStale('"42"')).toBe(false);

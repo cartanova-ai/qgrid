@@ -944,7 +944,7 @@ export namespace QgridService {
 
   export async function totalCost(
     params?: RequestLogListParams,
-  ): Promise<{ usd: number; unknownImageCostCount: number }> {
+  ): Promise<{ usd: number; unknownImageCostCount: number; unknownCostCount: number }> {
     return fetch({
       method: "GET",
       url: `/api/qgrid/totalCost?${qs.stringify({ params })}`,

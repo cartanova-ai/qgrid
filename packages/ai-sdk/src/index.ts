@@ -217,8 +217,6 @@ type ResolvedXaiOptions = {
   warnings: SharedV3Warning[];
   effort?: QgridGrokEffort;
   promptCacheKey?: string;
-  // Forwarded verbatim under `providerOptions.xai`; the Grok dispatcher owns these semantics.
-  wire?: { serviceTier?: "default" | "priority"; parallelToolCalls?: boolean };
 };
 
 function resolveXaiOptions(
@@ -240,11 +238,7 @@ function resolveXaiOptions(
         };
   }
   const mapped = mapXaiProviderOptions(raw, modelId);
-  const { effort, promptCacheKey, serviceTier, parallelToolCalls } = mapped.request;
-  const wire = {
-    ...(serviceTier === undefined ? {} : { serviceTier }),
-    ...(parallelToolCalls === undefined ? {} : { parallelToolCalls }),
-  };
+  const { effort, promptCacheKey } = mapped.request;
   return {
     warnings: mapped.warnings.map((warning) => ({
       type: "unsupported",
@@ -253,7 +247,6 @@ function resolveXaiOptions(
     })),
     ...(effort === undefined ? {} : { effort }),
     ...(promptCacheKey === undefined ? {} : { promptCacheKey }),
-    ...(Object.keys(wire).length > 0 ? { wire } : {}),
   };
 }
 
@@ -554,7 +547,6 @@ export function qgrid(
               ...(tokenName ? { tokenName } : {}),
               ...(runContext ? { runContext } : {}),
               ...(toolResultsPayload ? { toolResults: toolResultsPayload } : {}),
-              ...(xaiOptions.wire ? { providerOptions: { xai: xaiOptions.wire } } : {}),
             },
           }),
           signal: options.abortSignal,
@@ -697,7 +689,6 @@ export function qgrid(
             ...(tokenName ? { tokenName } : {}),
             ...(runContext ? { runContext } : {}),
             ...(toolResultsPayload ? { toolResults: toolResultsPayload } : {}),
-            ...(xaiOptions.wire ? { providerOptions: { xai: xaiOptions.wire } } : {}),
           },
         }),
         signal,

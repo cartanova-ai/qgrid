@@ -39,6 +39,7 @@ import {
   type GrokSettingsResult,
   type GrokSubscriptionResult,
 } from "./grok-quota";
+import { grokNeedsRefresh } from "./grok-refresh";
 import {
   GrokCredentials,
   type GrokImageEditRequest,
@@ -456,6 +457,37 @@ function mapRecord(map: Map<GrokRequestClass, number>, now: number) {
   return Object.fromEntries([...map].filter(([, until]) => until > now));
 }
 
+/**
+ * Persists a proven re-login requirement (`tokens.reauth_required`), mirroring the other providers'
+ * auth-death path. `credentials` are the ones the failed attempt presented; the store skips the
+ * write when the row has rotated since.
+ */
+export type GrokReauthReporter = (
+  token: { id: number; name: string; credentials: GrokCredentials },
+  reasonCode: string,
+) => Promise<unknown>;
+
+async function persistGrokReauth(
+  token: { id: number; name: string; credentials: GrokCredentials },
+  reasonCode: string,
+): Promise<unknown> {
+  // Loaded lazily: the token model pulls in the database layer, which the runtime does not need
+  // until a token actually dies.
+  const { deactivateAuthDeadToken } = await import("../../../application/qgrid/token-death");
+  return deactivateAuthDeadToken({ ...token, provider: "grok" }, reasonCode);
+}
+
+/** Internal `grok:<code>` reason; provider text may carry account data, so only codes pass. */
+function reauthReasonCode(code: unknown): string {
+  return typeof code === "string" && /^[a-z_0-9]{1,80}$/.test(code)
+    ? `grok:${code}`
+    : "grok:unknown";
+}
+
+function oauthErrorOf(cause: unknown): unknown {
+  return cause instanceof Error && "oauthError" in cause ? cause.oauthError : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Dispatcher
 // ---------------------------------------------------------------------------
@@ -472,6 +504,8 @@ export interface GrokDispatcherOptions {
   client?: GrokChatClient;
   catalog?: GrokModelCatalog;
   idleTimeoutMs?: number;
+  /** Default: deactivateAuthDeadToken (application/qgrid/token-death.ts). */
+  reportReauthRequired?: GrokReauthReporter;
 }
 
 type FailureAction =
@@ -497,6 +531,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
   readonly client: GrokChatClient;
   readonly catalog: GrokModelCatalog;
   readonly idleTimeoutMs: number;
+  readonly reportReauthRequired: GrokReauthReporter;
   readonly pendingBilling = new Map<number, Promise<void>>();
   readonly pendingSettings = new Map<number, Promise<void>>();
   readonly pendingSubscription = new Map<number, Promise<void>>();
@@ -516,6 +551,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     this.client = options.client ?? new GrokChatClient({ fetch: this.fetchImpl });
     this.catalog = options.catalog ?? new GrokModelCatalog();
     this.idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+    this.reportReauthRequired = options.reportReauthRequired ?? persistGrokReauth;
   }
 
   // Tokens arrive through GrokTokenSink (TokenSubscriber reconciles on start).
@@ -673,15 +709,37 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     return this.ineligibility(token, requestClass, this.now()) === undefined;
   }
 
-  /** Refreshes the 60 s settings/subscription/billing caches. Lookup failures fail open. */
-  async prefetch(token: GrokTokenState): Promise<void> {
+  /**
+   * Refreshes the 60 s settings/subscription/billing caches. Lookup failures fail open, so an
+   * expired bearer is refreshed first: a lookup with it would fail and open every gate.
+   */
+  async prefetch(token: GrokTokenState, signal?: AbortSignal): Promise<void> {
     if (!token.credentials || token.invalidReason || token.reauthRequired) return;
-    const now = this.now();
+    let now = this.now();
     const tasks: Promise<void>[] = [];
     const stale = (entry: Cached<unknown> | undefined) =>
       !entry ||
       entry.generation !== token.generation ||
       now - entry.fetchedAt >= GROK_LOOKUP_CACHE_TTL_MS;
+    const billingDue = () =>
+      (token.quotaThreshold !== null || [...token.quotaBlocks.values()].some((u) => u > now)) &&
+      stale(token.billing) &&
+      now >= token.billingNotBefore;
+    if (!stale(token.settings) && !stale(token.subscription) && !billingDue()) return;
+
+    if (grokNeedsRefresh(token.credentials, now)) {
+      const presented = token.credentials;
+      try {
+        await this.freshCredentials(token, signal ?? new AbortController().signal);
+      } catch (error) {
+        // The attempt refreshes again and fails over; lookups with this bearer would fail open.
+        if (!signal?.aborted && error instanceof Error && error.name === "GrokReauthRequiredError")
+          this.markReauthRequired(token, presented, reauthReasonCode(oauthErrorOf(error)));
+        return;
+      }
+      if (!token.credentials || token.reauthRequired || this.tokens.get(token.id) !== token) return;
+      now = this.now();
+    }
 
     if (stale(token.settings)) tasks.push(this.loadSettings(token));
     if (stale(token.subscription)) tasks.push(this.loadSubscription(token));
@@ -856,7 +914,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     if (options.preferredTokenId !== undefined) {
       const preferred = this.tokens.get(options.preferredTokenId);
       if (preferred && !excluded.has(preferred.id)) {
-        await this.prefetch(preferred);
+        await this.prefetch(preferred, options.signal);
         options.signal?.throwIfAborted();
         const reason = this.ineligibility(preferred, requestClass, this.now());
         if (!reason) return this.reserve(preferred);
@@ -870,7 +928,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
 
     for (let round = 0; ; round++) {
       const candidates = [...this.tokens.values()].filter((token) => !excluded.has(token.id));
-      await Promise.all(candidates.map((token) => this.prefetch(token)));
+      await Promise.all(candidates.map((token) => this.prefetch(token, options.signal)));
       options.signal?.throwIfAborted();
       // Synchronous from here to reserve(): concurrent selections cannot overshoot the cap.
       const now = this.now();
@@ -1006,9 +1064,13 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     }
     if (error instanceof GrokCredentialRefreshError) {
       // Nothing reached upstream; another token can serve the request.
-      if (error.reauthRequired) {
-        token.reauthRequired = true;
-        logger.warn(`grok token ${token.name}[${token.id}] requires re-authentication`);
+      // A failed refresh leaves token.credentials as the ones it presented.
+      if (error.reauthRequired && token.credentials) {
+        this.markReauthRequired(
+          token,
+          token.credentials,
+          reauthReasonCode(oauthErrorOf(error.cause)),
+        );
       }
       return { kind: "failover", error, transient: false };
     }
@@ -1029,8 +1091,9 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     switch (classification.kind) {
       case "auth":
         if (refreshedThisRequest) {
-          token.reauthRequired = true;
-          logger.warn(`grok token ${token.name}[${token.id}] requires re-authentication`);
+          // A 401 with just-refreshed credentials: only a new login recovers.
+          if (token.credentials)
+            this.markReauthRequired(token, token.credentials, "grok:unauthorized_after_refresh");
           return { kind: "failover", error, transient: false };
         }
         if (refreshBudgetLeft) return { kind: "refresh" };
@@ -1056,6 +1119,31 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       default:
         return { kind: "fail", error };
     }
+  }
+
+  /**
+   * Marks `token` dead in memory and, on the first transition, persists `tokens.reauth_required`.
+   * `credentials` are the ones the failed attempt presented; a token already holding newer ones
+   * is left alone.
+   */
+  markReauthRequired(
+    token: GrokTokenState,
+    credentials: GrokCredentials,
+    reasonCode: string,
+  ): void {
+    if (this.tokens.get(token.id) !== token) return;
+    if (token.credentials?.accessToken !== credentials.accessToken) return;
+    if (token.reauthRequired) return;
+    token.reauthRequired = true;
+    logger.warn(`grok token ${token.name}[${token.id}] requires re-authentication (${reasonCode})`);
+    void this.reportReauthRequired(
+      { id: token.id, name: token.name, credentials },
+      reasonCode,
+    ).catch((error: unknown) => {
+      logger.warn(
+        `grok token ${token.name}[${token.id}] reauth_required persist failed: ${error instanceof Error ? error.name : "unknown"}`,
+      );
+    });
   }
 
   /**
@@ -1154,10 +1242,11 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     token: GrokTokenState,
     signal: AbortSignal,
   ): Promise<{ kind: "refreshed" } | { kind: "failover"; error: GrokCredentialRefreshError }> {
+    const presented = token.credentials!;
     let result: Awaited<ReturnType<GrokRefresher["refreshAfterUnauthorized"]>>;
     try {
       result = await this.refresher.refreshAfterUnauthorized(
-        { tokenId: token.id, credentials: token.credentials! },
+        { tokenId: token.id, credentials: presented },
         signal,
       );
     } catch (error) {
@@ -1168,10 +1257,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       this.storeCredentials(token, result.credentials);
       return { kind: "refreshed" };
     }
-    token.reauthRequired = true;
-    logger.warn(
-      `grok token ${token.name}[${token.id}] requires re-authentication: ${result.reason}`,
-    );
+    this.markReauthRequired(token, presented, reauthReasonCode(result.reason));
     return { kind: "failover", error: GrokCredentialRefreshError.reauthRequired(result.reason) };
   }
 
@@ -1192,6 +1278,13 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     if (token.credentials?.accessToken === credentials.accessToken) return;
     token.credentials = credentials;
     token.reauthRequired = false;
+    // Lookups cached (or in flight) under the old bearer may be fail-open lookup_failed results;
+    // a new generation makes the next selection re-read them with this bearer. The cached values
+    // still gate until then (same account), and the subscriber's echo of this row is a no-op.
+    token.generation++;
+    this.pendingBilling.delete(token.id);
+    this.pendingSettings.delete(token.id);
+    this.pendingSubscription.delete(token.id);
   }
 
   // ---- Chat ---------------------------------------------------------------
@@ -1229,12 +1322,28 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     if (req.serviceTier !== undefined) {
       throw new GrokInvalidRequestError("serviceTier is not supported on grok chat models");
     }
+    // providerOptions.xai: the proxy's acceptance of these fields is unverified, so they are
+    // rejected rather than forwarded or silently dropped.
+    const xai = req.providerOptions?.xai;
+    if (xai !== null && typeof xai === "object" && !Array.isArray(xai)) {
+      for (const key of ["serviceTier", "parallelToolCalls"] as const) {
+        if (xai[key] !== undefined && xai[key] !== null) {
+          throw new GrokInvalidRequestError(
+            `providerOptions.xai.${key} is not supported on grok chat models: the subscription proxy's handling is unverified`,
+          );
+        }
+      }
+    }
     if (req.thinking === false) {
       throw new ThinkingValidationError(
         "thinking:false is unavailable for Grok models: thinking-off support has not been verified on the subscription proxy",
       );
     }
     const model = this.catalog.resolve(req.model);
+    if (!model.known) {
+      // The proxy may serve another model for an unlisted id; the result's model shows which.
+      logger.info(`grok model "${model.id}" is not in the catalog; forwarding it unvalidated`);
+    }
     let effort: GrokReasoningEffort = model.defaultEffort;
     if (req.effort !== undefined) {
       const validated = this.catalog.validateEffort(model.id, req.effort);
@@ -1425,7 +1534,10 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       threadCoord: { workerId: token.id, threadId: req.promptCacheKey ?? "", epoch: -1 },
       ...(ticks === undefined ? {} : { costUsd: grokTicksToUsd(ticks), costSource: "provider" }),
       providerMetadata: {
-        xai: { ...(ticks === undefined ? {} : { costInUsdTicks: ticks }), contextWindow },
+        xai: {
+          ...(ticks === undefined ? {} : { costInUsdTicks: ticks }),
+          ...(contextWindow === undefined ? {} : { contextWindow }),
+        },
       },
       ...(toolCalls.length ? { toolCalls } : {}),
     };

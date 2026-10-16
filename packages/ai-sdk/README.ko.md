@@ -348,6 +348,10 @@ qgrid는 `grok/*` 모델을 qgrid 대시보드에 등록한 xAI 구독 토큰(�
 | `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0` | `experimental_transcribe` |
 | `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임) | `experimental_generateSpeech` |
 
+qgrid는 카탈로그에 없는 language model ID를 거부하지 않고 그대로 전달합니다(OpenAI와 같음). 판단은
+subscription backend가 하며 다른 모델로 응답할 수 있으므로, 실제로 실행된 모델은 request log의 응답 모델(또는
+결과의 response metadata)에서 확인하세요.
+
 옵션은 `providerOptions.xai` 아래에 `@ai-sdk/xai`와 같은 이름을 쓰므로 `@ai-sdk/xai`용 코드가 그대로
 컴파일됩니다. qgrid 전용 설정(`grok/` prefix를 포함한 `tokenName`, `logger`)은 `providerOptions.qgrid`에
 둡니다. 형식이 잘못된 값은 요청 전에 예외를 던지고, 형식은 맞지만 qgrid가 지원하지 않는 옵션은 AI SDK
@@ -372,8 +376,8 @@ Grok language model은 user 이미지 part(https URL 또는 inline bytes)를 버
 | `providerOptions.xai` 키 | Language model 처리 |
 | --- | --- |
 | `promptCacheKey` | 그대로 전달: `providerOptions.qgrid.sessionKey`와 같은 cache affinity 핸들 |
-| `serviceTier` | 그대로 전달 |
-| `parallelToolCalls` | 그대로 전달 |
+| `serviceTier` | 미지원: Grok subscription proxy의 처리 방식이 검증되지 않음(raw API 요청에 넣으면 400) |
+| `parallelToolCalls` | 미지원: Grok subscription proxy의 처리 방식이 검증되지 않음(raw API 요청에 넣으면 400) |
 | `reasoningEffort` | qgrid `effort`로 변환, 모델의 `low`/`medium`/`high`/`xhigh` 집합으로 검증. 이 경로는 항상 reasoning하므로 `none`은 미지원 |
 | `store` | 미지원: qgrid는 항상 `store: false`를 보냄 |
 | `previousResponseId` | 미지원: qgrid가 대화 history를 직접 재생함 |
@@ -386,7 +390,7 @@ Grok language model은 user 이미지 part(https URL 또는 inline bytes)를 버
 | 모델 | 그대로 전달 | 변환 | 미지원(warning) |
 | --- | --- | --- | --- |
 | Image | `n`(호출당 최대 3), `aspectRatio`, `xai.resolution`(`1k`/`1.5k`/`2k`), `xai.quality`, `xai.aspect_ratio`(`aspectRatio`가 없을 때) | 참조 `images`는 `referenceImages`(edit endpoint), `xai.output_format`은 `outputFormat`이 되며 `png`, `jpeg`, `webp`만 허용 | `size`, `seed`, `mask`, `xai.sync_mode`, `xai.user` |
-| Video | `duration`(정수 1-15), `aspectRatio`, `xai.resolution`(`480p`/`720p`/`1080p`), `xai.mode: "reference-to-video"`, `xai.pollIntervalMs`, `xai.pollTimeoutMs` | `resolution` `WxH`는 `@ai-sdk/xai`와 같이 매핑(`1280x720` → `720p`), prompt `image`는 시작 프레임, `xai.referenceImageUrls`(7개가 아닌 최대 5개)는 `referenceImages`, `xai.lastFrame`(qgrid 확장, `grok-imagine-video-1.5` 전용) | `fps`, `seed`, `xai.keyframes`, `xai.storageOptions`, `xai.referenceVoiceIds`, `xai.user`. `xai.mode` `edit-video`/`extend-video`와 `xai.videoUrl`은 예외 |
+| Video | `duration`(정수 1-15), `aspectRatio`, `xai.resolution`(`480p`/`720p`/`1080p`), `xai.mode: "reference-to-video"`(지원하는 유일한 mode, `xai.referenceImageUrls` 필요), `xai.pollIntervalMs`, `xai.pollTimeoutMs` | `resolution` `WxH`는 `@ai-sdk/xai`와 같이 매핑(`1280x720` → `720p`), prompt `image`는 시작 프레임, `xai.referenceImageUrls`(7개가 아닌 최대 5개)는 `referenceImages`, `xai.lastFrame`(qgrid 확장, `grok-imagine-video-1.5` 전용) | `fps`, `seed`, `xai.keyframes`, `xai.storageOptions`, `xai.referenceVoiceIds`, `xai.user`. `xai.mode` `edit-video`/`extend-video`와 `xai.videoUrl`은 예외 |
 | Transcription | `xai.language` | 오디오 bytes는 base64로, `mediaType`은 파라미터 제거(`audio/webm;codecs=opus` → `audio/webm`) | 나머지 모든 `xai` 키(`audioFormat`, `sampleRate`, `format`, `diarize`, `keyterm`, ...) |
 | Speech | `voice`, `language` | `outputFormat`은 `format`(`mp3`, `wav`, `pcm`, `mulaw`, `alaw`, 그 외 값은 `@ai-sdk/xai`처럼 warning과 함께 `mp3`) | `instructions`, `speed`, 모든 `xai` 키(`sampleRate`, `bitRate`, `withTimestamps`, ...) |
 
@@ -441,7 +445,7 @@ try {
 }
 ```
 
-- 모델은 `videoStart` 후 300초 예산 안에서 5초마다 `videoStatus`를 polling합니다(`xai.pollIntervalMs` / `xai.pollTimeoutMs`로 변경). `abortSignal`은 polling만 멈추며 upstream job은 계속 실행됩니다.
+- 모델은 `videoStart` 후 300초 예산 안에서 5초마다 `videoStatus`를 polling합니다(`xai.pollIntervalMs` / `xai.pollTimeoutMs`로 변경). 예산이 끝나면 진행 중인 status 요청도 끊으므로 호출은 제때 `QgridVideoTimeoutError`로 끝납니다. `abortSignal`은 polling만 멈추며 upstream job은 계속 실행됩니다.
 - start와 status의 `projectName`은 반드시 같아야 합니다. 서버는 job을 시작한 project에만 job handle 결과를 돌려줍니다. factory나 `QGRID_PROJECT_NAME`으로 한 번 지정하고, `resumeQgridVideo`에도 같은 값을 넘기세요.
 - 결과는 `@ai-sdk/xai`와 똑같이 `{ type: "url", url, mediaType: "video/mp4" }`입니다. URL은 `api.x.ai` 저장소를 가리키며 qgrid는 비디오를 가져오거나 프록시하거나 저장하지 않습니다. `experimental_generateVideo`는 호출한 프로세스에서 이 URL을 다운로드합니다. URL만 쓰려면 `download`를 직접 넘기세요.
 - AI SDK v3 video model에는 `doGenerate`만 있습니다(`doStart`/`doStatus` 없음). 시간 초과된 job은 `resumeQgridVideo(jobHandle, options)`로 이어서 기다립니다. handle은 `providerMetadata.qgrid.jobHandle`과 `QgridVideoTimeoutError` / `QgridVideoGenerationError`에도 있습니다.

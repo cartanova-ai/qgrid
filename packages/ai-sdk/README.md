@@ -358,6 +358,10 @@ Grok model accepts the same factory config as the other models: `serverUrl` (def
 | `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0` | `experimental_transcribe` |
 | `qgrid.speech(id)` | `grok/grok-tts` (the id only labels the request log) | `experimental_generateSpeech` |
 
+qgrid forwards a language-model id that is not in its catalog unchanged instead of rejecting it,
+as it does for OpenAI; the subscription backend decides. It may serve a different model, so check
+the response model in the request log (or the result's response metadata) to see which one ran.
+
 Options use the `@ai-sdk/xai` names under `providerOptions.xai`, so code written for
 `@ai-sdk/xai` keeps compiling. qgrid-only settings (`tokenName` with the `grok/` prefix, `logger`)
 stay under `providerOptions.qgrid`. Malformed values throw before any request; well-formed
@@ -382,8 +386,8 @@ Grok language models keep user image parts (https URLs or inline bytes) instead 
 | `providerOptions.xai` key | Language model handling |
 | --- | --- |
 | `promptCacheKey` | Faithful: the same cache-affinity handle as `providerOptions.qgrid.sessionKey` |
-| `serviceTier` | Faithful |
-| `parallelToolCalls` | Faithful |
+| `serviceTier` | Unsupported: the Grok subscription proxy's handling is unverified (a raw API request with it gets a 400) |
+| `parallelToolCalls` | Unsupported: the Grok subscription proxy's handling is unverified (a raw API request with it gets a 400) |
 | `reasoningEffort` | Transformed to qgrid `effort`, validated against the model's `low`/`medium`/`high`/`xhigh` set; `none` is unsupported because the route always reasons |
 | `store` | Unsupported: qgrid always sends `store: false` |
 | `previousResponseId` | Unsupported: qgrid replays conversation history itself |
@@ -396,7 +400,7 @@ Grok language models keep user image parts (https URLs or inline bytes) instead 
 | Model | Faithful | Transformed | Unsupported (warning) |
 | --- | --- | --- | --- |
 | Image | `n` (up to 3 per call), `aspectRatio`, `xai.resolution` (`1k`/`1.5k`/`2k`), `xai.quality`, `xai.aspect_ratio` (used when `aspectRatio` is unset) | reference `images` become `referenceImages` (edit endpoint); `xai.output_format` becomes `outputFormat` and must be `png`, `jpeg`, or `webp` | `size`, `seed`, `mask`, `xai.sync_mode`, `xai.user` |
-| Video | `duration` (integer 1-15), `aspectRatio`, `xai.resolution` (`480p`/`720p`/`1080p`), `xai.mode: "reference-to-video"`, `xai.pollIntervalMs`, `xai.pollTimeoutMs` | `resolution` `WxH` is mapped as in `@ai-sdk/xai` (`1280x720` to `720p`); prompt `image` becomes the start frame; `xai.referenceImageUrls` (up to 5, not 7) become `referenceImages`; `xai.lastFrame` (qgrid extension, `grok-imagine-video-1.5` only) | `fps`, `seed`, `xai.keyframes`, `xai.storageOptions`, `xai.referenceVoiceIds`, `xai.user`. `xai.mode` `edit-video`/`extend-video` and `xai.videoUrl` throw |
+| Video | `duration` (integer 1-15), `aspectRatio`, `xai.resolution` (`480p`/`720p`/`1080p`), `xai.mode: "reference-to-video"` (the only supported mode; needs `xai.referenceImageUrls`), `xai.pollIntervalMs`, `xai.pollTimeoutMs` | `resolution` `WxH` is mapped as in `@ai-sdk/xai` (`1280x720` to `720p`); prompt `image` becomes the start frame; `xai.referenceImageUrls` (up to 5, not 7) become `referenceImages`; `xai.lastFrame` (qgrid extension, `grok-imagine-video-1.5` only) | `fps`, `seed`, `xai.keyframes`, `xai.storageOptions`, `xai.referenceVoiceIds`, `xai.user`. `xai.mode` `edit-video`/`extend-video` and `xai.videoUrl` throw |
 | Transcription | `xai.language` | audio bytes become base64 and `mediaType` loses its parameters (`audio/webm;codecs=opus` to `audio/webm`) | every other `xai` key (`audioFormat`, `sampleRate`, `format`, `diarize`, `keyterm`, ...) |
 | Speech | `voice`, `language` | `outputFormat` becomes `format` (`mp3`, `wav`, `pcm`, `mulaw`, `alaw`; anything else falls back to `mp3` with a warning, as in `@ai-sdk/xai`) | `instructions`, `speed`, every `xai` key (`sampleRate`, `bitRate`, `withTimestamps`, ...) |
 
@@ -453,7 +457,7 @@ try {
 }
 ```
 
-- The model calls `videoStart`, then polls `videoStatus` every 5 s within a 300 s budget (override with `xai.pollIntervalMs` / `xai.pollTimeoutMs`). `abortSignal` stops polling; the upstream job keeps running.
+- The model calls `videoStart`, then polls `videoStatus` every 5 s within a 300 s budget (override with `xai.pollIntervalMs` / `xai.pollTimeoutMs`). The budget also cuts off a status request still in flight, so the call ends with `QgridVideoTimeoutError` on time. `abortSignal` stops polling; the upstream job keeps running.
 - `projectName` is required to be identical for start and status: the server only answers a job handle to the project that started it. Set it once on the factory or through `QGRID_PROJECT_NAME`; pass the same value to `resumeQgridVideo`.
 - The result is `{ type: "url", url, mediaType: "video/mp4" }`, exactly as `@ai-sdk/xai` returns it. The URL points at `api.x.ai` storage; qgrid never fetches, proxies, or stores the video. `experimental_generateVideo` downloads it from the calling process; pass a custom `download` to keep only the URL.
 - AI SDK v3 video models only have `doGenerate` (no `doStart`/`doStatus`). `resumeQgridVideo(jobHandle, options)` is the qgrid way to continue a timed-out job; the handle is also in `providerMetadata.qgrid.jobHandle` and on `QgridVideoTimeoutError` / `QgridVideoGenerationError`.

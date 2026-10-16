@@ -671,7 +671,7 @@ Content-Type: application/json
     "referenceImages": [
       "REFERENCEIMAGES"
     ],
-    "mode": "edit-video",
+    "mode": "reference-to-video",
     "tokenName": "TOKENNAME",
     "projectName": "PROJECTNAME",
     "logger": false

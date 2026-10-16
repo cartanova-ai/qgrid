@@ -1946,7 +1946,7 @@ describe("qgrid Grok language model", () => {
 
     const args = calls[0]!.args;
     expect(args.effort).toBe("medium");
-    expect(args.providerOptions).toEqual({ xai: { serviceTier: "priority", parallelToolCalls: false } });
+    expect(args).not.toHaveProperty("providerOptions");
     expect(args).not.toHaveProperty("serviceTier");
     expect(args.cacheAffinityKey).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.stringify(args)).not.toContain("conv-1");
@@ -1956,6 +1956,16 @@ describe("qgrid Grok language model", () => {
         type: "unsupported",
         feature: "providerOptions.xai.previousResponseId",
         details: "qgrid replays conversation history itself",
+      },
+      {
+        type: "unsupported",
+        feature: "providerOptions.xai.serviceTier",
+        details: "the Grok subscription proxy's handling of serviceTier is unverified",
+      },
+      {
+        type: "unsupported",
+        feature: "providerOptions.xai.parallelToolCalls",
+        details: "the Grok subscription proxy's handling of parallelToolCalls is unverified",
       },
     ]);
   });

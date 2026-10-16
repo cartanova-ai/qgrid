@@ -9,11 +9,11 @@
   },
   {
     "path": "api/src/application/qgrid/qgrid.frame.ts",
-    "checksum": "2cc150338ba46dd361adf810d7be7116dcde3e4b"
+    "checksum": "aa8890bf30e774e20f8c03d18909259cc95c196c"
   },
   {
     "path": "api/src/application/qgrid/qgrid.types.ts",
-    "checksum": "263a49bfd2aa5f4f1e661cb2a71f0a460a3312fa"
+    "checksum": "dc61e58135e1a2d94f2592d9f5aedd64ca754fc5"
   },
   {
     "path": "api/src/application/queries.generated.ts",
@@ -37,7 +37,7 @@
   },
   {
     "path": "api/src/application/request-log/request-log.model.ts",
-    "checksum": "dab6ac13197ddd5e5b493dd966f660f9676e6d63"
+    "checksum": "046708acc94c30871171e463582c224d0b5bb189"
   },
   {
     "path": "api/src/application/request-log/request-log.types.ts",
@@ -57,7 +57,7 @@
   },
   {
     "path": "api/src/application/sonamu.generated.http",
-    "checksum": "37f367aade13ffd06a7839b2c2f198639bd08a2b"
+    "checksum": "e8b214d02005fd80f9578fda899bd8e081d0dd92"
   },
   {
     "path": "api/src/application/sonamu.generated.sso.ts",
@@ -81,11 +81,11 @@
   },
   {
     "path": "api/src/i18n/en.ts",
-    "checksum": "d9c8e479f16b5f1ad6eae578c5698d719e1b5d75"
+    "checksum": "d2acbae7a31c3f887f3a19f5fc1f4884c8af8c49"
   },
   {
     "path": "api/src/i18n/ko.ts",
-    "checksum": "e0aecba8e64ff187839d7391c21981e9cf6b9cc6"
+    "checksum": "298f226ecef20d7fce7a456251a423296658dc90"
   },
   {
     "path": "api/src/i18n/sd.generated.ts",
@@ -97,11 +97,11 @@
   },
   {
     "path": "web/src/i18n/en.ts",
-    "checksum": "92cd01b741178c6e5aceb02ec38ee36b585edbd6"
+    "checksum": "64007f7ab258ac6e2bb70a7013673c06974cf90a"
   },
   {
     "path": "web/src/i18n/ko.ts",
-    "checksum": "c43280619336da0547d599f62d9a4ff7105c38e6"
+    "checksum": "a80d688f42ce0e1bab247de8c1fcdecce2352816"
   },
   {
     "path": "web/src/i18n/sd.generated.ts",
@@ -113,7 +113,7 @@
   },
   {
     "path": "web/src/services/qgrid/qgrid.types.ts",
-    "checksum": "3d735908bdd6c1a71b1ea957ac4645b68d550f75"
+    "checksum": "bfc9e3237f985c25536e0cea9982c2c43520a004"
   },
   {
     "path": "web/src/services/request-log-step/request-log-step.types.ts",
@@ -125,7 +125,7 @@
   },
   {
     "path": "web/src/services/services.generated.ts",
-    "checksum": "19caa4bc78e25476845fe66f8fba74b7913af49b"
+    "checksum": "887900271e1541dcdb17da3c7af261b298354faa"
   },
   {
     "path": "web/src/services/setting/setting.types.ts",

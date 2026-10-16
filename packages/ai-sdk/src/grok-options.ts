@@ -6,7 +6,7 @@ export type QgridGrokEffort = "low" | "medium" | "high" | "xhigh";
 type XaiOptionKey = keyof QgridXaiProviderOptions;
 
 export type XaiOptionClassification =
-  | { kind: "faithful"; target: "promptCacheKey" | "serviceTier" | "parallelToolCalls" }
+  | { kind: "faithful"; target: "promptCacheKey" }
   | { kind: "transformed"; target: "effort" }
   | { kind: "rejected"; reason: string };
 
@@ -17,8 +17,14 @@ export type XaiOptionClassification =
 export const XAI_PROVIDER_OPTION_CLASSIFICATION = {
   reasoningEffort: { kind: "transformed", target: "effort" },
   promptCacheKey: { kind: "faithful", target: "promptCacheKey" },
-  serviceTier: { kind: "faithful", target: "serviceTier" },
-  parallelToolCalls: { kind: "faithful", target: "parallelToolCalls" },
+  serviceTier: {
+    kind: "rejected",
+    reason: "the Grok subscription proxy's handling of serviceTier is unverified",
+  },
+  parallelToolCalls: {
+    kind: "rejected",
+    reason: "the Grok subscription proxy's handling of parallelToolCalls is unverified",
+  },
   store: { kind: "rejected", reason: "qgrid always sends store: false" },
   previousResponseId: { kind: "rejected", reason: "qgrid replays conversation history itself" },
   include: { kind: "rejected", reason: "qgrid fixes the include list itself" },
@@ -44,8 +50,6 @@ export type MappedXaiProviderOptions = {
   request: {
     effort?: QgridGrokEffort;
     promptCacheKey?: string;
-    serviceTier?: "default" | "priority";
-    parallelToolCalls?: boolean;
   };
   warnings: XaiOptionsWarning[];
   rejected: string[];
@@ -147,12 +151,6 @@ export function mapXaiProviderOptions(options: unknown, modelId: string): Mapped
   }
   if (values.promptCacheKey !== undefined) {
     result.request.promptCacheKey = values.promptCacheKey;
-  }
-  if (values.serviceTier !== undefined) {
-    result.request.serviceTier = values.serviceTier;
-  }
-  if (values.parallelToolCalls !== undefined) {
-    result.request.parallelToolCalls = values.parallelToolCalls;
   }
   return result;
 }

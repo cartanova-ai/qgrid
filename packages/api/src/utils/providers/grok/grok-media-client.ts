@@ -11,6 +11,7 @@ import {
   GROK_VIDEO_DEFAULT_MODEL,
 } from "./grok-constants";
 import { GrokHttpError } from "./grok-direct-client";
+import { GrokInvalidRequestError } from "./grok-dispatcher";
 import { buildGrokMediaHeaders } from "./grok-headers";
 import {
   GrokImageResponse,
@@ -302,9 +303,10 @@ export class GrokMediaClient implements GrokMediaPort {
 
   async editImages(auth: GrokMediaAuth, request: GrokImageEditRequest): Promise<GrokImageResponse> {
     if (request.images.length === 0)
-      throw new TypeError("Grok image edit needs at least one reference image");
+      throw new GrokInvalidRequestError("Grok image edit needs at least one reference image");
     const urls = request.images.map((url) => {
-      if (!url.trim()) throw new TypeError("Grok image edit reference must be a non-empty URL");
+      if (!url.trim())
+        throw new GrokInvalidRequestError("Grok image edit reference must be a non-empty URL");
       return { url };
     });
     const body = imageBody(request, request.model.trim() || GROK_IMAGE_EDIT_DEFAULT_MODEL);
@@ -469,19 +471,18 @@ function imageBody(request: GrokImageGenerateRequest, model: string): Record<str
 }
 
 function videoBody(request: GrokVideoStartRequest): Record<string, unknown> {
-  // `edit-video` / `extend-video` post to /videos/edits and /videos/extensions with a source
-  // `video: {url}` (xai-video-model.ts:586-593, 391-396); the port request carries no video URL.
-  if (request.mode === "edit-video" || request.mode === "extend-video")
-    throw new TypeError(`Grok video mode "${request.mode}" is not supported: no source video URL`);
+  // `edit-video` / `extend-video` are not in the port type: they post to /videos/edits and
+  // /videos/extensions with a source `video: {url}` (xai-video-model.ts:586-593, 391-396), and the
+  // port request carries no video URL.
   const references = request.referenceImages ?? [];
   if (request.mode === "reference-to-video" && references.length === 0)
-    throw new TypeError("Grok reference-to-video needs at least one reference image");
+    throw new GrokInvalidRequestError("Grok reference-to-video needs at least one reference image");
   const { duration } = request;
   if (
     duration !== undefined &&
     (!Number.isSafeInteger(duration) || duration < 1 || duration > GROK_VIDEO_MAX_DURATION_SEC)
   )
-    throw new RangeError(
+    throw new GrokInvalidRequestError(
       `Grok video duration must be an integer from 1 to ${GROK_VIDEO_MAX_DURATION_SEC}`,
     );
   // Field order of grok-build GenerateVideoPayload (video_gen/mod.rs:811-827). `mode` selects the

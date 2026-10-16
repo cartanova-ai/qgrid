@@ -25,6 +25,7 @@ import {
   GrokNoWorkersError,
   GrokOAuthError,
   GrokOnDemandExcludedError,
+  GrokRateLimitedError,
   GrokZdrVideoUnavailableError,
 } from "../../utils/providers/grok";
 import { ImageGenerationError } from "../../utils/providers/openai/openai-dispatcher";
@@ -1984,6 +1985,18 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       VideoStartInput.safeParse({ model: "grok/grok-imagine-video", prompt: "x", image: half, lastFrame: half }).success,
     ).toBe(false);
 
+    // qgrid has no source-video input, and reference-to-video needs reference images.
+    const video = { model: "grok/grok-imagine-video", prompt: "x" };
+    for (const mode of ["edit-video", "extend-video"]) {
+      expect(VideoStartInput.safeParse({ ...video, mode }).success).toBe(false);
+    }
+    const noReferences = VideoStartInput.safeParse({ ...video, mode: "reference-to-video" });
+    expect(noReferences.error?.issues.map((issue) => issue.path.join("."))).toEqual(["referenceImages"]);
+    expect(
+      VideoStartInput.safeParse({ ...video, mode: "reference-to-video", referenceImages: ["https://x/r.png"] })
+        .success,
+    ).toBe(true);
+
     const audio = { audio: b64(MEDIA_MAX_INLINE_BYTES), mediaType: "audio/wav" };
     expect(TranscribeInput.safeParse(audio).success).toBe(true);
     expect(Buffer.byteLength(JSON.stringify(audio))).toBeLessThan(REQUEST_BODY_LIMIT_BYTES);
@@ -2145,7 +2158,7 @@ describe("QgridFrame Grok media and voice (U11)", () => {
     expect(request).toMatchObject({ mediaType: "audio/wav", model: "grok-voice-transcribe-2.0" });
     expect(requestLogFinishRunMock).toHaveBeenCalledWith(
       77,
-      expect.objectContaining({ status: "succeeded", response: "hello there", cost_usd: 0, cost_source: null }),
+      expect.objectContaining({ status: "succeeded", response: "hello there", cost_usd: null, cost_source: null }),
     );
   });
 
@@ -2171,6 +2184,11 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       requestLogId: 77,
     });
     expect(Buffer.from(out.audio, "base64")).toEqual(Buffer.from(bytes));
+    // No ticks reported: the cost is unknown, not a guessed 0.
+    expect(requestLogFinishRunMock).toHaveBeenCalledWith(
+      77,
+      expect.objectContaining({ status: "succeeded", cost_usd: null, cost_source: null }),
+    );
   });
 
   it("media endpoints answer not-ready when no Grok media dispatcher is registered", async () => {
@@ -2321,6 +2339,36 @@ describe("QgridFrame Grok query contract (U11)", () => {
 
     expect(error).toBeInstanceOf(ServiceUnavailableException);
     expect(error).toMatchObject({ statusCode: 503, message });
+  });
+
+  it("answers GrokRateLimitedError as 429 with the cooldown in Retry-After", async () => {
+    const header = vi.fn();
+    const responseRaw = Object.assign(new EventEmitter(), { headersSent: false, writableEnded: false });
+    vi.spyOn(Sonamu, "getContext").mockReturnValue({
+      transport: "http",
+      request: { raw: Object.assign(new EventEmitter(), { aborted: false }) },
+      reply: { raw: responseRaw, header },
+    } as never);
+    const grok = directProvider(grokTurn());
+    grok.generate.mockRejectedValueOnce(new GrokRateLimitedError(42));
+    const routing = new QgridDispatcherClass({ grokDispatcher: grok });
+    dispatcherQueryMock.mockImplementationOnce((input: Parameters<typeof routing.query>[0], signal?: AbortSignal) =>
+      routing.query(input, signal),
+    );
+
+    const error = await QgridFrame.query({ prompt: "hi", model: "grok/grok-4.7", logger: false }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toMatchObject({ statusCode: 429, message: SD("qgrid.grokRateLimited")(42) });
+    expect(header).toHaveBeenCalledWith("Retry-After", "42");
+
+    // The server error handler keeps a Sonamu 429 and does not pin a 503 Retry-After over it.
+    const reply = { header: vi.fn(), status: vi.fn(), send: vi.fn() };
+    reply.status.mockReturnValue(reply);
+    handleServerError(error as Error, reply as never);
+    expect(reply.status).toHaveBeenCalledWith(429);
+    expect(reply.header).not.toHaveBeenCalled();
   });
 
   it("runs grok tools through the same structured-output emulation as openai (D8)", async () => {

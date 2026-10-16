@@ -418,8 +418,13 @@ export const VideoStartInput = z
     image: MediaImageRef.optional(),
     lastFrame: MediaImageRef.optional(),
     referenceImages: z.array(MediaImageRef).min(1).max(MEDIA_MAX_REFERENCE_IMAGES).optional(),
-    mode: z.enum(["edit-video", "extend-video", "reference-to-video"]).optional(),
+    // edit-video and extend-video need a source video, which qgrid does not accept.
+    mode: z.enum(["reference-to-video"]).optional(),
     ...MediaCallOptions,
+  })
+  .refine((input) => input.mode !== "reference-to-video" || input.referenceImages !== undefined, {
+    message: "reference-to-video needs at least one referenceImages entry",
+    path: ["referenceImages"],
   })
   // Every inline image shares the one request body.
   .refine(

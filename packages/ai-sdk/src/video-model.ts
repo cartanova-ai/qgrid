@@ -165,6 +165,32 @@ function isTransientPollError(error: unknown): boolean {
   return error instanceof Error && /transport failed/.test(error.message);
 }
 
+/**
+ * One signal for the whole poll: aborts with the caller's reason, or with a TimeoutError once
+ * `ms` elapse, so a hung status request or sleep cannot outlive the poll budget. Linked by hand
+ * rather than with AbortSignal.any, which older runtimes lack.
+ */
+function pollDeadline(
+  caller: AbortSignal | undefined,
+  ms: number,
+): { signal: AbortSignal; expired: (error: unknown) => boolean; dispose: () => void } {
+  const controller = new AbortController();
+  const onCallerAbort = () => controller.abort(abortReason(caller!));
+  if (caller?.aborted) onCallerAbort();
+  else caller?.addEventListener("abort", onCallerAbort, { once: true });
+  const deadlineReason = new DOMException("The video poll budget elapsed.", "TimeoutError");
+  const timer = setTimeout(() => controller.abort(deadlineReason), Math.max(0, ms));
+  return {
+    signal: controller.signal,
+    // Only the deadline's own reason counts; a caller abort keeps the caller's error.
+    expired: (error) => controller.signal.reason === deadlineReason && error === deadlineReason,
+    dispose: () => {
+      clearTimeout(timer);
+      caller?.removeEventListener("abort", onCallerAbort);
+    },
+  };
+}
+
 async function pollVideo(
   jobHandle: string,
   modelId: string,
@@ -174,17 +200,41 @@ async function pollVideo(
 ): Promise<QgridVideoResult> {
   const interval = options.pollIntervalMs ?? QGRID_VIDEO_DEFAULT_POLL_INTERVAL_MS;
   const timeout = options.pollTimeoutMs ?? QGRID_VIDEO_DEFAULT_POLL_TIMEOUT_MS;
-  const signal = options.abortSignal;
   // The server's owner check compares this projectName with the one sent to videoStart.
   const body = serializeMediaBody(
     { jobHandle, ...(config.projectName ? { projectName: config.projectName } : {}) },
     LABEL,
   );
+  const deadline = pollDeadline(options.abortSignal, timeout);
+  try {
+    return await pollUntilDone(jobHandle, modelId, config, options, extraMetadata, {
+      body,
+      interval,
+      timeout,
+      signal: deadline.signal,
+    });
+  } catch (error) {
+    if (deadline.expired(error)) throw new QgridVideoTimeoutError(jobHandle, timeout);
+    throw error;
+  } finally {
+    deadline.dispose();
+  }
+}
+
+async function pollUntilDone(
+  jobHandle: string,
+  modelId: string,
+  config: ResolvedMediaConfig,
+  options: QgridVideoPollOptions,
+  extraMetadata: Record<string, number>,
+  poll: { body: string; interval: number; timeout: number; signal: AbortSignal },
+): Promise<QgridVideoResult> {
+  const { body, interval, timeout, signal } = poll;
   const deadline = Date.now() + timeout;
   let failures = 0;
 
   for (;;) {
-    signal?.throwIfAborted();
+    signal.throwIfAborted();
     let polled;
     try {
       polled = await postMediaEndpoint({

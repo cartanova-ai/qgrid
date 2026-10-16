@@ -4,7 +4,7 @@ import { Client, type ClientConfig } from "pg";
 import { Sonamu } from "sonamu";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { providerOfModelName, RequestLogModel } from "./request-log.model";
+import { providerOfModelName, RequestLogModel, UNKNOWN_MEDIA_COST_PREDICATE } from "./request-log.model";
 
 describe("request-log provider inference", () => {
   afterEach(() => {
@@ -600,7 +600,12 @@ describe("RequestLogModel cost provenance", () => {
    * @param confirmedTotal SUM 쿼리가 돌려줄 micro-USD 합계
    * @param legacyRows 재계산 대상 row 들
    */
-  function mockTotalCostQueries(confirmedTotal: number, legacyRows: unknown[], unknownImageCostCount = 0) {
+  function mockTotalCostQueries(
+    confirmedTotal: number,
+    legacyRows: unknown[],
+    unknownImageCostCount = 0,
+    unknownCostCount = 0,
+  ) {
     // subset qb 는 SELECT 를 비우고(clear) 집계/축소된 컬럼만 다시 얹는다 — 구현과 같은 체인.
     const sumChain = {
       where: vi.fn(),
@@ -608,7 +613,7 @@ describe("RequestLogModel cost provenance", () => {
       whereRaw: vi.fn(),
       clear: vi.fn(),
       select: vi.fn(),
-      first: vi.fn(async () => ({ total: confirmedTotal, unknownImageCostCount })),
+      first: vi.fn(async () => ({ total: confirmedTotal, unknownImageCostCount, unknownCostCount })),
     };
     sumChain.where.mockReturnValue(sumChain);
     sumChain.whereIn.mockReturnValue(sumChain);
@@ -642,7 +647,36 @@ describe("RequestLogModel cost provenance", () => {
   it("uses exact stored cost for rows with a cost source", async () => {
     mockTotalCostQueries(3_000, []);
 
-    await expect(RequestLogModel.totalCost()).resolves.toEqual({ usd: 0.003, unknownImageCostCount: 0 });
+    await expect(RequestLogModel.totalCost()).resolves.toEqual({
+      usd: 0.003,
+      unknownImageCostCount: 0,
+      unknownCostCount: 0,
+    });
+  });
+
+  it("counts unpriced non-token media rows separately from unknown image costs", async () => {
+    const { sumChain } = mockTotalCostQueries(3_000, [], 2, 3);
+
+    await expect(RequestLogModel.totalCost()).resolves.toEqual({
+      usd: 0.003,
+      unknownImageCostCount: 2,
+      unknownCostCount: 3,
+    });
+    const selected = sumChain.select.mock.calls[0]?.[0];
+    expect(selected).toHaveProperty("unknownCostCount");
+  });
+
+  it("limits the unknown media predicate to succeeded, unpriced, zero-token non-image rows", () => {
+    for (const clause of [
+      "request_logs.status = 'succeeded'",
+      "request_logs.cost_usd IS NULL",
+      "request_logs.cost_source IS NULL",
+      "request_logs.is_image_generation = false",
+      "request_logs.input_tokens = 0",
+      "request_logs.output_tokens = 0",
+    ]) {
+      expect(UNKNOWN_MEDIA_COST_PREDICATE).toContain(clause);
+    }
   });
 
   it("sums every row in SQL without a cost_source predicate", async () => {
@@ -798,6 +832,43 @@ describe("RequestLogModel PostgreSQL", () => {
       // .038 known images + .001 hosted driver + .002 text; other project excluded.
       const total = await RequestLogModel.totalCost(params);
       expect(total.usd).toBeCloseTo(0.041, 10);
+      expect(total.unknownImageCostCount).toBe(1);
+    } finally {
+      await RequestLogModel.del(ids);
+    }
+  });
+
+  it("counts succeeded unpriced zero-token media rows as unknown cost", async () => {
+    const projectName = `unknown-cost-${randomUUID()}`;
+    const ids: number[] = [];
+    try {
+      for (const fields of [
+        // counted: Grok TTS/STT without provider cost
+        { status: "succeeded", cost_usd: null, cost_source: null, input_tokens: 0, output_tokens: 0 },
+        // excluded: failed run, priced media, token-bearing legacy row, unknown image
+        { status: "error", cost_usd: null, cost_source: null, input_tokens: 0, output_tokens: 0 },
+        { status: "succeeded", cost_usd: 7_000, cost_source: "provider", input_tokens: 0, output_tokens: 0 },
+        { status: "succeeded", cost_usd: null, cost_source: null, input_tokens: 10, output_tokens: 0 },
+        {
+          status: "succeeded",
+          cost_usd: 0,
+          cost_source: null,
+          input_tokens: 0,
+          output_tokens: 0,
+          is_image_generation: true,
+          image_cost_usd: null,
+        },
+      ] as const) {
+        const id = await RequestLogModel.createRun({ user_prompt: "unknown cost", project_name: projectName });
+        ids.push(id);
+        await RequestLogModel.getPuri("w")
+          .table("request_logs")
+          .where("id", id)
+          .update({ ...fields, model_name: "grok/tts", token_name: "grok/test" });
+      }
+
+      const total = await RequestLogModel.totalCost({ sonamuFilter: { project_name: projectName }, num: 0, page: 1 });
+      expect(total.unknownCostCount).toBe(1);
       expect(total.unknownImageCostCount).toBe(1);
     } finally {
       await RequestLogModel.del(ids);

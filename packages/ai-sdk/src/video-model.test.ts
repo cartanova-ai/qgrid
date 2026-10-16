@@ -139,7 +139,33 @@ describe("qgrid.video with AI SDK experimental_generateVideo", () => {
     const polls = calls.length;
     await new Promise((resolve) => setTimeout(resolve, 120));
     expect(calls.length).toBe(polls);
-    expect(calls[1]!.signal).toBe(controller.signal);
+    // Polls run on a signal linked to the caller's (plus the poll deadline).
+    expect(calls[1]!.signal?.aborted).toBe(true);
+    expect(calls[1]!.signal?.reason).toEqual(new Error("user cancelled"));
+  });
+
+  it("aborts a hung status request at the poll deadline with QgridVideoTimeoutError", async () => {
+    const signals: AbortSignal[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init.signal!;
+            signals.push(signal);
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }),
+      ),
+    );
+    const startedAt = Date.now();
+    const error = await resumeQgridVideo(JOB, { pollIntervalMs: 1, pollTimeoutMs: 50 }).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(QgridVideoTimeoutError);
+    expect((error as QgridVideoTimeoutError).jobHandle).toBe(JOB);
+    expect(Date.now() - startedAt).toBeLessThan(50 + 250);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(true);
   });
 
   it("times out with the job handle and resumes it by handle", async () => {

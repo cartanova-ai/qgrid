@@ -119,6 +119,11 @@ interface Harness {
   users: Map<number, unknown>;
   billing: Map<number, unknown>;
   requests: CapturedRequest[];
+  /** "<path> <access token>" for every /settings, /user and /billing lookup, in call order. */
+  events: string[];
+  /** Access tokens the lookup endpoints answer with 401. */
+  revoked: Set<string>;
+  reauth: ReturnType<typeof vi.fn>;
   refresher: GrokRefresher & {
     ensureFresh: ReturnType<typeof vi.fn>;
     refreshAfterUnauthorized: ReturnType<typeof vi.fn>;
@@ -169,6 +174,8 @@ function createHarness(
   const users = new Map<number, unknown>();
   const billing = new Map<number, unknown>();
   const requests: CapturedRequest[] = [];
+  const events: string[] = [];
+  const revoked = new Set<string>();
   let harness: Harness | undefined;
   const self = () => harness!;
 
@@ -176,6 +183,12 @@ function createHarness(
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const headers = new Headers(init?.headers);
     const id = tokenIdOf(headers, self);
+    const lookup = ["/settings", "/user?", "/billing"].find((path) => url.includes(path));
+    if (lookup) {
+      const bearer = (headers.get("authorization") ?? "").replace(/^Bearer /, "");
+      events.push(`${lookup} ${bearer}`);
+      if (revoked.has(bearer)) return json({ error: "unauthorized" }, 401);
+    }
     if (url.endsWith("/settings")) return json(settings.get(id) ?? { on_demand_enabled: null });
     if (url.includes("/user?")) return users.has(id) ? json(users.get(id)) : json({}, 404);
     if (url.includes("/billing")) return json(billing.get(id) ?? billingAt(1));
@@ -212,12 +225,14 @@ function createHarness(
       }),
     ),
   };
+  const reauth = vi.fn(async () => true);
 
   const dispatcher = new GrokDispatcher({
     refresher,
     fetch: fakeFetch,
     now: () => clock.now,
     maxInflightPerToken: options.maxInflightPerToken,
+    reportReauthRequired: reauth,
     ...(options.media ? { media: options.media } : {}),
     ...(options.voice ? { voice: options.voice } : {}),
     sleep: async (ms) => {
@@ -233,6 +248,9 @@ function createHarness(
     users,
     billing,
     requests,
+    events,
+    revoked,
+    reauth,
     refresher,
     add(id, weight = 1, threshold = null) {
       dispatcher.onTokenAdded(id, `t${id}`, credentialsFor(id), threshold, weight);
@@ -369,6 +387,66 @@ describe("GrokDispatcher selection", () => {
     expect(reservation.token.id).toBe(1);
   });
 
+  it("refreshes an expired token before the gating lookups and gates on the refreshed values", async () => {
+    const h = createHarness();
+    h.add(1, 1, 50);
+    const fresh = { ...credentialsFor(1, 1), expiresAt: "2031-01-01T00:00:00Z" };
+    // The stored bearer is expired: a lookup with it would fail and open the gates.
+    h.revoked.add(credentialsFor(1).accessToken);
+    h.settings.set(1, { on_demand_enabled: true });
+    h.refresher.ensureFresh.mockImplementation(async () => {
+      h.events.push("refresh");
+      return fresh;
+    });
+    await expect(h.dispatcher.generate(request())).rejects.toBeInstanceOf(
+      GrokOnDemandExcludedError,
+    );
+    expect(h.refresher.ensureFresh).toHaveBeenCalledTimes(1);
+    expect(h.events[0]).toBe("refresh");
+    expect(h.events.slice(1).sort()).toEqual(
+      [
+        `/billing ${fresh.accessToken}`,
+        `/settings ${fresh.accessToken}`,
+        `/user? ${fresh.accessToken}`,
+      ].sort(),
+    );
+    expect(h.requests).toHaveLength(0);
+  });
+
+  it("persists reauth and skips the lookups when the pre-lookup refresh finds a dead token", async () => {
+    const h = createHarness();
+    h.add(1);
+    h.add(2);
+    h.refresher.ensureFresh.mockImplementationOnce(async () => {
+      throw Object.assign(new Error("dead"), {
+        name: "GrokReauthRequiredError",
+        oauthError: "invalid_grant",
+      });
+    });
+    const reservation = await h.dispatcher.selectToken("chat", { preferredTokenId: 1 });
+    expect(reservation.token.id).toBe(2);
+    expect(h.dispatcher.tokens.get(1)!.reauthRequired).toBe(true);
+    expect(h.events.some((event) => event.endsWith(credentialsFor(1).accessToken))).toBe(false);
+    expect(h.reauth).toHaveBeenCalledTimes(1);
+    expect(h.reauth).toHaveBeenCalledWith(
+      { id: 1, name: "t1", credentials: credentialsFor(1) },
+      "grok:invalid_grant",
+    );
+  });
+
+  it("re-reads the cached lookups after a refresh replaces the bearer", async () => {
+    const h = createHarness();
+    h.add(1);
+    h.chat.set(1, [{ kind: "http", status: 401 }]);
+    await h.dispatcher.generate(request());
+    const token = h.dispatcher.tokens.get(1)!;
+    expect(token.credentials?.accessToken).toBe(credentialsFor(1, 1).accessToken);
+    h.events.length = 0;
+    await h.dispatcher.prefetch(token);
+    expect(h.events).toContain(`/settings ${credentialsFor(1, 1).accessToken}`);
+    expect(h.events).toContain(`/user? ${credentialsFor(1, 1).accessToken}`);
+  });
+
   it("blocks over-threshold tokens and reports QuotaThresholdExceededError", async () => {
     const h = createHarness();
     h.add(1, 1, 50);
@@ -455,7 +533,27 @@ describe("GrokDispatcher chat", () => {
     await expect(h.dispatcher.generate(request({ serviceTier: "fast" }))).rejects.toBeInstanceOf(
       GrokInvalidRequestError,
     );
+    for (const xai of [{ serviceTier: "priority" }, { parallelToolCalls: false }]) {
+      await expect(
+        h.dispatcher.generate(request({ providerOptions: { xai } })),
+      ).rejects.toBeInstanceOf(GrokInvalidRequestError);
+    }
     expect(h.requests).toHaveLength(0);
+  });
+
+  it("forwards an unlisted model id and reports the serving model", async () => {
+    const h = createHarness();
+    h.add(1);
+    h.chat.set(1, [{ kind: "ok", body: goldenStream().replaceAll("grok-4.7", "grok-4.5-build") }]);
+    const result = await h.dispatcher.generate(request({ model: "grok/grok-composer-2.5" }));
+    expect(result.model).toBe("grok-4.5-build");
+    expect(result.requestedModel).toBe("grok-composer-2.5");
+    expect(result.providerMetadata).toEqual({
+      xai: { costInUsdTicks: 465240000, contextWindow: 256000 },
+    });
+    const sent = h.requests[0]!;
+    expect(sent.headers.get("x-grok-model-override")).toBe("grok-composer-2.5");
+    expect(sent.body).toMatchObject({ model: "grok-composer-2.5", reasoning: { effort: "high" } });
   });
 
   it("puts a 429 token in cooldown, fails over, and readmits it after expiry", async () => {
@@ -528,6 +626,11 @@ describe("GrokDispatcher chat", () => {
     expect((error as GrokHttpError).status).toBe(401);
     expect(h.refresher.refreshAfterUnauthorized).toHaveBeenCalledTimes(1);
     expect(h.dispatcher.tokenStates()[0]!.reauthRequired).toBe(true);
+    expect(h.reauth).toHaveBeenCalledTimes(1);
+    expect(h.reauth).toHaveBeenCalledWith(
+      { id: 1, name: "t1", credentials: credentialsFor(1, 1) },
+      "grok:unauthorized_after_refresh",
+    );
   });
 
   it("marks reauthRequired when the refresher reports reauth_required", async () => {
@@ -542,6 +645,14 @@ describe("GrokDispatcher chat", () => {
     const result = await h.dispatcher.generate(request({ preferredTokenId: 1 }));
     expect(result.tokenName).toBe("t2");
     expect(h.dispatcher.tokens.get(1)!.reauthRequired).toBe(true);
+    expect(h.reauth).toHaveBeenCalledTimes(1);
+    expect(h.reauth).toHaveBeenCalledWith(
+      { id: 1, name: "t1", credentials: credentialsFor(1) },
+      "grok:invalid_grant",
+    );
+    // A dead token is not selected again, so nothing is persisted twice.
+    await h.dispatcher.generate(request({ preferredTokenId: 1 }));
+    expect(h.reauth).toHaveBeenCalledTimes(1);
   });
 
   it("fails over and marks reauth when ensureFresh reports a dead refresh token", async () => {
@@ -566,6 +677,7 @@ describe("GrokDispatcher chat", () => {
     const result = await h.dispatcher.generate(request({ preferredTokenId: 1 }));
     expect(result.tokenName).toBe("t2");
     expect(h.dispatcher.tokens.get(1)!.reauthRequired).toBe(false);
+    expect(h.reauth).not.toHaveBeenCalled();
   });
 
   it("treats a chat 403 as permanent for the request", async () => {

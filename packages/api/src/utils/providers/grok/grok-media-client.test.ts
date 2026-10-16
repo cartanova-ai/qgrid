@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { GrokProtocolError } from "./grok-backend-protocol";
 import { GROK_BUILD_VERSION } from "./grok-constants";
 import { GrokHttpError } from "./grok-direct-client";
+import { GrokInvalidRequestError } from "./grok-dispatcher";
 import {
   decodeGrokImages,
   GrokContentPolicyError,
@@ -271,7 +272,7 @@ describe("GrokMediaClient images", () => {
       images: [{ url: "https://example.com/a.png" }, { url: "https://example.com/b.png" }],
     });
     await expect(client.editImages(AUTH, { model: "", prompt: "p", images: [] })).rejects.toThrow(
-      TypeError,
+      GrokInvalidRequestError,
     );
     expect(calls).toHaveLength(2);
   });
@@ -363,14 +364,14 @@ describe("GrokMediaClient video", () => {
     );
   });
 
-  it("rejects unsupported modes and durations without a request", async () => {
+  it("rejects reference-to-video without references and bad durations without a request", async () => {
     const { impl, calls } = fakeFetch(async () => json({ request_id: "x" }));
     const client = new GrokMediaClient({ fetch: impl });
     await expect(
-      client.startVideo(AUTH, { model: "", prompt: "p", mode: "edit-video" }),
-    ).rejects.toThrow(TypeError);
+      client.startVideo(AUTH, { model: "", prompt: "p", mode: "reference-to-video" }),
+    ).rejects.toThrow(GrokInvalidRequestError);
     await expect(client.startVideo(AUTH, { model: "", prompt: "p", duration: 16 })).rejects.toThrow(
-      RangeError,
+      GrokInvalidRequestError,
     );
     expect(calls).toHaveLength(0);
   });

@@ -33,6 +33,16 @@ export const MICRO_USD = 1_000_000;
 const REQUEST_LOG_RUN_LOCK_CLASS_ID = 718;
 const TOOL_ENUM_VALUE_LIMIT = 6;
 
+/**
+ * 비용을 알 수 없는 non-token 요청(Grok STT/TTS, ticks 없는 video). provider 비용 없이
+ * 토큰 0 으로 성공 저장되므로 SUM 은 건너뛰고 legacy 재계산도 $0 으로 매긴다 — 합계에
+ * 빠졌다는 신호를 따로 센다. 실패/중단/진행 중 row 는 과금 대상이 아니라 제외하고,
+ * 이미지 row 는 `unknownImageCostCount` 가 이미 센다.
+ */
+export const UNKNOWN_MEDIA_COST_PREDICATE =
+  "request_logs.status = 'succeeded' AND request_logs.cost_usd IS NULL AND request_logs.cost_source IS NULL" +
+  " AND request_logs.is_image_generation = false AND request_logs.input_tokens = 0 AND request_logs.output_tokens = 0";
+
 function decodeStoredTools(value: unknown): ToolDefinitions | null {
   if (!value) return null;
   if (typeof value !== "string") return value as ToolDefinitions;
@@ -829,7 +839,7 @@ class RequestLogModelClass extends BaseModelClass<
    */
   async totalCost(
     rawParams: RequestLogListParams = { num: 0, page: 1 },
-  ): Promise<{ usd: number; unknownImageCostCount: number }> {
+  ): Promise<{ usd: number; unknownImageCostCount: number; unknownCostCount: number }> {
     const params = {
       num: 0,
       page: 1,
@@ -855,6 +865,7 @@ class RequestLogModelClass extends BaseModelClass<
         unknownImageCostCount: Puri.rawNumber(
           "COUNT(*) FILTER (WHERE request_logs.is_image_generation = true AND request_logs.image_cost_usd IS NULL)",
         ),
+        unknownCostCount: Puri.rawNumber(`COUNT(*) FILTER (WHERE ${UNKNOWN_MEDIA_COST_PREDICATE})`),
       })
       .first();
 
@@ -896,7 +907,11 @@ class RequestLogModelClass extends BaseModelClass<
         alreadySummed
       );
     }, storedTotal);
-    return { usd, unknownImageCostCount: Number(stored?.unknownImageCostCount ?? 0) };
+    return {
+      usd,
+      unknownImageCostCount: Number(stored?.unknownImageCostCount ?? 0),
+      unknownCostCount: Number(stored?.unknownCostCount ?? 0),
+    };
   }
 
   async distinctProjectNames(): Promise<string[]> {

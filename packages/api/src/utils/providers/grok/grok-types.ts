@@ -306,7 +306,7 @@ export interface GrokVideoStartRequest {
   image?: string;
   lastFrame?: string;
   referenceImages?: string[];
-  mode?: "edit-video" | "extend-video" | "reference-to-video";
+  mode?: "reference-to-video";
   signal?: AbortSignal;
 }
 
