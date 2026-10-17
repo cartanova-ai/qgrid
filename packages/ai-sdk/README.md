@@ -357,8 +357,8 @@ Grok model accepts the same factory config as the other models: `serverUrl` (def
 | `qgrid(id)` | `grok/grok-4.7` (default catalog model), `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`, any other `grok/<id>` | `generateText`, `streamText` |
 | `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0`, `grok/grok-imagine-image-quality` | `generateImage` |
 | `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
-| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI subscription: `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/gpt-transcribe` | `experimental_transcribe` |
-| `qgrid.speech(id)` | `grok/grok-tts` (the id only labels the request log); OpenAI subscription: `openai/gpt-realtime-2.1-mini` | `experimental_generateSpeech` |
+| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI subscription: `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/gpt-transcribe`, `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`, `openai/whisper-1` | `experimental_transcribe` |
+| `qgrid.speech(id)` | `grok/grok-tts` (the id only labels the request log); OpenAI subscription: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1`, `openai/gpt-realtime-1.5` | `experimental_generateSpeech` |
 
 qgrid forwards a language-model id that is not in its catalog unchanged instead of rejecting it,
 as it does for OpenAI; the subscription backend decides. It may serve a different model, so check
@@ -524,7 +524,7 @@ const speech = await generateSpeech({
 
 - Each transcription has a 25 s end-to-end budget (the realtime call is torn down about 30 s after creation); the 7 MiB inline limit (~2.5 min of 24 kHz PCM) completes in a few seconds.
 - Speech is a conversational model repeating text, not a TTS model: verbatim fidelity was verified on short English sentences only; the model's own transcript of what it said is logged with the request for comparison.
-- Per-model availability is established by the live matrix in the server repository's `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`. Verified unavailable or unreliable on 2026-10-17 and therefore not exposed: `gpt-live-transcribe` and `gpt-realtime-whisper` (return roughly half of a 60 s clip), `whisper-1` (ignores `prompt`), `gpt-realtime-2.1` (paraphrased once in 13 runs), `gpt-realtime-1.5` (answers the text instead of repeating it).
+- Per-model behavior is recorded in the server repository's `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`. Known limits on 2026-10-17: `gpt-live-transcribe` and `gpt-realtime-whisper` returned roughly half of a 60 s clip (use them for short utterances); `gpt-realtime-whisper` rejects `openai.prompt` (the server answers HTTP 400 before any upstream call); `whisper-1` accepts but ignores `openai.prompt`. For speech, `gpt-realtime-2.1-mini` repeated every test text verbatim (13/13), `gpt-realtime-2.1` paraphrased once (12/13), and `gpt-realtime-1.5` often answered the text instead of repeating it (6/13); compare the logged transcript with your input when fidelity matters.
 
 ## Telemetry Logger
 

@@ -333,6 +333,25 @@ describe("OpenAIVoiceClient.transcribe", () => {
     expect(socket.terminated).toBe(true);
   });
 
+  it("rejects a prompt for gpt-realtime-whisper before any network call", async () => {
+    const fetchMock = vi.fn();
+
+    const client = new OpenAIVoiceClient({
+      fetch: fetchMock as unknown as typeof fetch,
+      webSocketFactory: mockedWebSocket().factory,
+    });
+
+    await expect(
+      client.transcribe(credentials, {
+        audio: sineWav(0.2),
+        mediaType: "audio/wav",
+        model: "gpt-realtime-whisper",
+        prompt: "qgrid",
+      }),
+    ).rejects.toMatchObject({ name: "OpenAIVoiceInputError", message: /does not accept a prompt/ });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("rejects unsupported input before any network call", async () => {
     const fetchMock = vi.fn();
 

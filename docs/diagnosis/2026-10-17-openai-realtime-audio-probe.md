@@ -2,7 +2,7 @@
 
 Account: the user’s ChatGPT subscription token from `~/.codex/auth.json` (plan D1/D2). Runner: `scripts/live-openai-voice-matrix.ts` driving the production `OpenAIVoiceClient` (the class `OpenAIDispatcher` uses) directly; the frame/dispatcher/SDK layers above it are covered by unit tests, and no local PostgreSQL was available to run the HTTP path end-to-end. Three runs: run 1 (full), runs 2–3 (STT only, after fixing the judge so the coined word “qgrid” is not counted against models that received no prompt). STT verdicts were identical across runs 2 and 3.
 
-Rule (plan D6): an id ships only when every row passes.
+Rule (plan D6) as originally written: an id ships only when every row passes. **Superseded by the user on 2026-10-17:** every reachable id is exposed and its limits are documented instead (`gpt-realtime-whisper`'s `prompt` rejection is enforced as a 400 in the client). The verdict column below keeps the matrix outcome; "dropped" now means "exposed with documented limits".
 
 ## Verdict
 

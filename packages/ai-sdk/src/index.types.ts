@@ -42,14 +42,18 @@ export type QgridVideoModel =
 export type QgridGrokTranscriptionModel = "grok/grok-voice-transcribe-2.0";
 
 /**
- * OpenAI subscription speech-to-text ids, served through a realtime transcription session. Only
- * ids that passed every row of the 2026-10-17 live matrix; `gpt-live-transcribe`,
- * `gpt-realtime-whisper` (truncate long clips) and `whisper-1` (ignores `prompt`) were dropped.
+ * OpenAI subscription speech-to-text ids, served through a realtime transcription session.
+ * Known limits (2026-10-17 live matrix): `gpt-live-transcribe` and `gpt-realtime-whisper`
+ * returned about half of a 60 s clip; `gpt-realtime-whisper` rejects `prompt` (HTTP 400);
+ * `whisper-1` accepts but ignores `prompt`.
  */
 export type QgridOpenAITranscriptionModel =
   | "openai/gpt-4o-mini-transcribe"
   | "openai/gpt-4o-transcribe"
-  | "openai/gpt-transcribe";
+  | "openai/gpt-transcribe"
+  | "openai/gpt-live-transcribe"
+  | "openai/gpt-realtime-whisper"
+  | "openai/whisper-1";
 
 export type QgridTranscriptionModel = QgridGrokTranscriptionModel | QgridOpenAITranscriptionModel;
 
@@ -60,11 +64,14 @@ export type QgridTranscriptionModel = QgridGrokTranscriptionModel | QgridOpenAIT
 export type QgridGrokSpeechModel = "grok/grok-tts";
 
 /**
- * OpenAI subscription text-to-speech id: the realtime conversational model that repeated every
- * matrix text verbatim on 2026-10-17 (`gpt-4o-mini-tts`/`tts-1` are unavailable on subscription;
- * `gpt-realtime-2.1` paraphrased once and `gpt-realtime-1.5` answered instead of repeating).
+ * OpenAI subscription text-to-speech ids: realtime conversational models repeating the text
+ * (`gpt-4o-mini-tts`/`tts-1` are unavailable on subscription). Verbatim fidelity on 2026-10-17:
+ * `gpt-realtime-2.1-mini` 13/13, `gpt-realtime-2.1` 12/13, `gpt-realtime-1.5` 6/13.
  */
-export type QgridOpenAISpeechModel = "openai/gpt-realtime-2.1-mini";
+export type QgridOpenAISpeechModel =
+  | "openai/gpt-realtime-2.1-mini"
+  | "openai/gpt-realtime-2.1"
+  | "openai/gpt-realtime-1.5";
 
 export type QgridSpeechModel = QgridGrokSpeechModel | QgridOpenAISpeechModel;
 
