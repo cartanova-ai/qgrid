@@ -79,6 +79,7 @@ const MODEL_PRESET_GROUPS: { label: string; models: string[] }[] = [
     ],
   },
 ];
+
 const EFFORT_PRESETS = ["low", "medium", "high"];
 
 interface DoneMeta {
@@ -101,12 +102,10 @@ type ChatMessage =
       error?: string;
     };
 
-function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  return String(e);
-}
-
-const PROVIDER_LABELS: Record<string, string> = { openai: "OpenAI", anthropic: "Anthropic" };
+const PROVIDER_LABELS = new Map([
+  ["openai", "OpenAI"],
+  ["anthropic", "Anthropic"],
+]);
 
 // dispatcher 원문 에러(NO_OPENAI_WORKERS 등)와, 토큰 0개라 부팅이 끝나지 않는 환경의
 // "기동 중" 메시지를 실제 원인인 토큰 부재 안내로 바꿔준다.
@@ -116,12 +115,16 @@ function humanizeError(
   tokens: ChatTokenOption[] | undefined,
 ): string {
   const missing = tokens !== undefined && providerTokenMissing(tokens, provider);
+
   const noTokenError =
     /NO_OPENAI_WORKERS|no ready openai workers|no anthropic tokens available/i.test(message);
+
   if (noTokenError || (missing && /기동 중입니다/.test(message))) {
-    const label = provider ? (PROVIDER_LABELS[provider] ?? provider) : "";
+    const label = provider ? (PROVIDER_LABELS.get(provider) ?? provider) : "";
+
     return `사용 가능한 ${label} 토큰이 없습니다. Tokens 페이지에서 토큰을 추가해주세요.`;
   }
+
   return message;
 }
 
@@ -142,6 +145,7 @@ async function fileToDataUrl(file: File): Promise<string> {
   canvas.height = Math.max(1, Math.round(bitmap.height * scale));
   canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   bitmap.close();
+
   return canvas.toDataURL("image/jpeg", 0.85);
 }
 
@@ -178,16 +182,19 @@ export function ChatWidget() {
     { orderBy: "ord-asc" },
     { enabled: open },
   );
+
   const tokenOptions = useMemo(
     () => chatTokenOptions(tokensData?.rows ?? [], provider),
     [provider, tokensData?.rows],
   );
+
   const tokenListLoaded = tokensData?.rows !== undefined;
   // SSE handler 는 연결 시점 클로저에 갇히므로 최신 토큰 목록은 ref 로 읽는다.
   const tokensRef = useRef<ChatTokenOption[] | undefined>(undefined);
   useEffect(() => {
     tokensRef.current = tokensData?.rows;
   }, [tokensData?.rows]);
+
   const selectedProviderMissing =
     tokensData?.rows !== undefined && providerTokenMissing(tokensData.rows, provider);
 
@@ -204,9 +211,11 @@ export function ChatWidget() {
   const addAttachments = async (files: FileList | null) => {
     if (!files) return;
     const slots = MAX_ATTACHMENTS - attachments.length;
+
     const converted = await Promise.all(
       [...files].slice(0, slots).map((f) => fileToDataUrl(f).catch(() => null)),
     );
+
     setAttachments((prev) =>
       [...prev, ...converted.filter((url): url is string => url !== null)].slice(
         0,
@@ -218,7 +227,9 @@ export function ChatWidget() {
   const patchLastAssistant = (patch: (m: ChatMessage & { role: "assistant" }) => ChatMessage) => {
     setMessages((prev) => {
       const last = prev[prev.length - 1];
+
       if (!last || last.role !== "assistant") return prev;
+
       return [...prev.slice(0, -1), patch(last)];
     });
   };
@@ -229,6 +240,7 @@ export function ChatWidget() {
       lastConfigRef.current?.model.split("/")[0],
       tokensRef.current,
     );
+
     patchLastAssistant((m) =>
       m.status === "streaming" ? { ...m, status: "error", error: friendly } : m,
     );
@@ -298,6 +310,7 @@ export function ChatWidget() {
 
   const send = async () => {
     const prompt = draft.trim();
+
     if (!prompt || busy) return;
 
     // threadCoord 에는 systemHash 가 박혀 있고 모델 변경은 서버가 검증하지 않으므로,
@@ -305,18 +318,23 @@ export function ChatWidget() {
     const sys = system.trim();
     const selectedTokenName = resolvedTokenName(tokenName, tokenOptions, tokenListLoaded);
     const currentConfig = { model, system: sys, tokenName: selectedTokenName };
+
     if (lastConfigRef.current && chatConfigChanged(lastConfigRef.current, currentConfig)) {
       threadCoordRef.current = undefined;
     }
+
     lastConfigRef.current = currentConfig;
 
     const images = supportsImages ? attachments : [];
     const history = buildChatHistory(messages, supportsImages);
     const controller = new AbortController();
     requestAbortRef.current = controller;
+    const userMessage: Extract<ChatMessage, { role: "user" }> = { role: "user", text: prompt };
+
+    if (images.length > 0) userMessage.images = images;
     setMessages((prev) => [
       ...prev,
-      { role: "user", text: prompt, ...(images.length > 0 ? { images } : {}) },
+      userMessage,
       { role: "assistant", text: "", status: "streaming" },
     ]);
     setDraft("");
@@ -329,15 +347,19 @@ export function ChatWidget() {
         model,
         projectName: CHAT_PROJECT_NAME,
         ...tokenTargetPayload(selectedTokenName),
-        ...(sys ? { system: sys } : {}),
-        ...(effort ? { effort } : {}),
-        // text 파트 없이 image 파트만 보내면 서버가 prompt 를 text 파트로 앞에 붙여준다.
-        ...(images.length > 0
-          ? { input: images.map((url) => ({ type: "image" as const, url })) }
-          : {}),
-        ...(history.length > 0 ? { history: JSON.stringify(history) } : {}),
-        ...(threadCoordRef.current ? { runContext: { threadCoord: threadCoordRef.current } } : {}),
       };
+
+      if (sys) args.system = sys;
+
+      if (effort) args.effort = effort;
+
+      // text 파트 없이 image 파트만 보내면 서버가 prompt 를 text 파트로 앞에 붙여준다.
+      if (images.length > 0) args.input = images.map((url) => ({ type: "image" as const, url }));
+
+      if (history.length > 0) args.history = JSON.stringify(history);
+
+      if (threadCoordRef.current) args.runContext = { threadCoord: threadCoordRef.current };
+
       if (supportsImages) {
         const result: QueryOutput = await serviceFetch({
           method: "POST",
@@ -345,6 +367,7 @@ export function ChatWidget() {
           data: { args: { ...args, imageGeneration: "auto" } satisfies QueryInput },
           signal: controller.signal,
         });
+
         if (requestAbortRef.current !== controller || controller.signal.aborted) return;
         threadCoordRef.current = result.runContext?.threadCoord;
         patchLastAssistant((m) => ({
@@ -363,14 +386,17 @@ export function ChatWidget() {
         }));
         setBusy(false);
         requestAbortRef.current = null;
+
         return;
       }
+
       const { streamId: id } = await QgridService.prepareStream(args);
+
       if (requestAbortRef.current !== controller || controller.signal.aborted) return;
       setStreamId(id);
     } catch (e) {
       if (requestAbortRef.current !== controller || controller.signal.aborted) return;
-      failStreaming(errorMessage(e));
+      failStreaming(e instanceof Error ? e.message : String(e));
       requestAbortRef.current = null;
     }
   };
@@ -389,8 +415,10 @@ export function ChatWidget() {
   const closePanel = () => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       setOpen(false);
+
       return;
     }
+
     setPanelClosing(true);
   };
 
@@ -645,7 +673,7 @@ export function ChatWidget() {
 
           {selectedProviderMissing && (
             <div className="px-4 py-1.5 border-t border-caution-400/30 bg-caution-400/10 text-[11px] text-caution-500 shrink-0">
-              {PROVIDER_LABELS[provider] ?? provider} 토큰이 등록되어 있지 않습니다.{" "}
+              {PROVIDER_LABELS.get(provider) ?? provider} 토큰이 등록되어 있지 않습니다.{" "}
               <Link to="/tokens" className="font-medium underline hover:text-caution-400">
                 Tokens 페이지
               </Link>

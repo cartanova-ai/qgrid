@@ -18,6 +18,7 @@ export function findRuntimeDependencyIssues(apiPackage, cliPackage, workspace = 
       }
 
       const cliSpecifier = resolveCatalogSpecifier(name, cliDependencies[name], workspace);
+
       if (
         apiSpecifier === null ||
         cliSpecifier === null ||
@@ -36,12 +37,13 @@ async function readPackage(url) {
 }
 
 export function resolveCatalogSpecifier(name, specifier, workspace) {
-  if (typeof specifier !== "string" || !specifier.startsWith("catalog:")) {
+  if (specifier === undefined || specifier === null || !specifier.startsWith("catalog:")) {
     return specifier;
   }
 
   const catalogName = specifier.slice("catalog:".length);
   const catalog = catalogName ? workspace.catalogs?.[catalogName] : workspace.catalog;
+
   return catalog?.[name] ?? null;
 }
 
@@ -65,10 +67,12 @@ async function main() {
     readPackage(new URL("../package.json", import.meta.url)),
     readFile(new URL("../../../pnpm-workspace.yaml", import.meta.url), "utf8").then(parse),
   ]);
+
   const issues = findRuntimeDependencyIssues(apiPackage, cliPackage, workspace);
 
   if (issues.length === 0) {
     console.log("CLI bundle dependency contract is satisfied.");
+
     return;
   }
 
@@ -91,6 +95,7 @@ function formatIssue(issue) {
 }
 
 const entryPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : null;
+
 if (entryPath === import.meta.url) {
   await main();
 }

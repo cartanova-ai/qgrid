@@ -87,6 +87,7 @@ export function ensureLatestRuntimeCliDependencies(): void {
         installedOutput = commandVersion(dep.command);
       } else {
         const latest = packageLatestVersion(dep.packageName);
+
         if (installed === latest) continue;
 
         console.log(`Updating ${dep.label}: ${installed} → ${latest}`);
@@ -94,7 +95,9 @@ export function ensureLatestRuntimeCliDependencies(): void {
         installedOutput = commandVersion(dep.command);
       }
     } catch (e) {
-      console.warn(`Warning: failed to update ${dep.label}: ${(e as Error).message}`);
+      console.warn(
+        `Warning: failed to update ${dep.label}: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
 
     if (!installedOutput) {
@@ -103,17 +106,19 @@ export function ensureLatestRuntimeCliDependencies(): void {
   }
 }
 
-function normalizePort(port: unknown): string {
-  const value = String(port);
+function normalizePort(value: string): string {
   const numeric = Number(value);
+
   if (!/^\d+$/.test(value) || numeric < 1 || numeric > 65_535) {
     console.error(`Invalid port: ${value}`);
     process.exit(1);
   }
+
   return value;
 }
 
 const program = new Command();
+
 program
   .name("qgrid")
   .version(pkg.version)
@@ -126,6 +131,7 @@ program
 
     try {
       const pid = execSync(`lsof -ti :${serverPort}`, { encoding: "utf-8" }).trim();
+
       if (pid) {
         console.error(`Error: Port ${serverPort} is already in use (PID ${pid}).`);
         console.error(`Stop that process or choose a port explicitly with --port.`);
@@ -156,6 +162,7 @@ program
           error: console.error,
         },
       );
+
       if (outcome.kind === "exit") process.exit(outcome.exitCode);
     }
 
@@ -164,10 +171,12 @@ program
     // --db가 최우선이며, Qgrid의 공개 DB 환경변수로 정규화한 뒤 Sonamu 내부 env로 복사한다.
     if (opts.db) {
       const m = opts.db.match(/^postgres(?:ql)?:\/\/([^:]+):(.+)@([^:]+):(\d+)\/(.+)$/);
+
       if (!m) {
         console.error("Invalid DB URL format. Expected: postgres://user:password@host:port/dbname");
         process.exit(1);
       }
+
       const [, user, password, host, port, dbName] = m;
       process.env.QGRID_DB_HOST = host;
       process.env.QGRID_DB_PORT = normalizePort(port);
@@ -175,10 +184,12 @@ program
       process.env.QGRID_DB_PASSWORD = password;
       process.env.QGRID_DB_NAME = dbName;
     }
+
     applyQgridDatabaseEnv(process.env);
     process.env.PORT = serverPort;
 
     process.env.NODE_ENV ||= "production";
+
     if (process.env.NODE_ENV !== "staging" && process.env.NODE_ENV !== "production") {
       console.error(
         `Error: Packaged qgrid supports NODE_ENV=staging or production, received "${process.env.NODE_ENV}"`,
@@ -188,6 +199,7 @@ program
 
     const bundlePath = join(__dirname, "..", "bundle");
     const serverEntry = join(bundlePath, "dist", "index.js");
+
     if (!existsSync(serverEntry)) {
       console.error(`Error: Server bundle not found at ${serverEntry}`);
       console.error("Reinstall: npm i -g @cartanova/qgrid-cli");
@@ -202,8 +214,10 @@ program
     const dbUser = process.env.SONAMU_DB_USER ?? "postgres";
     const dbPassword = process.env.SONAMU_DB_PASSWORD ?? "postgres";
     const dbName = process.env.SONAMU_DB_NAME ?? "qgrid";
+
     try {
       const pg = await import("pg");
+
       const client = new pg.default.Client({
         host: dbHost,
         port: Number(dbPort),
@@ -212,13 +226,15 @@ program
         database: dbName,
         connectionTimeoutMillis: 5000,
       });
+
       await client.connect();
       await client.end();
     } catch (e) {
-      const err = e as Error;
+      const message = e instanceof Error ? e.message : String(e);
       console.error(`Error: Cannot connect to PostgreSQL at ${dbHost}:${dbPort}/${dbName}`);
-      console.error(`error:  ${err.message}`);
-      if (err.message.includes("timeout expired")) {
+      console.error(`error:  ${message}`);
+
+      if (message.includes("timeout expired")) {
         console.error(
           `cannot connect to the database server. Please check if the database is running and accessible.`,
         );
@@ -232,7 +248,7 @@ program
     try {
       await import(serverEntry);
     } catch (e) {
-      console.error("Failed to start server:", (e as Error).stack ?? (e as Error).message);
+      console.error("Failed to start server:", e instanceof Error ? (e.stack ?? e.message) : e);
       process.exit(1);
     }
   });

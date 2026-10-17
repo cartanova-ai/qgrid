@@ -8,6 +8,7 @@ import { z } from "zod";
  * 모델이 지원하지 않는 값은 서버가 조용히 무시한다.
  */
 export type QgridOpenAIEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+
 /**
  * Anthropic 경로(Claude Code `--effort`)의 reasoning effort. 모델별 상한(예: Sonnet 4.6 은 `xhigh`
  * 없음)은 Claude Code 가 처리하고, 이 집합 밖의 값은 서버가 조용히 무시한다.
@@ -15,6 +16,7 @@ export type QgridOpenAIEffort = "low" | "medium" | "high" | "xhigh" | "max" | "u
 export type QgridAnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type QgridOpenAIModel = Extract<QgridSupportedModel, `openai/${string}`>;
+
 export type QgridAnthropicModel = Extract<QgridSupportedModel, `anthropic/${string}`>;
 
 type QgridCommonProviderConfig = {
@@ -63,9 +65,11 @@ export type QgridImageProviderOptions = {
 export type QgridOpenAIProviderConfig = QgridCommonProviderConfig & {
   defaultEffort?: QgridOpenAIEffort;
 };
+
 export type QgridAnthropicProviderConfig = QgridCommonProviderConfig & {
   defaultEffort?: QgridAnthropicEffort;
 };
+
 /** `qgrid()` 는 모델 ID prefix 로 오버로드되므로 보통 provider 별 타입이 추론된다. */
 export type QgridProviderConfig = QgridOpenAIProviderConfig | QgridAnthropicProviderConfig;
 
@@ -144,7 +148,8 @@ export type QgridThreadCoord = {
   workerId: number;
   threadId: string;
   epoch: number;
-  systemHash: string;
+  /** Absent from servers older than the system-prompt hash guard; echoed back unchanged. */
+  systemHash?: string;
 };
 
 export type QgridInputPart =
@@ -260,19 +265,10 @@ export type QgridImageGenerationMetadata = {
 export type QueryOutput = {
   requestLogId?: number;
   text: string;
-  content?: Array<
-    | { type: "text"; text: string }
-    | { type: "tool-call"; toolCallId: string; toolName: string; input: string }
-    | {
-        type: "image";
-        data: string;
-        mediaType?: "image/png" | "image/jpeg" | "image/webp";
-        revisedPrompt?: string | null;
-        generation?: QgridImageGenerationMetadata;
-      }
-  >;
+  content?: QueryContentPart[];
   finishReason?: "stop" | "tool-calls";
-  model: string;
+  /** Older servers may omit the fields below that the SDK only forwards as metadata. */
+  model?: string;
   requestedModel?: string;
   modelFallbacks?: Array<{
     trigger: "refusal";
@@ -291,11 +287,123 @@ export type QueryOutput = {
     cache_creation_1h_input_tokens?: number;
     cache_read_input_tokens: number;
   };
-  durationMs: number;
-  costUsd: number;
-  costSource: "provider" | "pricing_table" | "mixed";
+  durationMs?: number;
+  costUsd?: number;
+  costSource?: "provider" | "pricing_table" | "mixed";
   runContext?: { requestLogId?: number; threadCoord?: QgridThreadCoord };
 };
+
+export type QueryContentPart =
+  | { type: "text"; text: string }
+  | { type: "tool-call"; toolCallId: string; toolName: string; input: string }
+  | {
+      type: "image";
+      data: string;
+      mediaType?: "image/png" | "image/jpeg" | "image/webp";
+      revisedPrompt?: string | null;
+      generation?: QgridImageGenerationMetadata;
+    };
+
+// Extra keys the server adds to generation metadata are forwarded to callers unchanged.
+const imageGenerationMetadataSchema: z.ZodType<QgridImageGenerationMetadata> = z.looseObject({
+  route: z.enum(["codex-images", "codex-responses"]),
+  model: z.string().optional(),
+  background: z.string().optional(),
+  quality: z.string().optional(),
+  size: z.string().optional(),
+  usage: z
+    .looseObject({
+      input_tokens: z.number(),
+      output_tokens: z.number(),
+      total_tokens: z.number(),
+      input_tokens_details: z
+        .looseObject({
+          image_tokens: z.number(),
+          text_tokens: z.number(),
+          cached_tokens: z.number().optional(),
+        })
+        .optional(),
+      output_tokens_details: z
+        .looseObject({ image_tokens: z.number(), text_tokens: z.number() })
+        .optional(),
+    })
+    .optional(),
+});
+
+const queryContentPartSchema: z.ZodType<QueryContentPart> = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("text"), text: z.string() }),
+  z.object({
+    type: z.literal("tool-call"),
+    toolCallId: z.string(),
+    toolName: z.string(),
+    input: z.string(),
+  }),
+  z.object({
+    type: z.literal("image"),
+    data: z.string(),
+    mediaType: z.enum(["image/png", "image/jpeg", "image/webp"]).optional(),
+    revisedPrompt: z.string().nullable().optional(),
+    generation: imageGenerationMetadataSchema.optional(),
+  }),
+]);
+
+// The SDK only stores and echoes thread coordinates, so unknown fields pass through untouched.
+const threadCoordSchema = z.looseObject({
+  workerId: z.number(),
+  threadId: z.string(),
+  epoch: z.number(),
+  systemHash: z.string().optional(),
+});
+
+/**
+ * Response of `/api/qgrid/query` and the stream `done` event. Content variants this SDK does not
+ * know are skipped rather than rejected, so a newer server can add variants. The object stays
+ * loose because `providerMetadata` is read by a separate schema.
+ */
+export const queryOutputSchema: z.ZodType<QueryOutput> = z.looseObject({
+  requestLogId: z.number().optional(),
+  text: z.string(),
+  content: z
+    .array(z.looseObject({ type: z.string() }))
+    .optional()
+    .transform((items) =>
+      items?.flatMap((item) => {
+        const part = queryContentPartSchema.safeParse(item);
+
+        return part.success ? [part.data] : [];
+      }),
+    ),
+  finishReason: z.enum(["stop", "tool-calls"]).optional(),
+  model: z.string().optional(),
+  requestedModel: z.string().optional(),
+  modelFallbacks: z
+    .array(
+      z.object({
+        trigger: z.literal("refusal"),
+        fromModel: z.string(),
+        toModel: z.string(),
+        category: z.string().optional(),
+        explanation: z.string().optional(),
+      }),
+    )
+    .optional(),
+  tokenName: z.string().optional(),
+  usage: z.object({
+    input_tokens: z.number(),
+    output_tokens: z.number(),
+    reasoning_tokens: z.number().optional(),
+    cache_creation_input_tokens: z.number(),
+    cache_creation_5m_input_tokens: z.number().optional(),
+    cache_creation_1h_input_tokens: z.number().optional(),
+    cache_read_input_tokens: z.number(),
+  }),
+  durationMs: z.number().optional(),
+  costUsd: z.number().optional(),
+  costSource: z.enum(["provider", "pricing_table", "mixed"]).optional(),
+  runContext: z
+    .object({ requestLogId: z.number().optional(), threadCoord: threadCoordSchema.optional() })
+    .optional(),
+});
 
 export type CreateRunInput = {
   userPrompt: string;

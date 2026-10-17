@@ -55,6 +55,7 @@ export async function ensureTokensTrigger(connConfig: ClientConfig): Promise<voi
   });
 
   let lockAcquired = false;
+
   try {
     await client.connect();
     await client.query("SET search_path TO public");
@@ -77,6 +78,7 @@ export async function ensureTokensTrigger(connConfig: ClientConfig): Promise<voi
         ])
         .catch(() => {});
     }
+
     await client.end().catch(() => {});
   }
 }

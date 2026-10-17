@@ -9,7 +9,7 @@ const srcRoot = path.resolve(process.cwd(), "src");
 const ignoredSuffixes = [".test.ts", ".test-hold.ts", ".ignore.ts", ".d.ts"];
 const ignoredDirectories = new Set(["__mocks__", "_templates", "wasted_src"]);
 
-function collectEntries(directory: string): Record<string, string> {
+function collectEntries(directory: string) {
   const entries: Record<string, string> = {};
 
   for (const entry of readdirSync(directory)) {

@@ -7,10 +7,11 @@
  * - rotation 감지: 새 refresh_token 있으면 DB 즉시 업데이트
  */
 import { getLogger } from "@logtape/logtape";
+import { z } from "zod";
 
 import { deactivateAuthDeadToken } from "../../../application/qgrid/token-death";
 import { TokenModel } from "../../../application/token/token.model";
-import { type OpenAICredentials } from "../../../application/token/token.types";
+import { OpenAICredentials } from "../../../application/token/token.types";
 
 const logger = getLogger(["qgrid", "openai-refresh"]);
 
@@ -22,6 +23,26 @@ const PERMANENT_FAILURE_CODES = new Set([
   "refresh_token_reused",
   "refresh_token_invalidated",
 ]);
+
+// Only short snake_case codes are trusted; anything else in a 401 body reads as "unknown".
+const refreshErrorCodeSchema = z.string().regex(/^[a-z_]{1,80}$/);
+
+// `error` is either the code itself or an object carrying `code`.
+const refreshErrorBodySchema = z.looseObject({
+  error: z
+    .union([
+      refreshErrorCodeSchema,
+      z.looseObject({ code: refreshErrorCodeSchema }).transform((error) => error.code),
+    ])
+    .optional(),
+});
+
+const refreshResponseSchema = z.object({
+  access_token: z.string(),
+  refresh_token: z.string().nullish(),
+  expires_in: z.number().nullish(),
+  id_token: z.string().nullish(),
+});
 
 // per-token inflight promise dedup + minimum interval
 const inflightRefresh = new Map<number, Promise<RefreshResult>>();
@@ -37,14 +58,18 @@ interface RefreshResult {
 export async function handleChatgptAuthTokensRefresh(tokenId: number): Promise<RefreshResult> {
   logger.info(`refresh requested for token ${tokenId} (pid=${process.pid})`);
   const existing = inflightRefresh.get(tokenId);
+
   if (existing) {
     logger.info(`refresh dedup for token ${tokenId}`);
+
     return existing;
   }
 
   const lastAt = lastRefreshTime.get(tokenId) ?? 0;
+
   if (Date.now() - lastAt < REFRESH_MIN_INTERVAL_MS) {
     logger.info(`refresh too soon for token ${tokenId}, reading current creds from DB`);
+
     return readCurrentCreds(tokenId);
   }
 
@@ -61,8 +86,10 @@ export async function handleChatgptAuthTokensRefresh(tokenId: number): Promise<R
 
 async function readCurrentCreds(tokenId: number): Promise<RefreshResult> {
   const token = await TokenModel.findOne("A", { id: tokenId });
+
   if (!token || token.provider !== "openai") throw new Error(`token ${tokenId} not found`);
-  const creds = token.credentials as OpenAICredentials;
+  const creds = OpenAICredentials.parse(token.credentials);
+
   return {
     accessToken: creds.accessToken,
     chatgptAccountId: creds.accountId,
@@ -72,11 +99,13 @@ async function readCurrentCreds(tokenId: number): Promise<RefreshResult> {
 
 async function doRefresh(tokenId: number): Promise<RefreshResult> {
   const token = await TokenModel.findOne("A", { id: tokenId });
+
   if (!token || token.provider !== "openai") {
     throw new Error(`token ${tokenId} not found or not openai`);
   }
 
-  const creds = token.credentials as OpenAICredentials;
+  const creds = OpenAICredentials.loose().parse(token.credentials);
+
   if (!creds.refreshToken) {
     throw new Error(`token ${tokenId} has no refreshToken`);
   }
@@ -103,20 +132,16 @@ async function doRefresh(tokenId: number): Promise<RefreshResult> {
     //   refresh_token_invalidated → 서버측 revoke
     // 위 3개는 모두 영구 실패. 재등록 외 복구 불가.
     let errorCode: string | undefined;
+
     try {
-      const error = (JSON.parse(body) as { error?: unknown }).error;
-      const code =
-        typeof error === "string"
-          ? error
-          : error && typeof error === "object" && "code" in error
-            ? error.code
-            : undefined;
-      if (typeof code === "string" && /^[a-z_]{1,80}$/.test(code)) errorCode = code;
+      errorCode = refreshErrorBodySchema.safeParse(JSON.parse(body)).data?.error;
     } catch {}
+
     logger.error(
       `OpenAI refresh FAILED token=${token.name}(id=${tokenId}) status=${resp.status} ` +
         `code=${errorCode ?? "unknown"}`,
     );
+
     // 영구 실패는 errorCode 로만 판정한다 — status 를 함께 요구하면 provider 가
     // 상태코드를 바꿀 때 판정이 조용히 멎는다.
     if (errorCode && PERMANENT_FAILURE_CODES.has(errorCode)) {
@@ -125,21 +150,19 @@ async function doRefresh(tokenId: number): Promise<RefreshResult> {
         `openai:${errorCode}`,
       );
     }
+
     throw new Error(`OpenAI refresh failed: ${resp.status} ${errorCode ?? "unknown"}`);
   }
 
-  const data = (await resp.json()) as {
-    access_token: string;
-    refresh_token?: string;
-    expires_in?: number;
-    id_token?: string;
-  };
+  const data = refreshResponseSchema.parse(await resp.json());
 
   const newRefreshToken = data.refresh_token ?? creds.refreshToken;
+
   const rotated =
     data.refresh_token !== null &&
     data.refresh_token !== undefined &&
     data.refresh_token !== creds.refreshToken;
+
   if (rotated) {
     logger.info(`refresh_token rotated for token ${token.name}`);
   }
@@ -151,8 +174,9 @@ async function doRefresh(tokenId: number): Promise<RefreshResult> {
     accessTokenExpiresAt: data.expires_in
       ? Date.now() + data.expires_in * 1000
       : creds.accessTokenExpiresAt,
-    ...(data.id_token ? { idToken: data.id_token } : {}),
   };
+
+  if (data.id_token) updatedCreds.idToken = data.id_token;
 
   // 회전(rotated)이 일어났는데 이 save 가 실패하면, OpenAI 쪽 옛 refresh_token 은 이미
   // 폐기된 상태에서 DB 에는 옛 토큰이 남는다 → 다음 refresh 가 refresh_token_reused 로

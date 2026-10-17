@@ -8,7 +8,7 @@ import {
   exhaustive,
 } from "sonamu";
 
-import { SD, type LocalizedString } from "../../i18n/sd.generated";
+import { SD } from "../../i18n/sd.generated";
 import { SlackNotificationError } from "../../utils/slack-notify";
 import { type SettingSubsetKey, type SettingSubsetMapping } from "../sonamu.generated";
 import { settingSubsetQueries, settingLoaderQueries } from "../sonamu.generated.sso";
@@ -58,6 +58,7 @@ class SettingModelClass extends BaseModelClass<
       page: 1,
       queryMode: "list",
     });
+
     if (!rows[0]) {
       throw new NotFoundException(SD("error.entityNotFound")("Setting", id));
     }
@@ -162,6 +163,7 @@ class SettingModelClass extends BaseModelClass<
   /** 저장된 설정 전체를 key→value 로. 부팅 시 한 번 읽어 메모리에 올린다. */
   async findAllAsMap(): Promise<Map<string, string>> {
     const { rows } = await this.findMany("A", { num: 0, page: 1, queryMode: "list" });
+
     return new Map(rows.map((r) => [r.key, r.value]));
   }
 
@@ -219,6 +221,7 @@ class SettingModelClass extends BaseModelClass<
   runtimeInfo(): RuntimeInfoItem[] {
     const env = process.env;
     const password = env.QGRID_DB_PASSWORD ?? env.SONAMU_DB_PASSWORD ?? "";
+
     return [
       { label: "NODE_ENV", value: env.NODE_ENV ?? "-" },
       { label: "HOST", value: env.HOST ?? "localhost" },
@@ -234,14 +237,17 @@ class SettingModelClass extends BaseModelClass<
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async updateSetting(key: string, value: string): Promise<{ applies: SettingApplies }> {
     const def = findSettingDef(key);
+
     if (!def) throw new BadRequestException(SD("setting.unknownKey")(key));
 
     const validation = validateSettingValue(def, value);
+
     if (!validation.ok) {
       throw new BadRequestException(SD("setting.invalidValue")(validation.error));
     }
 
     await saveStoredSetting(key, validation.value);
+
     return { applies: def.applies };
   }
 
@@ -249,9 +255,11 @@ class SettingModelClass extends BaseModelClass<
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async resetSetting(key: string): Promise<{ applies: SettingApplies }> {
     const def = findSettingDef(key);
+
     if (!def) throw new BadRequestException(SD("setting.unknownKey")(key));
 
     await resetStoredSetting(key);
+
     return { applies: def.applies };
   }
 
@@ -265,12 +273,14 @@ class SettingModelClass extends BaseModelClass<
     // setting.model → expired-token-reminder → token.model 경로가 생겨,
     // token.model 을 mock 하는 테스트가 실제 모듈을 먼저 로드하게 된다.
     const { sendExpiredTokenReminderNow } = await import("../qgrid/expired-token-reminder");
+
     try {
       return { sent: await sendExpiredTokenReminderNow() };
     } catch (error) {
       if (error instanceof SlackNotificationError) {
-        throw new BadRequestException(error.message as LocalizedString);
+        throw new BadRequestException(SD("error.detail")(error.message));
       }
+
       throw error;
     }
   }

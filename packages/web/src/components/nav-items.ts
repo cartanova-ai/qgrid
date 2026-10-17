@@ -39,5 +39,6 @@ export const NAV_ITEMS: NavItem[] = NAV_SECTIONS.flatMap((section) => section.it
 
 export function isNavItemActive(path: string, pathname: string): boolean {
   if (path === "/") return pathname === "/" || pathname === "";
+
   return pathname.startsWith(path);
 }

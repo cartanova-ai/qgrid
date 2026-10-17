@@ -14,6 +14,7 @@ test("reports API runtime dependencies missing from the CLI package", () => {
       beta: "^2.0.0",
     },
   };
+
   const cliPackage = {
     dependencies: {
       alpha: "^1.0.0",
@@ -39,6 +40,7 @@ test("ignores API development-only dependencies", () => {
       testOnly: "^1.0.0",
     },
   };
+
   const cliPackage = {
     dependencies: {
       runtime: "^1.0.0",
@@ -54,6 +56,7 @@ test("reports CLI ranges that can install versions outside the API range", () =>
       runtime: "^2.0.0",
     },
   };
+
   const cliPackage = {
     dependencies: {
       runtime: "^1.0.0",
@@ -77,12 +80,14 @@ test("accepts a narrower CLI range and resolves workspace catalog entries", () =
       pinnedRuntime: "^2.0.0",
     },
   };
+
   const cliPackage = {
     dependencies: {
       catalogRuntime: "~1.6.0",
       pinnedRuntime: "2.1.0",
     },
   };
+
   const workspace = {
     catalog: {
       catalogRuntime: "~1.6.0",
@@ -110,7 +115,9 @@ test("keeps the Better Auth runtime packages on one catalog cohort", async () =>
     readPackage(new URL("../package.json", import.meta.url)),
     readWorkspace(new URL("../../../pnpm-workspace.yaml", import.meta.url)),
   ]);
+
   const sharedCohort = ["better-auth", "@better-auth/passkey", "@better-auth/sso"];
+
   const packageCohorts = [
     [apiPackage, sharedCohort],
     [cliPackage, ["@better-auth/core", ...sharedCohort]],
@@ -120,6 +127,7 @@ test("keeps the Better Auth runtime packages on one catalog cohort", async () =>
     const ranges = cohort.map((name) =>
       resolveCatalogSpecifier(name, packageJson.dependencies[name], workspace),
     );
+
     assert.equal(new Set(ranges).size, 1);
     assert.equal(ranges[0], workspace.catalog["better-auth"]);
   }
@@ -133,5 +141,6 @@ async function readPackage(url) {
 
 async function readWorkspace(url) {
   const { parse } = await import("yaml");
+
   return parse(await readFile(url, "utf8"));
 }

@@ -11,6 +11,8 @@
  *   → "Composing Tools With A User Output Schema"
  */
 
+import { z } from "zod";
+
 import {
   SCHEMA_ARRAY_KEYWORDS,
   SCHEMA_DEPENDENCIES_KEYWORD,
@@ -18,7 +20,11 @@ import {
   SCHEMA_SINGLE_KEYWORDS,
   UNSUPPORTED_REFERENCE_KEYWORDS,
 } from "../../utils/providers/common/json-schema-keywords";
-import { type JsonValue } from "../../utils/providers/common/provider-types";
+import {
+  isJsonObject,
+  type JsonObject,
+  type JsonValue,
+} from "../../utils/providers/common/provider-types";
 import { type QgridTool } from "./qgrid.types";
 
 const USER_OUTPUT_DEFINITION = "__qgrid_user_output";
@@ -44,6 +50,7 @@ export function buildToolCallSchema(tools: QgridTool[], answerSchema?: JsonValue
   const toolDescriptions = tools
     .map((tool) => {
       const schema = JSON.stringify(tool.inputSchema);
+
       return `- ${tool.name}: ${tool.description ?? ""}\n  inputSchema: ${schema}`;
     })
     .join("\n");
@@ -51,7 +58,7 @@ export function buildToolCallSchema(tools: QgridTool[], answerSchema?: JsonValue
   const normalizedAnswerSchema =
     answerSchema === undefined ? undefined : rebaseUserOutputSchema(answerSchema);
 
-  return {
+  const envelope: JsonObject = {
     type: "object",
     description:
       "Return exactly one JSON object matching this schema as your final response, including when requesting a tool. This object is the response body, not a call to a built-in tool. To request client-side tools, set result.action to tool_call and include result.toolCalls, then end your turn. The client executes those tools and supplies their results in a later request. Do not invent tool results or emit an answer before receiving the required results.",
@@ -108,29 +115,28 @@ export function buildToolCallSchema(tools: QgridTool[], answerSchema?: JsonValue
     },
     required: ["result"],
     additionalProperties: false,
-    ...(normalizedAnswerSchema === undefined
-      ? {}
-      : {
-          $defs: {
-            [USER_OUTPUT_DEFINITION]: normalizedAnswerSchema,
-          },
-        }),
   };
+
+  if (normalizedAnswerSchema !== undefined) {
+    envelope.$defs = { [USER_OUTPUT_DEFINITION]: normalizedAnswerSchema };
+  }
+
+  return envelope;
 }
 
 function rebaseUserOutputSchema(schema: JsonValue): JsonValue {
-  return rewriteSchemaNode(schema, "$");
+  return rewriteSchemaNode(schema, "$") ?? schema;
 }
 
 const MAP_KEYWORDS = new Set<string>(SCHEMA_MAP_KEYWORDS);
 const ARRAY_KEYWORDS = new Set<string>(SCHEMA_ARRAY_KEYWORDS);
 const SINGLE_KEYWORDS = new Set<string>(SCHEMA_SINGLE_KEYWORDS);
 
-function rewriteSchemaNode(value: JsonValue, path: string): JsonValue {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+function rewriteSchemaNode(value: JsonValue | undefined, path: string): JsonValue | undefined {
+  if (!isJsonObject(value)) return value;
 
-  const source = value as Record<string, JsonValue>;
-  const result: Record<string, JsonValue> = { ...source };
+  const source = value;
+  const result: JsonObject = { ...source };
 
   for (const unsupportedKeyword of UNSUPPORTED_REFERENCE_KEYWORDS) {
     if (Object.hasOwn(source, unsupportedKeyword)) {
@@ -142,13 +148,15 @@ function rewriteSchemaNode(value: JsonValue, path: string): JsonValue {
   }
 
   if ("$ref" in source) {
-    const ref = source.$ref;
-    if (typeof ref !== "string" || (ref !== "#" && !ref.startsWith("#/"))) {
+    const ref = z.string().safeParse(source.$ref).data;
+
+    if (ref === undefined || (ref !== "#" && !ref.startsWith("#/"))) {
       throw new ToolSchemaCompositionError(
         "only root-relative JSON Pointer $ref values are supported",
         `${path}.$ref`,
       );
     }
+
     result.$ref = `${USER_OUTPUT_REF}${ref.slice(1)}`;
   }
 
@@ -161,7 +169,7 @@ function rewriteSchemaNode(value: JsonValue, path: string): JsonValue {
           name,
           rewriteSchemaNode(schema, `${keywordPath}.${name}`),
         ]),
-      ) as JsonValue;
+      );
     } else if (keyword === SCHEMA_DEPENDENCIES_KEYWORD && isJsonObject(child)) {
       result[keyword] = Object.fromEntries(
         Object.entries(child).map(([name, dependency]) => [
@@ -170,25 +178,21 @@ function rewriteSchemaNode(value: JsonValue, path: string): JsonValue {
             ? dependency
             : rewriteSchemaNode(dependency, `${keywordPath}.${name}`),
         ]),
-      ) as JsonValue;
+      );
     } else if (ARRAY_KEYWORDS.has(keyword) && Array.isArray(child)) {
-      result[keyword] = child.map((schema, index) =>
-        rewriteSchemaNode(schema, `${keywordPath}[${index}]`),
-      ) as JsonValue;
+      result[keyword] = child.map(
+        (schema, index) => rewriteSchemaNode(schema, `${keywordPath}[${index}]`) ?? schema,
+      );
     } else if (SINGLE_KEYWORDS.has(keyword)) {
       if (keyword === "items" && Array.isArray(child)) {
-        result[keyword] = child.map((schema, index) =>
-          rewriteSchemaNode(schema, `${keywordPath}[${index}]`),
-        ) as JsonValue;
+        result[keyword] = child.map(
+          (schema, index) => rewriteSchemaNode(schema, `${keywordPath}[${index}]`) ?? schema,
+        );
       } else {
         result[keyword] = rewriteSchemaNode(child, keywordPath);
       }
     }
   }
 
-  return result as JsonValue;
-}
-
-function isJsonObject(value: JsonValue): value is Record<string, JsonValue> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return result;
 }

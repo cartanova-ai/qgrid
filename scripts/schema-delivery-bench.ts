@@ -45,6 +45,10 @@ import {
   parseCheckpointLines,
   validateAgainstSchema,
 } from "../packages/api/src/testing/schema-bench";
+import {
+  isJsonObject,
+  type JsonValue,
+} from "../packages/api/src/utils/providers/common/provider-types";
 
 const SERVER = process.env.BENCH_SERVER ?? "http://localhost:44900";
 const MODELS = (process.env.BENCH_MODELS ?? "anthropic/claude-sonnet-4-6")
@@ -66,7 +70,7 @@ const MAX_TOOL_TURNS = 3;
 interface BenchTool {
   name: string;
   description?: string;
-  inputSchema: unknown;
+  inputSchema: JsonValue;
 }
 
 interface Fixture {
@@ -189,11 +193,10 @@ function buildFixtures(): Fixture[] {
 
   const schemaFile = process.env.BENCH_SCHEMA_FILE;
   if (schemaFile) {
-    const raw = JSON.parse(readFileSync(schemaFile, "utf8")) as {
-      type: string;
-      properties?: Record<string, unknown>;
-      required?: string[];
-    };
+    // JSON.parse without a reviver yields only JSON values.
+    const raw: JsonValue = JSON.parse(readFileSync(schemaFile, "utf8"));
+    const properties =
+      isJsonObject(raw) && isJsonObject(raw.properties) ? raw.properties : undefined;
     fixtures.push({
       name: "deti-real",
       prompt:
@@ -201,7 +204,7 @@ function buildFixtures(): Fixture[] {
       jsonSchema: JSON.stringify(raw),
       classify: {
         schema: raw,
-        allowedTopLevelKeys: raw.properties ? Object.keys(raw.properties) : undefined,
+        allowedTopLevelKeys: properties ? Object.keys(properties) : undefined,
       },
     });
   }
@@ -474,8 +477,9 @@ async function runOne(
             costUsd,
           };
         }
-        let parsedArgs: unknown;
+        let parsedArgs: JsonValue;
         try {
+          // JSON.parse without a reviver yields only JSON values.
           parsedArgs = JSON.parse(call.input ?? "");
         } catch {
           return {

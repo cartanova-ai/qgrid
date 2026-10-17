@@ -10,20 +10,26 @@ import {
   Puri,
   transactional,
 } from "sonamu";
+import { z } from "zod";
 
 import { SD } from "../../i18n/sd.generated";
 import { calculateCostUsd } from "../../utils/providers/common/model-cost";
-import { isProviderId, type ProviderId } from "../../utils/providers/common/provider-types";
+import {
+  isJsonObject,
+  isProviderId,
+  type JsonValue,
+  jsonValueSchema,
+  type ProviderId,
+} from "../../utils/providers/common/provider-types";
+import { type RequestLogStepSaveParams } from "../request-log-step/request-log-step.types";
 import { type RequestLogSubsetKey, type RequestLogSubsetMapping } from "../sonamu.generated";
 import { requestLogLoaderQueries, requestLogSubsetQueries } from "../sonamu.generated.sso";
+import { renderJsonSchemaZodText, renderParsedJsonSchemaTypeText } from "./json-schema-type-text";
 import {
-  renderJsonSchemaZodShapeText,
-  renderParsedJsonSchemaTypeText,
-} from "./json-schema-type-text";
-import {
+  type HistoryItems,
   type RequestLogListParams,
   type RequestLogSaveParams,
-  type ToolDefinitions,
+  ToolDefinitions,
   type ToolView,
 } from "./request-log.types";
 import { formatZodCode } from "./zod-code-format";
@@ -43,11 +49,18 @@ export const UNKNOWN_MEDIA_COST_PREDICATE =
   "request_logs.status = 'succeeded' AND request_logs.cost_usd IS NULL AND request_logs.cost_source IS NULL" +
   " AND request_logs.is_image_generation = false AND request_logs.input_tokens = 0 AND request_logs.output_tokens = 0";
 
-function decodeStoredTools(value: unknown): ToolDefinitions | null {
+/** Numeric aggregate column that node-postgres may deliver as bigint text. */
+const bigintAggregate = z.coerce.number();
+
+function decodeStoredTools(
+  value: ToolDefinitions | string | null | undefined,
+): ToolDefinitions | null {
   if (!value) return null;
-  if (typeof value !== "string") return value as ToolDefinitions;
+
+  if (Array.isArray(value)) return value;
+
   try {
-    return JSON.parse(value) as ToolDefinitions;
+    return ToolDefinitions.safeParse(JSON.parse(value)).data ?? null;
   } catch {
     return null;
   }
@@ -58,6 +71,47 @@ type ToolResultContinuation = {
   output: string;
   isError?: boolean;
 };
+
+type RequestLogRunRow = Partial<RequestLogSaveParams>;
+
+export type RequestLogStatus = NonNullable<RequestLogSaveParams["status"]>;
+
+/** Step columns the caller supplies; `request_log_id` is bound by `appendStep`. */
+export type RequestLogStepFields = Partial<Omit<RequestLogStepSaveParams, "request_log_id">> &
+  Pick<RequestLogStepSaveParams, "step_index" | "type">;
+
+export interface FinishRunParams {
+  status: RequestLogStatus;
+  response?: string;
+  token_name?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
+  cache_creation_5m_tokens?: number | null;
+  cache_creation_1h_tokens?: number | null;
+  duration_ms?: number;
+  requested_model_name?: string | null;
+  model_name?: string | null;
+  service_tier?: string | null;
+  fallback_count?: number | null;
+  cost_usd?: number | null;
+  cost_source?: string | null;
+  history?: HistoryItems;
+  error_message?: string;
+  tool_call_count?: number;
+  image_cost_usd?: number | null;
+  image_cost_method?: string | null;
+  is_image_generation?: boolean;
+  response_json_ok?: boolean | null;
+}
+
+type FinishRunUpdate = Partial<FinishRunParams> & { id: number; ttft_ms?: number };
+
+/** Copies `key` only when the caller supplied it, so omitted columns stay untouched. */
+function copyDefined<T, K extends keyof T>(target: Partial<T>, source: T, key: K): void {
+  if (source[key] !== undefined) target[key] = source[key];
+}
 
 type RequestLogStepAggregate = {
   input_tokens: number;
@@ -85,23 +139,24 @@ const STEP_AGGREGATE_SELECT = {
   cost_source: "cost_source",
 } as const;
 
-function aggregateGenerateStepRows(rows: Array<Record<string, unknown>>): RequestLogStepAggregate {
-  const sum = (field: string): number =>
-    rows.reduce((total, row) => total + Number(row[field] ?? 0), 0);
-  const optionalSum = (field: string): number | undefined =>
-    rows.some((row) => row[field] !== null && row[field] !== undefined) ? sum(field) : undefined;
-  const collapse = (field: string): string | undefined => {
-    const values = [
-      ...new Set(
-        rows
-          .map((row) => row[field])
-          .filter((value): value is string => typeof value === "string" && value.length > 0),
-      ),
-    ];
-    if (values.length === 0) return undefined;
-    return values.length === 1 ? values[0] : "mixed";
-  };
-  return {
+type StepAggregateNumberField = Exclude<keyof typeof STEP_AGGREGATE_SELECT, "cost_source">;
+
+type StepAggregateRow = { [K in StepAggregateNumberField]: number | null } & {
+  cost_source: string | null;
+};
+
+function aggregateGenerateStepRows(rows: StepAggregateRow[]): RequestLogStepAggregate {
+  const sum = (field: StepAggregateNumberField): number =>
+    rows.reduce((total, row) => total + (row[field] ?? 0), 0);
+
+  const optionalSum = (field: StepAggregateNumberField): number | undefined =>
+    rows.some((row) => row[field] !== null) ? sum(field) : undefined;
+
+  const costSources = [
+    ...new Set(rows.flatMap((row) => (row.cost_source ? [row.cost_source] : []))),
+  ];
+
+  const aggregate: RequestLogStepAggregate = {
     input_tokens: sum("input_tokens"),
     output_tokens: sum("output_tokens"),
     cache_read_tokens: sum("cache_read_tokens"),
@@ -111,8 +166,13 @@ function aggregateGenerateStepRows(rows: Array<Record<string, unknown>>): Reques
     duration_ms: sum("duration_ms"),
     fallback_count: sum("fallback_count"),
     cost_usd: sum("cost_usd"),
-    cost_source: collapse("cost_source"),
   };
+
+  if (costSources.length > 0) {
+    aggregate.cost_source = costSources.length === 1 ? costSources[0] : "mixed";
+  }
+
+  return aggregate;
 }
 
 type RequestLogUsageRow = {
@@ -140,6 +200,7 @@ function isAnthropicUsageRow(row: Pick<RequestLogUsageRow, "token_name" | "model
 export function providerOfModelName(modelName: string | null | undefined): ProviderId | "unknown" {
   const slash = modelName?.indexOf("/") ?? -1;
   const prefix = slash > 0 ? modelName?.slice(0, slash) : undefined;
+
   return isProviderId(prefix) ? prefix : "unknown";
 }
 
@@ -147,7 +208,7 @@ function canonicalModelName(modelName: string): string {
   return modelName.includes("/") ? modelName.split("/").pop()! : modelName;
 }
 
-function normalizedUsageForCost(row: RequestLogUsageRow): {
+interface UsageForCost {
   model: string | null;
   inputTokens: number;
   outputTokens: number;
@@ -155,36 +216,47 @@ function normalizedUsageForCost(row: RequestLogUsageRow): {
   cacheCreationInputTokens: number;
   cacheCreationInputTokens5m?: number;
   cacheCreationInputTokens1h?: number;
-} {
+}
+
+function normalizedUsageForCost(row: RequestLogUsageRow): UsageForCost {
   const cacheRead = row.cache_read_tokens;
   const cacheCreation = row.cache_creation_tokens;
   const storedInput = row.input_tokens;
+
   const legacyAnthropicSplitInput =
     isAnthropicUsageRow(row) && storedInput < cacheRead + cacheCreation;
-  return {
+
+  const usage: UsageForCost = {
     model: row.model_name ? canonicalModelName(row.model_name) : null,
     inputTokens: legacyAnthropicSplitInput ? storedInput + cacheRead + cacheCreation : storedInput,
     outputTokens: row.output_tokens,
     cachedInputTokens: cacheRead,
     cacheCreationInputTokens: cacheCreation,
-    ...(row.cache_creation_5m_tokens !== null && row.cache_creation_5m_tokens !== undefined
-      ? { cacheCreationInputTokens5m: row.cache_creation_5m_tokens }
-      : {}),
-    ...(row.cache_creation_1h_tokens !== null && row.cache_creation_1h_tokens !== undefined
-      ? { cacheCreationInputTokens1h: row.cache_creation_1h_tokens }
-      : {}),
   };
+
+  if (row.cache_creation_5m_tokens !== null && row.cache_creation_5m_tokens !== undefined) {
+    usage.cacheCreationInputTokens5m = row.cache_creation_5m_tokens;
+  }
+
+  if (row.cache_creation_1h_tokens !== null && row.cache_creation_1h_tokens !== undefined) {
+    usage.cacheCreationInputTokens1h = row.cache_creation_1h_tokens;
+  }
+
+  return usage;
 }
 
 function normalizeLegacyAnthropicRow<T extends RequestLogUsageRow>(row: T): T {
   // 새 row 는 당시의 provider/가격표 비용을 확정 저장한다. 현재 가격표로 덮어쓰지 않는다.
   if (row.cost_source) return row;
   const usage = normalizedUsageForCost(row);
+
   if (usage.inputTokens === row.input_tokens) return row;
   const normalized = { ...row, input_tokens: usage.inputTokens };
+
   if (usage.model) {
     normalized.cost_usd = Math.round(calculateCostUsd(usage.model, usage) * MICRO_USD);
   }
+
   return normalized;
 }
 
@@ -207,20 +279,25 @@ const ORDERABLE_COLUMNS = {
   cost_usd: "request_logs.cost_usd",
 } as const;
 
+const ORDERABLE_COLUMN_BY_KEY = new Map(Object.entries(ORDERABLE_COLUMNS));
+
 function applyOrderBy(
   qb: ReturnType<RequestLogModelClass["getSubsetQueries"]>["qb"],
   orderBy: string,
 ): void {
   const separator = orderBy.lastIndexOf("-");
-  const key = orderBy.slice(0, separator) as keyof typeof ORDERABLE_COLUMNS;
+  const key = orderBy.slice(0, separator);
   const direction = orderBy.slice(separator + 1) === "asc" ? "asc" : "desc";
-  const column = ORDERABLE_COLUMNS[key];
+  const column = ORDERABLE_COLUMN_BY_KEY.get(key);
 
   if (!column) {
     qb.orderBy("request_logs.id", "desc");
+
     return;
   }
+
   qb.orderBy(column, direction);
+
   // 동점 행의 순서가 페이지마다 흔들리지 않게 고유 컬럼으로 tie-break 한다.
   if (key !== "id") qb.orderBy("request_logs.id", "desc");
 }
@@ -249,6 +326,7 @@ class RequestLogModelClass extends BaseModelClass<
       page: 1,
       queryMode: "list",
     });
+
     if (!rows[0]) {
       throw new NotFoundException(SD("error.entityNotFound")("RequestLog", id));
     }
@@ -349,9 +427,7 @@ class RequestLogModelClass extends BaseModelClass<
     const wdb = this.getPuri("w");
 
     // register
-    spa.forEach((sp) => {
-      wdb.ubRegister("request_logs", sp);
-    });
+    for (const sp of spa) wdb.ubRegister("request_logs", sp);
 
     // transaction
     return wdb.transaction(async (trx) => {
@@ -377,7 +453,8 @@ class RequestLogModelClass extends BaseModelClass<
     }>
   > {
     const rdb = this.getPuri("r");
-    const rows = (await rdb
+
+    const rows = await rdb
       .from("request_logs")
       .select({
         requested_model_name: "request_logs.requested_model_name",
@@ -385,31 +462,31 @@ class RequestLogModelClass extends BaseModelClass<
         input_tokens: "request_logs.input_tokens",
         cache_read_tokens: "request_logs.cache_read_tokens",
       })
-      .where("request_logs.created_at", ">=", since)) as unknown as Array<{
-      requested_model_name: string | null;
-      status: string;
-      input_tokens: number;
-      cache_read_tokens: number;
-    }>;
+      .where("request_logs.created_at", ">=", since);
 
     const byProvider = new Map<
       string,
       { requests: number; errors: number; inputTokens: number; cacheReadTokens: number }
     >();
-    rows.forEach((row) => {
+
+    for (const row of rows) {
       const provider = providerOfModelName(row.requested_model_name);
+
       const agg = byProvider.get(provider) ?? {
         requests: 0,
         errors: 0,
         inputTokens: 0,
         cacheReadTokens: 0,
       };
+
       agg.requests += 1;
+
       if (row.status === "error") agg.errors += 1;
       agg.inputTokens += row.input_tokens;
       agg.cacheReadTokens += row.cache_read_tokens;
       byProvider.set(provider, agg);
-    });
+    }
+
     return [...byProvider.entries()]
       .map(([provider, agg]) => ({ provider, ...agg }))
       .toSorted((a, b) => a.provider.localeCompare(b.provider));
@@ -427,27 +504,35 @@ class RequestLogModelClass extends BaseModelClass<
     zod: string | null;
   }> {
     const rdb = this.getPuri("r");
-    const rows = (await rdb
+
+    const rows = await rdb
       .from("request_logs")
       .select({ json_schema: "request_logs.json_schema" })
-      .where("request_logs.id", id)) as unknown as Array<{ json_schema: string | null }>;
+      .where("request_logs.id", id);
+
     const schema = rows[0]?.json_schema;
+
     if (!schema) return { typescript: null, zod: null };
 
-    let parsed: unknown;
+    let parsed: JsonValue;
+
     try {
+      // JSON.parse without a reviver yields only JSON values.
       parsed = JSON.parse(schema);
     } catch {
       return { typescript: null, zod: null };
     }
+
     let zod: string | null = null;
-    try {
-      zod = formatZodCode(
-        jsonSchemaToZod(parsed as Parameters<typeof jsonSchemaToZod>[0], { module: "none" }),
-      );
-    } catch {
-      zod = null;
+
+    if (isJsonObject(parsed) || parsed === true || parsed === false) {
+      try {
+        zod = formatZodCode(jsonSchemaToZod(parsed, { module: "none" }));
+      } catch {
+        zod = null;
+      }
     }
+
     return { typescript: renderParsedJsonSchemaTypeText(parsed), zod };
   }
 
@@ -462,28 +547,38 @@ class RequestLogModelClass extends BaseModelClass<
    */
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
   async toolsView(id: number): Promise<ToolView[]> {
-    const row = (await this.getPuri("r")
+    const row = await this.getPuri("r")
       .from("request_logs")
       .select({ tools: "request_logs.tools" })
       .where("request_logs.id", id)
-      .first()) as { tools: unknown } | undefined;
+      .first();
+
     const tools = decodeStoredTools(row?.tools);
+
     if (!tools) return [];
 
     return tools.map((tool) => {
-      const inputSchema = (tool.inputSchema ?? {}) as {
-        properties?: Record<string, unknown>;
-      };
-      const inputZod = renderJsonSchemaZodShapeText(inputSchema, TOOL_ENUM_VALUE_LIMIT);
-      const fullInputZod = renderJsonSchemaZodShapeText(inputSchema);
+      const inputSchema = jsonValueSchema.safeParse(tool.inputSchema ?? {}).data ?? {};
 
-      return {
+      const inputZod = renderJsonSchemaZodText(inputSchema, TOOL_ENUM_VALUE_LIMIT);
+      const fullInputZod = renderJsonSchemaZodText(inputSchema);
+
+      const properties =
+        isJsonObject(inputSchema) && isJsonObject(inputSchema.properties)
+          ? inputSchema.properties
+          : {};
+
+      const view: ToolView = {
         name: tool.name,
-        ...(tool.description === undefined ? {} : { description: tool.description }),
-        parameterCount: Object.keys(inputSchema.properties ?? {}).length,
+        parameterCount: Object.keys(properties).length,
         inputZod,
-        ...(inputZod === fullInputZod ? {} : { fullInputZod }),
       };
+
+      if (tool.description !== undefined) view.description = tool.description;
+
+      if (inputZod !== fullInputZod) view.fullInputZod = fullInputZod;
+
+      return view;
     });
   }
 
@@ -496,14 +591,15 @@ class RequestLogModelClass extends BaseModelClass<
     effort?: string | null;
     service_tier?: string | null;
     project_name?: string | null;
-    history?: unknown;
+    history?: HistoryItems;
     tools?: ToolDefinitions;
     is_image_generation?: boolean;
     is_structured?: boolean;
     json_schema?: string | null;
   }): Promise<number> {
     const wdb = this.getPuri("w");
-    wdb.ubRegister("request_logs", {
+
+    const row: RequestLogRunRow = {
       user_prompt: params.user_prompt,
       system_prompt: params.system_prompt ?? null,
       // provider 실행 전이므로 serving model은 아직 알 수 없다.
@@ -525,59 +621,42 @@ class RequestLogModelClass extends BaseModelClass<
       json_schema: params.json_schema ?? null,
       is_structured:
         params.is_structured ?? (params.json_schema !== null && params.json_schema !== undefined),
-      ...(params.history === undefined ? {} : { history: params.history as { type: string }[] }),
-      ...(params.tools === undefined ? {} : { tools: params.tools }),
-    });
+    };
+
+    if (params.history !== undefined) row.history = params.history;
+
+    if (params.tools !== undefined) row.tools = params.tools;
+    wdb.ubRegister("request_logs", row);
+
     return wdb.transaction(async (trx) => {
       const ids = await trx.ubUpsert("request_logs");
+
       return ids[0]!;
     });
   }
 
-  async appendStep(requestLogId: number, step: Record<string, unknown>): Promise<number> {
+  async appendStep(requestLogId: number, step: RequestLogStepFields): Promise<number> {
     const wdb = this.getPuri("w");
     wdb.ubRegister("request_log_steps", { request_log_id: requestLogId, ...step });
+
     return wdb.transaction(async (trx) => {
       const ids = await trx.ubUpsert("request_log_steps");
+
       if (step.type === "tool_call") {
         await trx.from("request_logs").where("id", requestLogId).increment("tool_call_count", 1);
       }
+
       return ids[0]!;
     });
   }
 
-  async finishRun(
-    requestLogId: number,
-    params: {
-      status: string;
-      response?: string;
-      token_name?: string;
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_read_tokens?: number;
-      cache_creation_tokens?: number;
-      cache_creation_5m_tokens?: number | null;
-      cache_creation_1h_tokens?: number | null;
-      duration_ms?: number;
-      requested_model_name?: string | null;
-      model_name?: string | null;
-      service_tier?: string | null;
-      fallback_count?: number | null;
-      cost_usd?: number | null;
-      cost_source?: string | null;
-      history?: unknown;
-      error_message?: string;
-      tool_call_count?: number;
-      image_cost_usd?: number | null;
-      image_cost_method?: string | null;
-      is_image_generation?: boolean;
-      response_json_ok?: boolean | null;
-    },
-  ): Promise<void> {
+  async finishRun(requestLogId: number, params: FinishRunParams): Promise<void> {
     if (params.status === "succeeded" && !params.token_name) {
       throw new Error("tokenName is required for succeeded runs");
     }
-    const update: Record<string, unknown> = { id: requestLogId, status: params.status };
+
+    const update: FinishRunUpdate = { id: requestLogId, status: params.status };
+
     const fields = [
       "response",
       "token_name",
@@ -601,9 +680,9 @@ class RequestLogModelClass extends BaseModelClass<
       "is_image_generation",
       "response_json_ok",
     ] as const;
-    fields.forEach((key) => {
-      if (params[key] !== undefined) update[key] = params[key];
-    });
+
+    for (const key of fields) copyDefined(update, params, key);
+
     if (params.history !== undefined) update.history = params.history;
     update.ttft_ms = (await this.firstGenerateStepTtft(requestLogId)) ?? 0;
 
@@ -619,9 +698,12 @@ class RequestLogModelClass extends BaseModelClass<
         .select({ model_name: "model_name" })
         .where("id", requestLogId)
         .first();
+
       const effectiveModelName = params.model_name ?? row?.model_name;
+
       if (effectiveModelName) {
         const model = canonicalModelName(effectiveModelName);
+
         const usage = normalizedUsageForCost({
           token_name: params.token_name,
           model_name: effectiveModelName,
@@ -632,6 +714,7 @@ class RequestLogModelClass extends BaseModelClass<
           cache_creation_5m_tokens: params.cache_creation_5m_tokens,
           cache_creation_1h_tokens: params.cache_creation_1h_tokens,
         });
+
         update.cost_usd = Math.round(
           calculateCostUsd(model, {
             inputTokens: usage.inputTokens,
@@ -663,7 +746,8 @@ class RequestLogModelClass extends BaseModelClass<
       .orderBy("step_index", "asc")
       .orderBy("id", "asc")
       .first();
-    return row?.ttft_ms === null || row?.ttft_ms === undefined ? null : Number(row.ttft_ms);
+
+    return row?.ttft_ms ?? null;
   }
 
   async aggregateStepUsage(requestLogId: number): Promise<RequestLogStepAggregate> {
@@ -672,7 +756,8 @@ class RequestLogModelClass extends BaseModelClass<
       .select(STEP_AGGREGATE_SELECT)
       .where("request_log_id", requestLogId)
       .where("type", "generate");
-    return aggregateGenerateStepRows(rows as Array<Record<string, unknown>>);
+
+    return aggregateGenerateStepRows(rows);
   }
 
   /**
@@ -688,11 +773,13 @@ class RequestLogModelClass extends BaseModelClass<
     const threshold = new Date(Date.now() - thresholdMs);
     const candidateIds = await this.findStaleToolWaitingRunCandidates(threshold, limit);
     const expiredIds: number[] = [];
+
     for (const requestLogId of candidateIds) {
       if (await this.tryExpireStaleToolWaitingRun(requestLogId, threshold, errorMessage)) {
         expiredIds.push(requestLogId);
       }
     }
+
     return expiredIds;
   }
 
@@ -708,6 +795,7 @@ class RequestLogModelClass extends BaseModelClass<
       .where("request_log_steps.tool_result", null)
       .where("request_log_steps.error", null)
       .limit(limit);
+
     return rows.map(({ id }) => id);
   }
 
@@ -718,10 +806,12 @@ class RequestLogModelClass extends BaseModelClass<
     errorMessage: string,
   ): Promise<boolean> {
     const wdb = this.getPuri("w");
-    const lockResult = (await wdb.knex.raw("SELECT pg_try_advisory_xact_lock(?, ?) AS acquired", [
-      REQUEST_LOG_RUN_LOCK_CLASS_ID,
-      requestLogId,
-    ])) as { rows?: Array<{ acquired?: boolean }> };
+
+    const lockResult = await wdb.knex.raw<{ rows?: Array<{ acquired?: boolean }> }>(
+      "SELECT pg_try_advisory_xact_lock(?, ?) AS acquired",
+      [REQUEST_LOG_RUN_LOCK_CLASS_ID, requestLogId],
+    );
+
     if (lockResult.rows?.[0]?.acquired !== true) return false;
 
     // The follow-up path uses the same writer transaction lock. Recheck after
@@ -735,6 +825,7 @@ class RequestLogModelClass extends BaseModelClass<
       .where("tool_result", null)
       .where("error", null)
       .first();
+
     if (!unresolved) return false;
 
     const stepRows = await wdb
@@ -742,7 +833,9 @@ class RequestLogModelClass extends BaseModelClass<
       .select(STEP_AGGREGATE_SELECT)
       .where("request_log_id", requestLogId)
       .where("type", "generate");
-    const aggregate = aggregateGenerateStepRows(stepRows as Array<Record<string, unknown>>);
+
+    const aggregate = aggregateGenerateStepRows(stepRows);
+
     const firstTtft = await wdb
       .from("request_log_steps")
       .select({ ttft_ms: "ttft_ms" })
@@ -753,32 +846,36 @@ class RequestLogModelClass extends BaseModelClass<
       .orderBy("id", "asc")
       .first();
 
+    const expiry: Partial<RequestLogSaveParams> = {
+      status: "error",
+      error_message: errorMessage,
+      input_tokens: aggregate.input_tokens,
+      output_tokens: aggregate.output_tokens,
+      cache_read_tokens: aggregate.cache_read_tokens,
+      cache_creation_tokens: aggregate.cache_creation_tokens,
+    };
+
+    if (aggregate.cache_creation_5m_tokens !== undefined) {
+      expiry.cache_creation_5m_tokens = aggregate.cache_creation_5m_tokens;
+    }
+
+    if (aggregate.cache_creation_1h_tokens !== undefined) {
+      expiry.cache_creation_1h_tokens = aggregate.cache_creation_1h_tokens;
+    }
+
+    expiry.duration_ms = aggregate.duration_ms;
+    expiry.fallback_count = aggregate.fallback_count;
+    expiry.cost_usd = aggregate.cost_usd;
+
+    if (aggregate.cost_source !== undefined) expiry.cost_source = aggregate.cost_source;
+    expiry.ttft_ms = firstTtft?.ttft_ms ?? 0;
+
     const updated = await wdb
       .from("request_logs")
       .where("id", requestLogId)
       .where("status", "running")
-      .update({
-        status: "error",
-        error_message: errorMessage,
-        input_tokens: aggregate.input_tokens,
-        output_tokens: aggregate.output_tokens,
-        cache_read_tokens: aggregate.cache_read_tokens,
-        cache_creation_tokens: aggregate.cache_creation_tokens,
-        ...(aggregate.cache_creation_5m_tokens === undefined
-          ? {}
-          : { cache_creation_5m_tokens: aggregate.cache_creation_5m_tokens }),
-        ...(aggregate.cache_creation_1h_tokens === undefined
-          ? {}
-          : { cache_creation_1h_tokens: aggregate.cache_creation_1h_tokens }),
-        duration_ms: aggregate.duration_ms,
-        fallback_count: aggregate.fallback_count,
-        cost_usd: aggregate.cost_usd,
-        ...(aggregate.cost_source === undefined ? {} : { cost_source: aggregate.cost_source }),
-        ttft_ms:
-          firstTtft?.ttft_ms === null || firstTtft?.ttft_ms === undefined
-            ? 0
-            : Number(firstTtft.ttft_ms),
-      });
+      .update(expiry);
+
     return updated > 0;
   }
 
@@ -802,7 +899,9 @@ class RequestLogModelClass extends BaseModelClass<
       .select({ status: "status" })
       .where("id", requestLogId)
       .first();
+
     if (!run) throw new Error(`request log run ${requestLogId} not found`);
+
     if (run.status !== "running") {
       throw new Error(`request log run ${requestLogId} is already ${run.status}`);
     }
@@ -821,6 +920,7 @@ class RequestLogModelClass extends BaseModelClass<
       .select({ max_step: Puri.max("step_index") })
       .where("request_log_id", requestLogId)
       .first();
+
     return (row?.max_step ?? -1) + 1;
   }
 
@@ -849,10 +949,13 @@ class RequestLogModelClass extends BaseModelClass<
 
     const { qb: totalQb } = this.getSubsetQueries("C");
     this.applyListFilters(totalQb, params);
+
     const sonamuFilter = params.sonamuFilter
       ? normalizeFilterQuery(params.sonamuFilter)
       : undefined;
+
     this.applySonamuFilters(totalQb, sonamuFilter);
+
     // subset qb 는 컬럼 목록이 이미 SELECT 에 박혀 있어 집계를 얹으면 GROUP BY 에러가 난다.
     // executeCountQuery 와 같은 방식으로 select 를 비우고 집계만 남긴다.
     const stored = await totalQb
@@ -872,6 +975,7 @@ class RequestLogModelClass extends BaseModelClass<
     const { qb: legacyQb } = this.getSubsetQueries("C");
     this.applyListFilters(legacyQb, params);
     this.applySonamuFilters(legacyQb, sonamuFilter);
+
     const legacyRows = await legacyQb
       .whereRaw("request_logs.cost_source IS NULL OR request_logs.cost_usd IS NULL")
       .clear("select")
@@ -887,13 +991,17 @@ class RequestLogModelClass extends BaseModelClass<
         cost_usd: "request_logs.cost_usd",
       });
 
-    const storedTotal = Number(stored?.total ?? 0) / MICRO_USD;
+    // Postgres returns SUM/COUNT as bigint, which node-postgres delivers as text
+    // even though `Puri.rawNumber` types it as number.
+    const storedTotal = bigintAggregate.parse(stored?.total ?? 0) / MICRO_USD;
 
     // legacy row 는 위 SUM 에 저장값으로 이미 포함되어 있다. 재계산값과의 차액만 더한다.
     const usd = legacyRows.reduce((sum, row) => {
       const alreadySummed = Math.max(row.cost_usd ?? 0, 0) / MICRO_USD;
       const usage = normalizedUsageForCost(row);
+
       if (!usage.model) return sum;
+
       return (
         sum +
         calculateCostUsd(usage.model, {
@@ -907,10 +1015,11 @@ class RequestLogModelClass extends BaseModelClass<
         alreadySummed
       );
     }, storedTotal);
+
     return {
       usd,
-      unknownImageCostCount: Number(stored?.unknownImageCostCount ?? 0),
-      unknownCostCount: Number(stored?.unknownCostCount ?? 0),
+      unknownImageCostCount: bigintAggregate.parse(stored?.unknownImageCostCount ?? 0),
+      unknownCostCount: bigintAggregate.parse(stored?.unknownCostCount ?? 0),
     };
   }
 
@@ -923,6 +1032,7 @@ class RequestLogModelClass extends BaseModelClass<
       .select({
         project_name: "project_name",
       });
+
     return rows.map((r) => r.project_name!);
   }
 
@@ -935,6 +1045,7 @@ class RequestLogModelClass extends BaseModelClass<
       .select({
         model_name: "model_name",
       });
+
     return rows.map((r) => r.model_name!);
   }
 
@@ -948,6 +1059,7 @@ class RequestLogModelClass extends BaseModelClass<
         .table("request_log_steps")
         .whereIn("request_log_steps.request_log_id", ids)
         .delete();
+
       return trx.table("request_logs").whereIn("request_logs.id", ids).delete();
     });
 

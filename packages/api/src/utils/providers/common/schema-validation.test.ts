@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { type JsonObject } from "./provider-types";
 import {
   ANTHROPIC_SCHEMA_ARGV_MAX_UTF8_BYTES,
   CALLER_SCHEMA_LIMITS,
@@ -116,7 +117,10 @@ describe("caller schema validation", () => {
   });
 
   it("rejects non-serializable direct dispatch schemas", () => {
-    expect(() => serializeAndValidateDispatchSchema(() => {}, "anthropic")).toThrow(
+    const cyclic: JsonObject = { type: "object" };
+    cyclic.self = cyclic;
+
+    expect(() => serializeAndValidateDispatchSchema(cyclic, "anthropic")).toThrow(
       "dispatch schema must be JSON-serializable",
     );
   });

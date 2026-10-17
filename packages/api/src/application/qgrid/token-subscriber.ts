@@ -1,9 +1,11 @@
 /** tokens_changed LISTEN subscriber. */
 import { getLogger } from "@logtape/logtape";
 import { Client, type ClientConfig } from "pg";
+import { z } from "zod";
 
+import { type TokenSubsetA } from "../sonamu.generated";
 import { TokenModel } from "../token/token.model";
-import { type AnthropicCredentials, type OpenAICredentials } from "../token/token.types";
+import { AnthropicCredentials, OpenAICredentials } from "../token/token.types";
 import { type QgridDispatcherClass } from "./qgrid.dispatcher";
 import { type SubscriberStatus } from "./qgrid.types";
 
@@ -15,7 +17,25 @@ const CONNECTION_TIMEOUT_MS = 5_000;
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_CAP_MS = 30_000;
 
-type Payload = { op: "INSERT" | "UPDATE" | "DELETE"; id: number };
+const NotifyPayload = z.object({ op: z.enum(["INSERT", "UPDATE", "DELETE"]), id: z.number() });
+
+type CredentialRow = Pick<TokenSubsetA, "name" | "credentials">;
+
+function openAICredentialsOf(row: CredentialRow): OpenAICredentials | undefined {
+  const parsed = OpenAICredentials.safeParse(row.credentials);
+
+  if (!parsed.success) logger.warn(`skipping token ${row.name}: credentials are not OpenAI`);
+
+  return parsed.data;
+}
+
+function anthropicCredentialsOf(row: CredentialRow): AnthropicCredentials | undefined {
+  const parsed = AnthropicCredentials.safeParse(row.credentials);
+
+  if (!parsed.success) logger.warn(`skipping token ${row.name}: credentials are not Anthropic`);
+
+  return parsed.data;
+}
 
 export class TokenSubscriber {
   client: Client | null = null;
@@ -37,7 +57,9 @@ export class TokenSubscriber {
     try {
       this.tokenChangeHandler?.();
     } catch (error) {
-      logger.warn(`token change handler failed: ${(error as Error).message}`);
+      logger.warn(
+        `token change handler failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -47,24 +69,31 @@ export class TokenSubscriber {
 
     try {
       await this.connectAndReconcile();
+
       return true;
     } catch (e) {
-      logger.warn(`subscriber start failed: ${(e as Error).message}, scheduling retry`);
+      logger.warn(
+        `subscriber start failed: ${e instanceof Error ? e.message : String(e)}, scheduling retry`,
+      );
       this.retryLater();
+
       return false;
     }
   }
 
   async stop(): Promise<void> {
     this.shutdownRequested = true;
+
     if (this.reconcileTimer) {
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = null;
     }
+
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+
     await this.closeClient();
   }
 
@@ -83,7 +112,7 @@ export class TokenSubscriber {
     // LISTEN/NOTIFY 는 끊긴 동안 유실될 수 있어 주기적으로 DB 기준으로 맞춘다.
     this.reconcileTimer = setInterval(() => {
       this.reconcile().catch((e) =>
-        logger.warn(`periodic reconcile failed: ${(e as Error).message}`),
+        logger.warn(`periodic reconcile failed: ${e instanceof Error ? e.message : String(e)}`),
       );
     }, RECONCILE_INTERVAL_MS);
   }
@@ -113,7 +142,7 @@ export class TokenSubscriber {
     client.on("notification", (msg) => {
       if (msg.channel !== TOKENS_CHANGED || !msg.payload) return;
       this.handleNotification(msg.payload).catch((e) =>
-        logger.warn(`handle NOTIFY failed: ${(e as Error).message}`),
+        logger.warn(`handle NOTIFY failed: ${e instanceof Error ? e.message : String(e)}`),
       );
     });
 
@@ -135,6 +164,7 @@ export class TokenSubscriber {
 
   retryLater(): void {
     if (this.shutdownRequested) return;
+
     if (this.reconnectTimer) return;
 
     void this.closeClient();
@@ -145,7 +175,7 @@ export class TokenSubscriber {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connectAndReconcile().catch((e) => {
-        logger.warn(`subscriber reconnect failed: ${(e as Error).message}`);
+        logger.warn(`subscriber reconnect failed: ${e instanceof Error ? e.message : String(e)}`);
         this.retryLater();
       });
     }, delay);
@@ -153,6 +183,7 @@ export class TokenSubscriber {
 
   async closeClient(): Promise<void> {
     const client = this.client;
+
     if (!client) return;
 
     this.client = null;
@@ -165,70 +196,83 @@ export class TokenSubscriber {
   }
 
   async handleNotificationNow(payloadJson: string): Promise<void> {
-    const payload = JSON.parse(payloadJson) as Payload;
+    const payload = NotifyPayload.parse(JSON.parse(payloadJson));
+
     const previousRow = this.tokenChangeHandler
       ? this.dispatcher.tokens.get(payload.id)
       : undefined;
+
     const wasKeepaliveTarget = previousRow?.active === true && previousRow.provider === "anthropic";
+
     if (payload.op === "DELETE") {
       this.dispatcher.tokens.delete(payload.id);
       await this.dispatcher.openaiDispatcher
         ?.onTokenRemoved(payload.id)
-        .catch((e) => logger.warn(`openai token remove failed: ${(e as Error).message}`));
+        .catch((e) =>
+          logger.warn(`openai token remove failed: ${e instanceof Error ? e.message : String(e)}`),
+        );
       // 삭제된 토큰의 provider를 모를 수 있으므로 모든 풀에서 제거한다.
       this.dispatcher.anthropicDispatcher?.onTokenRemoved(payload.id);
       await this.removeGrokToken(payload.id);
       logger.info(`NOTIFY ${payload.op} id=${payload.id} → removed from cache`);
+
       if (previousRow === undefined || wasKeepaliveTarget) this.notifyTokensChanged();
+
       return;
     }
+
     const row = await TokenModel.findOne("A", { id: payload.id });
+
     if (!row) {
       this.dispatcher.tokens.delete(payload.id);
       await this.dispatcher.openaiDispatcher
         ?.onTokenRemoved(payload.id)
-        .catch((e) => logger.warn(`openai token remove failed: ${(e as Error).message}`));
+        .catch((e) =>
+          logger.warn(`openai token remove failed: ${e instanceof Error ? e.message : String(e)}`),
+        );
       this.dispatcher.anthropicDispatcher?.onTokenRemoved(payload.id);
       await this.removeGrokToken(payload.id);
       logger.info(`NOTIFY ${payload.op} id=${payload.id} → missing, removed from cache`);
+
       if (previousRow === undefined || wasKeepaliveTarget) this.notifyTokensChanged();
+
       return;
     }
 
     this.dispatcher.tokens.set(payload.id, row);
 
     if (row.provider === "openai") {
-      const creds = row.credentials as Record<string, unknown>;
+      const creds = openAICredentialsOf(row);
       const openaiDispatcher = this.dispatcher.openaiDispatcher;
-      if (payload.op === "INSERT" && row.active) {
+
+      if (creds === undefined) {
+        openaiDispatcher?.onTokenDeactivated(payload.id);
+      } else if (payload.op === "INSERT" && row.active) {
         await openaiDispatcher
-          ?.onTokenAdded(
-            payload.id,
-            row.name,
-            creds as OpenAICredentials,
-            row.quota_threshold,
-            row.weight,
-          )
-          .catch((e) => logger.warn(`openai token add failed: ${(e as Error).message}`));
+          ?.onTokenAdded(payload.id, row.name, creds, row.quota_threshold, row.weight)
+          .catch((e) =>
+            logger.warn(`openai token add failed: ${e instanceof Error ? e.message : String(e)}`),
+          );
       } else if (row.active) {
         if (openaiDispatcher) {
           await openaiDispatcher
-            .onTokenUpdated(
-              payload.id,
-              row.name,
-              creds as OpenAICredentials,
-              row.quota_threshold,
-              row.weight,
-            )
+            .onTokenUpdated(payload.id, row.name, creds, row.quota_threshold, row.weight)
             .then(() => openaiDispatcher.onTokenActivated(payload.id))
-            .catch((e) => logger.warn(`openai token update failed: ${(e as Error).message}`));
+            .catch((e) =>
+              logger.warn(
+                `openai token update failed: ${e instanceof Error ? e.message : String(e)}`,
+              ),
+            );
         }
       } else {
         openaiDispatcher?.onTokenDeactivated(payload.id);
       }
     } else if (row.provider === "anthropic") {
-      const creds = row.credentials as AnthropicCredentials;
-      if (payload.op === "INSERT" && row.active) {
+      const creds = anthropicCredentialsOf(row);
+
+      if (creds === undefined) {
+        this.dispatcher.anthropicDispatcher?.onTokenRemoved(payload.id);
+      } else if (payload.op === "INSERT" && row.active) {
         this.dispatcher.anthropicDispatcher?.onTokenAdded(
           payload.id,
           row.name,
@@ -249,6 +293,7 @@ export class TokenSubscriber {
       }
     } else if (row.provider === "grok") {
       const grokDispatcher = this.dispatcher.grokDispatcher;
+
       if (grokDispatcher) {
         await Promise.resolve()
           .then(() => {
@@ -261,6 +306,7 @@ export class TokenSubscriber {
                 row.weight,
               );
             }
+
             if (row.active) {
               return grokDispatcher.onTokenUpdated(
                 payload.id,
@@ -270,13 +316,18 @@ export class TokenSubscriber {
                 row.weight,
               );
             }
+
             return grokDispatcher.onTokenRemoved(payload.id);
           })
-          .catch((e) => logger.warn(`grok token sync failed: ${(e as Error).message}`));
+          .catch((e) =>
+            logger.warn(`grok token sync failed: ${e instanceof Error ? e.message : String(e)}`),
+          );
       }
     }
+
     logger.info(`NOTIFY ${payload.op} id=${payload.id} (${row.name}) active=${row.active}`);
     const isKeepaliveTarget = row.active && row.provider === "anthropic";
+
     if (wasKeepaliveTarget !== isKeepaliveTarget) this.notifyTokensChanged();
   }
 
@@ -287,37 +338,57 @@ export class TokenSubscriber {
   async reconcileNow(): Promise<void> {
     const previousAnthropicIds = this.tokenChangeHandler
       ? new Set(
-          [...this.dispatcher.tokens.values()]
-            .filter((row) => row.active && row.provider === "anthropic")
-            .map((row) => row.id),
+          [...this.dispatcher.tokens.values()].flatMap((row) =>
+            row.active && row.provider === "anthropic" ? [row.id] : [],
+          ),
         )
       : null;
+
     await TokenModel.deactivateExpiredTokens();
     const rows = await TokenModel.findActive("A");
     this.dispatcher.replaceCache(rows);
-    const anthropicRows = rows
-      .filter((r) => r.provider === "anthropic")
-      .map((r) => ({
-        id: r.id,
-        name: r.name,
-        credentials: r.credentials as AnthropicCredentials,
-        quotaThreshold: r.quota_threshold,
-        weight: r.weight,
-      }));
+
+    const anthropicRows = rows.flatMap((r) => {
+      const credentials = r.provider === "anthropic" ? anthropicCredentialsOf(r) : undefined;
+
+      return credentials === undefined
+        ? []
+        : [
+            {
+              id: r.id,
+              name: r.name,
+              credentials,
+              quotaThreshold: r.quota_threshold,
+              weight: r.weight,
+            },
+          ];
+    });
+
     this.dispatcher.anthropicDispatcher?.replaceTokens(anthropicRows);
-    const openaiRows = rows
-      .filter((r) => r.provider === "openai")
-      .map((r) => ({
-        id: r.id,
-        name: r.name,
-        credentials: r.credentials as OpenAICredentials,
-        quotaThreshold: r.quota_threshold,
-        weight: r.weight,
-      }));
+
+    const openaiRows = rows.flatMap((r) => {
+      const credentials = r.provider === "openai" ? openAICredentialsOf(r) : undefined;
+
+      return credentials === undefined
+        ? []
+        : [
+            {
+              id: r.id,
+              name: r.name,
+              credentials,
+              quotaThreshold: r.quota_threshold,
+              weight: r.weight,
+            },
+          ];
+    });
+
     await this.dispatcher.openaiDispatcher
       ?.replaceTokens(openaiRows)
-      .catch((e) => logger.warn(`openai reconcile failed: ${(e as Error).message}`));
+      .catch((e) =>
+        logger.warn(`openai reconcile failed: ${e instanceof Error ? e.message : String(e)}`),
+      );
     const grokDispatcher = this.dispatcher.grokDispatcher;
+
     if (grokDispatcher) {
       const grokRows = rows
         .filter((r) => r.provider === "grok")
@@ -328,11 +399,16 @@ export class TokenSubscriber {
           quotaThreshold: r.quota_threshold,
           weight: r.weight,
         }));
+
       await Promise.resolve()
         .then(() => grokDispatcher.replaceTokens(grokRows))
-        .catch((e) => logger.warn(`grok reconcile failed: ${(e as Error).message}`));
+        .catch((e) =>
+          logger.warn(`grok reconcile failed: ${e instanceof Error ? e.message : String(e)}`),
+        );
     }
+
     this.lastReconcileAt = new Date();
+
     if (
       previousAnthropicIds &&
       (previousAnthropicIds.size !== anthropicRows.length ||
@@ -345,15 +421,19 @@ export class TokenSubscriber {
   // Grok dispatcher 는 선택적으로 주입된다. 동기/비동기 구현 모두의 실패를 격리한다.
   async removeGrokToken(id: number): Promise<void> {
     const grokDispatcher = this.dispatcher.grokDispatcher;
+
     if (!grokDispatcher) return;
     await Promise.resolve()
       .then(() => grokDispatcher.onTokenRemoved(id))
-      .catch((e) => logger.warn(`grok token remove failed: ${(e as Error).message}`));
+      .catch((e) =>
+        logger.warn(`grok token remove failed: ${e instanceof Error ? e.message : String(e)}`),
+      );
   }
 
   enqueueOperation(operation: () => Promise<void>): Promise<void> {
     const next = this.operationChain.then(operation, operation);
     this.operationChain = next.catch(() => {});
+
     return next;
   }
 }

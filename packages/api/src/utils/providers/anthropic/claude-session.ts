@@ -52,13 +52,16 @@ export async function withSessionLock<T>(sessionId: string, fn: () => Promise<T>
   const prev = sessionChains.get(sessionId) ?? Promise.resolve();
   // 이전 turn 의 성패와 무관하게 직렬 체인을 잇는다.
   const next = prev.then(fn, fn);
+
   // tail: 성패 무관 settle 되는 핸들. 이걸 맵에 두고, finally 에서 "여전히 내가 끝"일 때만 삭제.
   // (set 직후 undefined 검사로 하면 절대 삭제 안 돼 세션 id 가 누수됨 — tail 일치 검사로 회피.)
   const tail = next.then(
     () => {},
     () => {},
   );
+
   sessionChains.set(sessionId, tail);
+
   try {
     return await next;
   } finally {
@@ -127,10 +130,12 @@ export function ensureConfigDir(tokenId: number): string {
   mkdirSync(dir, { recursive: true });
   writeFileSync(`${dir}/.claude.json`, "{}");
   writeFileSync(`${dir}/settings.json`, "{}");
+
   return dir;
 }
 
 let cwdEnsured = false;
+
 function ensureCwd(): void {
   if (cwdEnsured) return;
   mkdirSync(`${ANTHROPIC_CLAUDE_CWD}/.claude`, { recursive: true });
@@ -141,6 +146,7 @@ function ensureCwd(): void {
 // spawn args 구성. 멀티턴/격리/structured 모드 반영.
 export function applyOneMillionSuffix(model: string, needsSuffix: boolean): string {
   const base = canonicalAnthropicModel(model);
+
   return needsSuffix ? `${base}[1m]` : base;
 }
 
@@ -152,12 +158,18 @@ export function oneMillionEnv(supported: boolean): { CLAUDE_CODE_DISABLE_1M_CONT
 // `{rejected}{accepted}` 누적이 AI-SDK 의 JSON.parse 를 깨뜨리므로, retry 자체를 막아 그 경로를
 // 원천 차단한다. `0` 은 CC query loop(`callsThisQuery >= maxRetries`)가 첫 attempt emit 전에
 // 실패시키므로(`error_max_structured_output_retries`) 외부 값이 1 미만이어도 1 로 클램프한다.
-export function structuredOutputRetriesEnv(raw = process.env.MAX_STRUCTURED_OUTPUT_RETRIES): {
+export interface StructuredOutputRetriesEnv {
   MAX_STRUCTURED_OUTPUT_RETRIES: string;
-} {
+}
+
+export function structuredOutputRetriesEnv(
+  raw = process.env.MAX_STRUCTURED_OUTPUT_RETRIES,
+): StructuredOutputRetriesEnv {
   if (!raw) return { MAX_STRUCTURED_OUTPUT_RETRIES: "1" };
   const parsed = Number.parseInt(raw, 10);
+
   if (!Number.isFinite(parsed)) return { MAX_STRUCTURED_OUTPUT_RETRIES: "1" };
+
   return { MAX_STRUCTURED_OUTPUT_RETRIES: String(Math.max(parsed, 1)) };
 }
 
@@ -201,7 +213,9 @@ export function buildClaudeArgs(opts: {
 }): Array<string> {
   const thinking = resolveAnthropicThinking(opts.model, opts.thinking, opts.effort);
   const useStructured = Boolean(opts.jsonSchema && opts.jsonSchema.length > 0);
+
   if (useStructured) assertAnthropicSchemaArgvSize(opts.jsonSchema!);
+
   // --tools "" 로 전체 차단, structured(jsonSchema 있음) 면 StructuredOutput 만 허용.
   const toolArgs = useStructured
     ? ["--tools", "", "--allowed-tools", "StructuredOutput"]
@@ -241,7 +255,9 @@ export function buildClaudeArgs(opts: {
     "--session-id",
     opts.sessionId,
   ];
+
   if (useStructured) args.push("--json-schema", opts.jsonSchema!);
+
   return args;
 }
 
@@ -274,6 +290,7 @@ export function runClaudeSession(
     // 실제 파일 쓰기는 abort 체크 이후(Promise 안)로 미뤄, 이미 취소된 요청엔 쓰지 않는다.
     const system = req.system ?? "";
     const useSystemPromptFile = Buffer.byteLength(system, "utf8") > SYSTEM_PROMPT_ARGV_MAX_BYTES;
+
     const systemPromptFile = useSystemPromptFile
       ? `${configDir}/system-prompt-${sessionId}.txt`
       : undefined;
@@ -294,44 +311,53 @@ export function runClaudeSession(
       coldHistory: req.coldHistory,
       input: req.input,
     });
+
     const stdinPayload = decorateAndSerialize(inputLines, sessionId);
 
     return new Promise<ClaudeSessionResult>((resolve, reject) => {
       if (req.abortSignal?.aborted) {
         reject(new Error("aborted"));
+
         return;
       }
 
       // 대형 시스템 프롬프트는 spawn 직전에 파일로 기록(argv E2BIG 회피). 종료 시 정리한다.
       if (systemPromptFile) writeFileSync(systemPromptFile, system);
 
+      const env: NodeJS.ProcessEnv = {
+        PATH: process.env.PATH,
+        TMPDIR: process.env.TMPDIR,
+        CLAUDE_CODE_OAUTH_TOKEN: req.token,
+        CLAUDE_CONFIG_DIR: configDir,
+      };
+
+      if (thinking.extraBody) env.CLAUDE_CODE_EXTRA_BODY = thinking.extraBody;
+
+      env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
+      Object.assign(env, oneMillionEnv(supportsOneMillion));
+      env.CLAUDE_CODE_DISABLE_CLAUDE_MDS = "1";
+      env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE = "1";
+      env.CLAUDE_CODE_DISABLE_BUNDLED_SKILLS = "1";
+      env.CLAUDE_CODE_DISABLE_WORKFLOWS = "1";
+      env.CLAUDE_CODE_ATTRIBUTION_HEADER = "0";
+
+      // structured + 스트리밍일 때만 retry 를 고정한다(SON-495). text 모드와 논스트림
+      // generate 는 CC 기본 retry 를 그대로 쓴다.
+      if (
+        shouldPinStructuredRetries({
+          useStructured,
+          includePartialMessages: req.includePartialMessages,
+        })
+      ) {
+        Object.assign(env, structuredOutputRetriesEnv());
+      }
+
       const child = spawn("claude", args, {
         // stderr 도 캡처: invalid OAuth / 잘못된 플래그 / CLI 검증 실패가
         // "closed without result" 로 뭉개지지 않게 close/error 에 stderr 를 실어 보낸다.
         stdio: ["pipe", "pipe", "pipe"],
         cwd: ANTHROPIC_CLAUDE_CWD,
-        env: {
-          PATH: process.env.PATH,
-          TMPDIR: process.env.TMPDIR,
-          CLAUDE_CODE_OAUTH_TOKEN: req.token,
-          CLAUDE_CONFIG_DIR: configDir,
-          ...(thinking.extraBody ? { CLAUDE_CODE_EXTRA_BODY: thinking.extraBody } : {}),
-          CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
-          ...oneMillionEnv(supportsOneMillion),
-          CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
-          CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",
-          CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "1",
-          CLAUDE_CODE_DISABLE_WORKFLOWS: "1",
-          CLAUDE_CODE_ATTRIBUTION_HEADER: "0",
-          // structured + 스트리밍일 때만 retry 를 고정한다(SON-495). text 모드와 논스트림
-          // generate 는 CC 기본 retry 를 그대로 쓴다.
-          ...(shouldPinStructuredRetries({
-            useStructured,
-            includePartialMessages: req.includePartialMessages,
-          })
-            ? structuredOutputRetriesEnv()
-            : {}),
-        },
+        env,
       });
 
       let settled = false;
@@ -346,18 +372,22 @@ export function runClaudeSession(
         stderrBuf = (stderrBuf + d.toString()).slice(-STDERR_CAP);
       });
       const stderrSuffix = () => (stderrBuf.trim() ? ` — stderr: ${stderrBuf.trim()}` : "");
+
       // spawn 시 쓴 임시 시스템 프롬프트 파일 정리(한 번만). 모든 종료 경로에서 호출한다.
       // 누락돼도 다음 ensureConfigDir 가 디렉토리를 재사용할 뿐이지만, sessionId 별 파일이라
       // 쌓이면 디스크가 차므로 settle 시 즉시 지운다.
       const cleanupSpawnFiles = () => {
         if (!systemPromptFile) return;
+
         try {
           unlinkSync(systemPromptFile);
         } catch {
           // 이미 없거나 권한 문제면 무시 — 정리는 best-effort.
         }
       };
+
       let cleanupAbort: (() => void) | undefined;
+
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
@@ -385,6 +415,7 @@ export function runClaudeSession(
         child.kill();
         reject(new Error("aborted"));
       };
+
       cleanupAbort = () => req.abortSignal?.removeEventListener("abort", onAbort);
       req.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
@@ -393,13 +424,16 @@ export function runClaudeSession(
         buffer += d.toString();
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
+
         for (const line of lines) {
           const result = handleStreamJsonLine(line, onTrackedDelta, {
             structuredOutput: useStructured,
             state: streamState,
           });
+
           if (result) {
             finish(result);
+
             return;
           }
         }

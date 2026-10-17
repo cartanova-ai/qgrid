@@ -1,4 +1,4 @@
-import { type SharedV3Warning, type TranscriptionModelV3 } from "@ai-sdk/provider";
+import { type JSONObject, type SharedV3Warning, type TranscriptionModelV3 } from "@ai-sdk/provider";
 import { z } from "zod";
 
 import {
@@ -61,10 +61,12 @@ const transcribeOutputSchema = z.object({
 
 // "audio/webm;codecs=opus" → "audio/webm": the server accepts the bare type only.
 function normalizeMediaType(mediaType: string): string {
-  const bare = mediaType.split(";")[0]!.trim().toLowerCase();
+  const bare = mediaType.split(";")[0].trim().toLowerCase();
+
   if (!AUDIO_MEDIA_TYPE.test(bare)) {
     throw new Error(`${LABEL}: mediaType must be audio/*, got "${mediaType}"`);
   }
+
   return bare;
 }
 
@@ -82,33 +84,34 @@ export function createQgridTranscription(
 
     async doGenerate(options) {
       const mediaType = normalizeMediaType(options.mediaType);
+
       const audio =
-        typeof options.audio === "string" ? options.audio : bytesToBase64(options.audio);
+        options.audio instanceof Uint8Array ? bytesToBase64(options.audio) : options.audio;
+
       if (audio.length === 0) throw new Error(`${LABEL}: audio is empty`);
       assertInlineMediaFits([audio], LABEL);
       const qgridOptions = parseGrokQgridOptions(options.providerOptions?.qgrid, LABEL);
+
       const xai = parseXaiMediaOptions(
         options.providerOptions?.xai,
         xaiTranscriptionOptionsSchema,
         XAI_TRANSCRIPTION_HONORED,
         LABEL,
       );
+
       const warnings: SharedV3Warning[] = [...xai.warnings];
       const language = xai.options?.language ?? undefined;
 
       // Also throws before transport when the JSON body would exceed the 10 MiB body limit.
-      const body = serializeMediaBody(
-        {
-          model: modelId,
-          audio,
-          mediaType,
-          ...(language === undefined ? {} : { language }),
-          ...(projectName ? { projectName } : {}),
-          ...qgridOptions,
-        },
-        LABEL,
-      );
+      const params: JSONObject = { model: modelId, audio, mediaType };
+
+      if (language !== undefined) params.language = language;
+
+      if (projectName) params.projectName = projectName;
+      const body = serializeMediaBody({ ...params, ...qgridOptions }, LABEL);
+
       const timestamp = new Date();
+
       const { data, headers } = await postMediaEndpoint({
         serverUrl,
         endpoint: "transcribe",
@@ -118,6 +121,11 @@ export function createQgridTranscription(
         signal: options.abortSignal,
         headers: options.headers,
       });
+
+      const qgridMetadata: JSONObject = { tokenName: data.tokenName };
+
+      if (data.requestLogId !== undefined) qgridMetadata.requestLogId = data.requestLogId;
+
       return {
         text: data.text,
         // The qgrid server returns no word or segment timings.
@@ -126,12 +134,7 @@ export function createQgridTranscription(
         durationInSeconds: data.durationSec,
         warnings,
         response: { timestamp, modelId: data.model, headers },
-        providerMetadata: {
-          qgrid: {
-            tokenName: data.tokenName,
-            ...(data.requestLogId === undefined ? {} : { requestLogId: data.requestLogId }),
-          },
-        },
+        providerMetadata: { qgrid: qgridMetadata },
       };
     },
   };

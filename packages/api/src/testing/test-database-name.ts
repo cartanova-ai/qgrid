@@ -6,6 +6,7 @@ export function createTestRunDatabaseName(prefix: string, entropy: string): stri
   const safePrefix = prefix.replaceAll(/[^A-Za-z0-9_]/g, "_");
   const safeEntropy = entropy.replaceAll(/[^A-Za-z0-9_]/g, "_");
   const maxPrefixLength = 63 - safeEntropy.length - 1;
+
   return `${safePrefix.slice(0, maxPrefixLength)}_${safeEntropy}`;
 }
 
@@ -18,5 +19,6 @@ export function configureTestRunDatabaseName(): string {
 
   process.env.QGRID_TEST_RUN_DB = configuredRunDatabase;
   process.env.SONAMU_DB_NAME = configuredRunDatabase;
+
   return configuredRunDatabase;
 }

@@ -12,6 +12,7 @@ const monitSearchSchema = z.object({
     .default("all")
     .catch(() => "all" as const),
 });
+
 export type MonitSearch = z.infer<typeof monitSearchSchema>;
 
 export const Route = createFileRoute("/monit")({

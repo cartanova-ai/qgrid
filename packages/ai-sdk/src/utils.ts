@@ -1,6 +1,17 @@
-import { type LanguageModelV3FunctionTool, type LanguageModelV3Message } from "@ai-sdk/provider";
+import {
+  type JSONSchema7,
+  type JSONValue,
+  type LanguageModelV3FunctionTool,
+  type LanguageModelV3Message,
+} from "@ai-sdk/provider";
+import { type ModelMessage, type SystemModelMessage } from "ai";
+import { z } from "zod";
 
 import { type AppendStepInput, type CreateRunInput, type FinishRunInput } from "./index.types";
+
+const createRunOutputSchema = z.object({ requestLogId: z.number() });
+const appendStepOutputSchema = z.object({ stepId: z.number() });
+const finishRunOutputSchema = z.object({ ok: z.boolean() });
 
 // API helpers
 export async function createRun(
@@ -12,7 +23,8 @@ export async function createRun(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input: body }),
   });
-  return res.json() as Promise<{ requestLogId: number }>;
+
+  return createRunOutputSchema.parse(await res.json());
 }
 
 export async function appendStep(
@@ -24,7 +36,8 @@ export async function appendStep(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input: body }),
   });
-  return res.json() as Promise<{ stepId: number }>;
+
+  return appendStepOutputSchema.parse(await res.json());
 }
 
 export async function finishRun(serverUrl: string, body: FinishRunInput): Promise<{ ok: boolean }> {
@@ -33,23 +46,39 @@ export async function finishRun(serverUrl: string, body: FinishRunInput): Promis
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input: body }),
   });
-  return res.json() as Promise<{ ok: boolean }>;
+
+  return finishRunOutputSchema.parse(await res.json());
+}
+
+/**
+ * Decodes an AI SDK payload (tool input, tool output, tool error) into request-log text. JSON
+ * cannot encode every JavaScript value (cycles, BigInt, bare undefined); those fall back to String().
+ */
+export const loggedPayloadText = z.unknown().transform((payload): string => {
+  try {
+    const json = JSON.stringify(payload);
+
+    return json === undefined ? String(payload) : json;
+  } catch {
+    return String(payload);
+  }
+});
+
+/** Like loggedPayloadText, but keeps strings verbatim (tool arguments that are already JSON text). */
+export const toolPayloadText = z.union([z.string(), loggedPayloadText]);
+
+export interface QgridToolDefinition {
+  name: string;
+  description?: string;
+  inputSchema: JSONSchema7;
 }
 
 // Tool helpers
-export function toQgridTool(tool: LanguageModelV3FunctionTool): {
-  name: string;
-  description?: string;
-  inputSchema: unknown;
-} {
-  const source = tool as LanguageModelV3FunctionTool & {
-    inputSchema?: unknown;
-    parameters?: unknown;
-  };
+export function toQgridTool(tool: LanguageModelV3FunctionTool): QgridToolDefinition {
   return {
     name: tool.name,
     description: tool.description,
-    inputSchema: source.inputSchema ?? source.parameters ?? {},
+    inputSchema: tool.inputSchema,
   };
 }
 
@@ -65,13 +94,14 @@ export function extractToolResultsFromHistory(
 ): ToolCallWithResult[] {
   const calls = new Map<string, { toolName: string; args: string }>();
   const results = new Map<string, string>();
+
   for (const msg of messages) {
     if (msg.role === "assistant") {
       for (const part of msg.content) {
         if ("type" in part && part.type === "tool-call") {
           calls.set(part.toolCallId, {
             toolName: part.toolName,
-            args: typeof part.input === "string" ? part.input : JSON.stringify(part.input),
+            args: toolPayloadText.parse(part.input),
           });
         }
       }
@@ -80,12 +110,10 @@ export function extractToolResultsFromHistory(
         if ("type" in part && part.type === "tool-result") {
           const id = "toolCallId" in part ? part.toolCallId : "";
           const output = part.output;
+
           const text =
-            "value" in output
-              ? typeof output.value === "string"
-                ? output.value
-                : JSON.stringify(output.value)
-              : JSON.stringify(output);
+            "value" in output ? toolPayloadText.parse(output.value) : JSON.stringify(output);
+
           results.set(id, text);
         }
       }
@@ -93,16 +121,18 @@ export function extractToolResultsFromHistory(
   }
 
   const out: ToolCallWithResult[] = [];
+
   for (const [callId, call] of calls) {
     if (results.has(callId)) {
       out.push({ callId, toolName: call.toolName, args: call.args, result: results.get(callId)! });
     }
   }
+
   return out;
 }
 
 // SSE parser
-export type SSEEvent = { type: string; data: Record<string, unknown> };
+export type SSEEvent = { type: string; data: JSONValue };
 
 export async function* parseSSE(
   body: ReadableStream<Uint8Array>,
@@ -116,11 +146,15 @@ export async function* parseSSE(
   const cancel = () => {
     void reader.cancel(signal?.reason).catch(() => undefined);
   };
+
   signal?.addEventListener("abort", cancel, { once: true });
+
   try {
     signal?.throwIfAborted();
+
     for (;;) {
       const { done, value } = await reader.read();
+
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 
@@ -132,15 +166,18 @@ export async function* parseSSE(
           eventType = line.slice(7).trim();
         } else if (line.startsWith("data: ")) {
           const raw = line.slice(6);
+
           try {
             yield { type: eventType || "message", data: JSON.parse(raw) };
           } catch {}
+
           eventType = "";
         }
       }
     }
   } finally {
     signal?.removeEventListener("abort", cancel);
+
     try {
       await reader.cancel();
     } catch {
@@ -151,12 +188,32 @@ export async function* parseSSE(
   }
 }
 
+type PromptTextPart = { type: "input_text"; text: string };
+
+/** Responses-style history item replayed to the qgrid server. */
+export type PromptHistoryItem =
+  | {
+      type: "message";
+      role: "user";
+      content: Array<PromptTextPart | { type: "input_image"; image_url: string }>;
+    }
+  | { type: "message"; role: "assistant"; content: Array<{ type: "output_text"; text: string }> }
+  | { type: "function_call"; name: string; arguments: string; call_id: string }
+  | { type: "function_call_output"; call_id: string; output: string };
+
 type ExtractPromptAndHistoryResult = {
   prompt: string;
   system: string | undefined;
-  history: unknown[];
+  history: PromptHistoryItem[];
   droppedImageCount: number;
 };
+
+type UserContent = Extract<LanguageModelV3Message, { role: "user" }>["content"];
+
+type PromptContentPart = Extract<
+  LanguageModelV3Message,
+  { role: "user" | "assistant" }
+>["content"][number];
 
 // Prompt helpers
 export function extractPromptAndHistory(
@@ -168,7 +225,7 @@ export function extractPromptAndHistory(
 
   for (const msg of messages) {
     if (msg.role === "system") {
-      system = extractPromptTextParts(msg.content).text;
+      system = msg.content;
     } else {
       nonSystem.push(msg);
     }
@@ -177,9 +234,13 @@ export function extractPromptAndHistory(
   if (nonSystem.length === 0) {
     return { prompt: "", system, history: [], droppedImageCount };
   }
-  if (nonSystem.length === 1 && nonSystem[0].role === "user") {
-    const extracted = extractPromptTextParts(nonSystem[0].content);
+
+  const first = nonSystem[0];
+
+  if (nonSystem.length === 1 && first.role === "user") {
+    const extracted = extractPromptTextParts(first.content);
     droppedImageCount += extracted.droppedImageCount;
+
     return {
       prompt: extracted.text,
       system,
@@ -190,16 +251,20 @@ export function extractPromptAndHistory(
 
   const last = nonSystem[nonSystem.length - 1];
   let prompt = "";
+
   if (last.role === "user") {
     const extracted = extractPromptTextParts(last.content);
     prompt = extracted.text;
     droppedImageCount += extracted.droppedImageCount;
   }
+
   const historyEnd = last.role === "user" ? nonSystem.length - 1 : nonSystem.length;
 
-  const history: unknown[] = [];
+  const history: PromptHistoryItem[] = [];
+
   for (let i = 0; i < historyEnd; i++) {
     const msg = nonSystem[i];
+
     if (msg.role === "user") {
       const extracted = extractPromptTextParts(msg.content);
       droppedImageCount += extracted.droppedImageCount;
@@ -211,7 +276,7 @@ export function extractPromptAndHistory(
       });
     } else if (msg.role === "assistant") {
       for (const part of msg.content) {
-        if ("text" in part && typeof part.text === "string") {
+        if ("text" in part) {
           history.push({
             type: "message",
             role: "assistant",
@@ -221,7 +286,7 @@ export function extractPromptAndHistory(
           history.push({
             type: "function_call",
             name: part.toolName,
-            arguments: typeof part.input === "string" ? part.input : JSON.stringify(part.input),
+            arguments: toolPayloadText.parse(part.input),
             call_id: part.toolCallId,
           });
         } else if (isImagePart(part)) {
@@ -232,12 +297,10 @@ export function extractPromptAndHistory(
       for (const part of msg.content) {
         if ("toolName" in part && part.type === "tool-result") {
           const output = part.output;
+
           const text =
-            "value" in output
-              ? typeof output.value === "string"
-                ? output.value
-                : JSON.stringify(output.value)
-              : JSON.stringify(output);
+            "value" in output ? toolPayloadText.parse(output.value) : JSON.stringify(output);
+
           history.push({
             type: "function_call_output",
             call_id: ("toolCallId" in part ? part.toolCallId : "") ?? "",
@@ -251,44 +314,40 @@ export function extractPromptAndHistory(
   return { prompt, system, history, droppedImageCount };
 }
 
-function extractPromptTextParts(content: LanguageModelV3Message["content"]): {
+interface PromptTextParts {
   text: string;
-  parts: Array<{ type: "input_text"; text: string }>;
+  parts: PromptTextPart[];
   droppedImageCount: number;
-} {
-  if (typeof content === "string") {
-    return { text: content, parts: [{ type: "input_text", text: content }], droppedImageCount: 0 };
-  }
-  const parts: Array<{ type: "input_text"; text: string }> = [];
+}
+
+function extractPromptTextParts(content: UserContent): PromptTextParts {
+  const parts: PromptTextPart[] = [];
   let droppedImageCount = 0;
+
   for (const part of content) {
-    if ("text" in part && typeof part.text === "string") {
+    if ("text" in part) {
       parts.push({ type: "input_text", text: part.text });
     } else if (isImagePart(part)) {
       droppedImageCount++;
     }
   }
+
   return { text: parts.map((part) => part.text).join("\n"), parts, droppedImageCount };
 }
 
-function isImagePart(part: unknown): boolean {
-  if (!part || typeof part !== "object") return false;
-  const record = part as Record<string, unknown>;
-  return (
-    record.type === "image" ||
-    (record.type === "file" &&
-      typeof record.mediaType === "string" &&
-      record.mediaType.toLowerCase().startsWith("image/"))
-  );
+function isImagePart(part: PromptContentPart): boolean {
+  return part.type === "file" && part.mediaType.toLowerCase().startsWith("image/");
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
   if (typeof Buffer !== "undefined") return Buffer.from(bytes).toString("base64");
   const chunkSize = 0x8000;
   let binary = "";
+
   for (let i = 0; i < bytes.length; i += chunkSize) {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
   }
+
   return btoa(binary);
 }
 
@@ -297,15 +356,18 @@ const MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL = "9M";
 
 export function assertImageInputFitsJsonTransport(imageUrls: string[]): void {
   let totalDataUrlChars = 0;
+
   for (const url of imageUrls) {
     if (!url.toLowerCase().startsWith("data:")) continue;
     totalDataUrlChars += url.length;
+
     if (url.length > MAX_IMAGE_INPUT_DATA_URL_CHARS) {
       throw new Error(
         `qgrid: image input is too large for JSON transport (${url.length} chars). Compress or resize it before passing it to generateImage, for example as WebP/JPEG under ${MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL} total base64 data-url chars.`,
       );
     }
   }
+
   if (totalDataUrlChars > MAX_IMAGE_INPUT_DATA_URL_CHARS) {
     throw new Error(
       `qgrid: image inputs are too large for JSON transport (${totalDataUrlChars} total chars). Compress or resize them before passing them to generateImage, for example as WebP/JPEG under ${MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL} total base64 data-url chars.`,
@@ -315,100 +377,92 @@ export function assertImageInputFitsJsonTransport(imageUrls: string[]): void {
 
 // --- shared helpers (used by both index.ts and logger.ts) ---
 
-export function safeStringify(value: unknown): string {
-  try {
-    const json = JSON.stringify(value);
-    return json === undefined ? String(value) : json;
-  } catch {
-    return String(value);
-  }
-}
-
-export function getRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-export function extractTextContent(content: unknown): string {
-  if (typeof content === "string") return content;
+function extractTextContent(content: ModelMessage["content"]): string {
+  if (!Array.isArray(content)) return content;
   const parts: string[] = [];
-  if (Array.isArray(content)) {
-    for (const part of content) {
-      if (part && typeof part === "object" && "type" in part) {
-        if (part.type === "text" && "text" in part && typeof part.text === "string") {
-          parts.push(part.text);
-        }
-      }
-    }
+
+  for (const part of content) {
+    if (part.type === "text") parts.push(part.text);
   }
+
   return parts.join("\n");
 }
 
-export function getErrorMessage(value: unknown): string {
-  if (value instanceof Error) return String(value);
-  if (value === undefined || value === null) return "unknown error";
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint"
-  ) {
-    return String(value);
-  }
+const primitiveErrorSchema = z.union([z.string(), z.number(), z.nan(), z.boolean(), z.bigint()]);
+
+/** Formats an error cause (thrown value, abort reason, AI SDK error field) for a request log. */
+export function getErrorMessage(cause: unknown): string {
+  if (cause instanceof Error) return String(cause);
+
+  if (cause === undefined || cause === null) return "unknown error";
+  const primitive = primitiveErrorSchema.safeParse(cause);
+
+  if (primitive.success) return String(primitive.data);
+
   try {
-    return JSON.stringify(value) ?? "unknown error";
+    return JSON.stringify(cause) ?? "unknown error";
   } catch {
     return "unknown error";
   }
 }
 
-export function extractUserPrompt(prompt: unknown, messages: unknown): string {
-  if (typeof prompt === "string") return prompt;
-  const messageList = Array.isArray(messages) ? messages : Array.isArray(prompt) ? prompt : [];
+export function extractUserPrompt(
+  prompt: string | ModelMessage[] | undefined,
+  messages: ModelMessage[] | undefined,
+): string {
+  if (prompt !== undefined && !Array.isArray(prompt)) return prompt;
+  const messageList = messages ?? prompt ?? [];
+
   for (let i = messageList.length - 1; i >= 0; i--) {
-    const msg = getRecord(messageList[i]);
+    const msg = messageList[i];
+
     if (msg?.role === "user") {
       return extractTextContent(msg.content);
     }
   }
+
   return "";
 }
 
-export function extractSystemPrompt(system: unknown): string | undefined {
-  if (typeof system === "string") return system;
-  if (system && typeof system === "object" && "content" in system) {
-    const content = (system as { content: unknown }).content;
-    if (typeof content === "string") return content;
-  }
-  return undefined;
+export function extractSystemPrompt(
+  system: string | SystemModelMessage | SystemModelMessage[] | undefined,
+): string | undefined {
+  if (system === undefined || Array.isArray(system)) return undefined;
+
+  // A string primitive is not an Object instance; a SystemModelMessage is.
+  return system instanceof Object ? system.content : system;
 }
 
-export function serializeHistory(messages: unknown): string | undefined {
-  if (!Array.isArray(messages) || messages.length === 0) return undefined;
-  const lastRecord = getRecord(messages[messages.length - 1]);
-  const sliced = lastRecord?.role === "user" ? messages.slice(0, -1) : messages;
-  const history: Array<Record<string, unknown>> = [];
+type StoredHistoryMessage = {
+  type: "message";
+  role: "user" | "assistant";
+  content: Array<{ type: "input_text" | "output_text"; text: string }>;
+};
+
+export function serializeHistory(messages: ModelMessage[] | undefined): string | undefined {
+  if (!messages || messages.length === 0) return undefined;
+  const sliced = messages.at(-1)?.role === "user" ? messages.slice(0, -1) : messages;
+  const history: StoredHistoryMessage[] = [];
+
   for (const msg of sliced) {
-    const record = getRecord(msg);
-    if (record?.role !== "user" && record?.role !== "assistant") continue;
-    const text = extractTextContent(record.content);
+    if (msg.role !== "user" && msg.role !== "assistant") continue;
+    const text = extractTextContent(msg.content);
+
     if (text.length === 0) continue;
     history.push({
       type: "message",
-      role: record.role,
-      content: [{ type: record.role === "user" ? "input_text" : "output_text", text }],
+      role: msg.role,
+      content: [{ type: msg.role === "user" ? "input_text" : "output_text", text }],
     });
   }
+
   if (history.length === 0) return undefined;
-  return safeStringify(history);
+
+  return JSON.stringify(history);
 }
 
-export function filterHistoryForStorage(history: unknown[]): string | undefined {
-  const filtered = history.filter((item) => {
-    if (!item || typeof item !== "object") return false;
-    const record = item as Record<string, unknown>;
-    return record.type === "message" && (record.role === "user" || record.role === "assistant");
-  });
+export function filterHistoryForStorage(history: PromptHistoryItem[]): string | undefined {
+  const filtered = history.filter((item) => item.type === "message");
+
   return filtered.length > 0 ? JSON.stringify(filtered) : undefined;
 }

@@ -1,8 +1,9 @@
+import { type LogRecord, type Sink } from "@logtape/logtape";
 /**
  * 재시작하면 초기화되는 Monit 로그 버퍼.
  * timestamp/processStartedAt은 web의 dateReviver 변환을 피하고 동등성 비교를 유지하도록 epoch ms를 쓴다.
  */
-import { type LogRecord, type Sink } from "@logtape/logtape";
+import { z } from "zod";
 
 const DEFAULT_CAPACITY = 2_000;
 const DEFAULT_MAX_TEXT_LENGTH = 4_000;
@@ -23,21 +24,28 @@ export interface MonitLogChunk {
   dropped: number;
 }
 
-// logtape message 배열은 홀수 길이 — 짝수 인덱스가 템플릿 텍스트, 홀수가 보간 값.
-function flattenMessage(message: readonly unknown[]): string {
-  return message
-    .map((part, index) => (index % 2 === 0 ? String(part ?? "") : renderValue(part)))
-    .join("");
-}
+// Interpolated log values are arbitrary; this decodes one into its console text.
+const renderedLogValue = z.unknown().transform((value): string => {
+  const text = z.string().safeParse(value);
 
-function renderValue(value: unknown): string {
-  if (typeof value === "string") return value;
+  if (text.success) return text.data;
+
   if (value instanceof Error) return value.message;
+
   try {
     return JSON.stringify(value) ?? String(value);
   } catch {
     return String(value);
   }
+});
+
+// logtape message 배열은 홀수 길이 — 짝수 인덱스가 템플릿 텍스트(문자열), 홀수가 보간 값.
+function flattenMessage(message: readonly unknown[]): string {
+  return message
+    .map((part, index) =>
+      index % 2 === 0 ? (z.string().safeParse(part).data ?? "") : renderedLogValue.parse(part),
+    )
+    .join("");
 }
 
 export class MonitLogBuffer {
@@ -53,9 +61,11 @@ export class MonitLogBuffer {
   push(record: LogRecord): void {
     try {
       let text = flattenMessage(record.message);
+
       if (text.length > this.maxTextLength) {
         text = `${text.slice(0, this.maxTextLength)}…`;
       }
+
       this.entries.push({
         seq: this.nextSeq++,
         timestamp: record.timestamp,
@@ -63,6 +73,7 @@ export class MonitLogBuffer {
         category: [...record.category],
         text,
       });
+
       if (this.entries.length > this.capacity) {
         this.entries.splice(0, this.entries.length - this.capacity);
       }
@@ -75,8 +86,10 @@ export class MonitLogBuffer {
   after(cursor: number | undefined, limit: number): MonitLogChunk {
     const latestSeq = this.nextSeq - 1;
     const oldestSeq = this.entries[0]?.seq ?? this.nextSeq;
+
     if (cursor === undefined) {
       const entries = this.entries.slice(-limit);
+
       return {
         entries,
         nextCursor: entries.at(-1)?.seq ?? latestSeq,
@@ -92,6 +105,7 @@ export class MonitLogBuffer {
     const dropped = Math.max(oldestSeq - cursor - 1, 0);
     const startIndex = this.entries.findIndex((entry) => entry.seq > cursor);
     const entries = startIndex === -1 ? [] : this.entries.slice(startIndex, startIndex + limit);
+
     return {
       entries,
       nextCursor: entries.at(-1)?.seq ?? cursor + dropped,

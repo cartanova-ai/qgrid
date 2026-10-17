@@ -5,6 +5,7 @@ type HistoryMessage = { role: "user" | "assistant"; text: string; images?: strin
 export function buildChatHistory(messages: HistoryMessage[], includeImages: boolean): unknown[] {
   return messages.flatMap((message): unknown[] => {
     const images = includeImages ? (message.images ?? []) : [];
+
     if (message.role === "user") {
       return [
         {
@@ -17,6 +18,7 @@ export function buildChatHistory(messages: HistoryMessage[], includeImages: bool
         },
       ];
     }
+
     return [
       ...(message.text
         ? [

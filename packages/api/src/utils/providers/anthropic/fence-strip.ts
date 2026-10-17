@@ -47,18 +47,22 @@ export function createFenceStripTransform(): FenceStripTransform {
   return {
     push(delta: string): string {
       full += delta;
+
       if (bodyStart < 0) {
         bodyStart = resolveLeadingOffset(full);
+
         if (bodyStart < 0) return "";
       }
 
       const body = full.slice(bodyStart);
       const unemitted = body.slice(emitted);
       const safe = unemitted.length - trailingHoldLength(unemitted);
+
       if (safe <= 0) return "";
 
       const out = unemitted.slice(0, safe);
       emitted += safe;
+
       return out;
     },
 
@@ -76,19 +80,25 @@ export function createFenceStripTransform(): FenceStripTransform {
  */
 function resolveLeadingOffset(text: string): number {
   const trimmedStart = text.trimStart();
+
   if (trimmedStart === "") return -1; // 아직 공백뿐 — flush 가 정리한다
   const ws = text.length - trimmedStart.length;
 
   if (!trimmedStart.startsWith("`")) return ws;
+
   if (/^`{1,2}$/.test(trimmedStart)) return -1; // "```" 로 자랄 수 있음
 
   const fence = /^```(?:json)?/i.exec(trimmedStart);
+
   if (!fence) return ws; // "`x", "``x" — 펜스가 아니라 본문
+
   if (/^```(?:j|js|jso)$/i.test(trimmedStart)) return -1; // "json" 태그가 자라는 중
 
   const afterFence = trimmedStart.slice(fence[0].length);
   const afterFenceBody = afterFence.trimStart();
+
   if (afterFenceBody === "") return -1; // 펜스 뒤 공백만 — 본문 첫 글자 대기
+
   return ws + fence[0].length + (afterFence.length - afterFenceBody.length);
 }
 
@@ -101,5 +111,6 @@ function resolveLeadingOffset(text: string): number {
  */
 function trailingHoldLength(unemitted: string): number {
   const match = /(?:\n?`{1,3})?[\s﻿]*$/.exec(unemitted);
+
   return match ? match[0].length : 0;
 }

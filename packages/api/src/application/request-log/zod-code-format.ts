@@ -30,44 +30,55 @@ export function formatZodCode(code: string): string {
   for (const ch of source) {
     if (inString) {
       out += ch;
+
       if (escaped) escaped = false;
       else if (ch === "\\") escaped = true;
       else if (ch === '"') inString = false;
       continue;
     }
+
     if (ch === '"') {
       inString = true;
       out += ch;
       skipSpaces = false;
       continue;
     }
+
     if (skipSpaces && (ch === " " || ch === "\t")) continue;
     skipSpaces = false;
 
     if (ch === "{" || ch === "(" || ch === "[") {
       stack.push(ch);
       out += ch;
+
       if (ch === "{") {
         depth++;
         newline();
       }
+
       continue;
     }
+
     if (ch === "}" || ch === ")" || ch === "]") {
       const opener = stack.pop();
+
       if (ch === "}" && opener === "{") {
         depth = Math.max(0, depth - 1);
         newline();
       }
+
       out += ch;
       continue;
     }
+
     if (ch === "," && stack.at(-1) === "{") {
       out += ch;
       newline();
       continue;
     }
+
     out += ch;
   }
+
   return out;
 }

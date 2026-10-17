@@ -10,6 +10,7 @@ export const AnthropicCredentials = z.object({
   expiresAt: z.number(),
   accountUuid: z.string(),
 });
+
 export type AnthropicCredentials = z.infer<typeof AnthropicCredentials>;
 
 export const OpenAICredentials = z.object({
@@ -21,6 +22,7 @@ export const OpenAICredentials = z.object({
   accountId: z.string(),
   planType: z.string().optional(),
 });
+
 export type OpenAICredentials = z.infer<typeof OpenAICredentials>;
 
 // Web-safe storage shape only. Registration and refresh validate with the strict schema in
@@ -38,13 +40,16 @@ export const GrokCredentials = z.object({
   agentId: z.string(),
   subscriptionTier: z.string().optional(),
 });
+
 export type GrokCredentials = z.infer<typeof GrokCredentials>;
 
 export const TokenCredentials = z.union([AnthropicCredentials, OpenAICredentials, GrokCredentials]);
+
 export type TokenCredentials = z.infer<typeof TokenCredentials>;
 
 // Token - ListParams
 export const TokenListParams = TokenBaseListParams;
+
 export type TokenListParams = z.infer<typeof TokenListParams>;
 
 const TokenQuotaThreshold = z.int().min(1).max(100).nullable();
@@ -64,4 +69,5 @@ export const TokenSaveParams = TokenBaseSchema.partial({
   quota_threshold: TokenQuotaThreshold.optional(),
   weight: TokenWeight.optional(),
 });
+
 export type TokenSaveParams = z.infer<typeof TokenSaveParams>;

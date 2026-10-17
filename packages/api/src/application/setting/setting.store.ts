@@ -18,10 +18,12 @@ const logger = getLogger(["qgrid", "setting"]);
 let cache: Map<string, string> | null = null;
 
 type SettingChangeHandler = (key: string) => void;
+
 export type SettingPersistence = Pick<
   typeof SettingModel,
   "clearByKey" | "findAllAsMap" | "setByKey"
 >;
+
 let settingChangeHandler: SettingChangeHandler | null = null;
 
 /**
@@ -48,7 +50,9 @@ export async function loadSettings(persistence: SettingPersistence = SettingMode
   } catch (e) {
     // 테이블이 아직 없는 배포(마이그레이션 전)에서도 서버는 떠야 한다.
     cache = new Map();
-    logger.warn(`settings load failed, using env only: ${(e as Error).message}`);
+    logger.warn(
+      `settings load failed, using env only: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
 }
 

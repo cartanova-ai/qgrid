@@ -1,4 +1,5 @@
 import { getLogger } from "@logtape/logtape";
+import { z } from "zod";
 
 import { RequestLogModel } from "../request-log/request-log.model";
 import {
@@ -17,29 +18,45 @@ const STALE_RUN_THRESHOLD_MS = 30 * 60 * 1000;
 const STALE_CLEANUP_INTERVAL_MS = 60 * 1000;
 let staleCleanupInFlight: Promise<void> | undefined;
 let lastStaleCleanupStartedAt = 0;
+
 function withProviderPrefix(
   routeModel: string | undefined,
   model: string | undefined,
 ): string | undefined {
   if (!model) return undefined;
+
   if (model.includes("/")) return model;
   const slash = routeModel?.indexOf("/") ?? -1;
   const provider = slash > 0 ? routeModel?.slice(0, slash) : undefined;
+
   return provider ? `${provider}/${model}` : model;
 }
 
 /**
  * history는 원본 그대로 저장하기보다는, run 분석에 필요한 user/assistant 정보만 필터링해서 저장
  */
-function filterHistoryForStorage(rawHistory: string | undefined): unknown {
+// Kept items are stored as sent; only the type/role that select them are decoded.
+const StoredHistoryMessage = z.looseObject({
+  type: z.literal("message"),
+  role: z.enum(["user", "assistant"]),
+});
+
+type StoredHistoryMessage = z.infer<typeof StoredHistoryMessage>;
+
+function filterHistoryForStorage(
+  rawHistory: string | undefined,
+): StoredHistoryMessage[] | undefined {
   if (!rawHistory) return undefined;
+
   try {
-    const items = JSON.parse(rawHistory) as unknown[];
-    const filtered = items.filter((item) => {
-      if (!item || typeof item !== "object") return false;
-      const record = item as Record<string, unknown>;
-      return record.type === "message" && (record.role === "user" || record.role === "assistant");
+    const items = z.array(z.unknown()).parse(JSON.parse(rawHistory));
+
+    const filtered = items.flatMap((item) => {
+      const message = StoredHistoryMessage.safeParse(item);
+
+      return message.success ? [message.data] : [];
     });
+
     return filtered.length > 0 ? filtered : undefined;
   } catch {
     return undefined;
@@ -49,6 +66,7 @@ function filterHistoryForStorage(rawHistory: string | undefined): unknown {
 function isParseableJson(text: string): boolean {
   try {
     JSON.parse(text);
+
     return true;
   } catch {
     return false;
@@ -112,6 +130,7 @@ async function appendGenerateStep(
     args.model,
     args.model ?? result.requestedModel ?? result.model,
   );
+
   const servedModelName = withProviderPrefix(args.model, result.model);
 
   // generate step 기록
@@ -133,6 +152,7 @@ async function appendGenerateStep(
     ttft_ms: result.ttftMs,
     finish_reason: result.finishReason,
   });
+
   return { requestedModelName, servedModelName };
 }
 
@@ -150,10 +170,12 @@ export async function afterQuery(
   );
 
   const imageParts = getImageParts(result);
+
   const imageCostMicroUsd = estimateImageGenerationCostMicroUsd(
     result,
     args.imageGenerationOptions,
   );
+
   for (const step of buildImageGenerationToolSteps(args, imageParts, stepIndex)) {
     await RequestLogModel.appendStep(requestLogId, step);
   }
@@ -161,8 +183,10 @@ export async function afterQuery(
   if (result.finishReason === "tool-calls") {
     // tool-call step을 즉시 기록하고, 다음 follow-up이 같은 row에 결과를 채운다.
     const toolCalls = result.content.filter((c) => c.type === "tool-call");
+
     for (let i = 0; i < toolCalls.length; i++) {
       const tc = toolCalls[i]!;
+
       if (tc.type !== "tool-call") continue;
       await RequestLogModel.appendStep(requestLogId, {
         step_index: stepIndex,
@@ -180,7 +204,8 @@ export async function afterQuery(
   // finishReason === "stop" → run 종료 (전체 step usage 합산)
   const agg = await RequestLogModel.aggregateStepUsage(requestLogId);
   const responseText = formatResponseForLog(result);
-  await RequestLogModel.finishRun(requestLogId, {
+
+  const finishParams: Parameters<typeof RequestLogModel.finishRun>[1] = {
     status: "succeeded",
     response: responseText,
     // structured 요청만 판정한다. deti 배치의 broken JSON 류를 목록에서 바로
@@ -202,13 +227,15 @@ export async function afterQuery(
     cost_usd: agg.cost_usd,
     cost_source: agg.cost_source,
     image_cost_usd: imageCostMicroUsd,
-    ...(imageParts.length > 0 ? { is_image_generation: true } : {}),
     image_cost_method:
       imageCostMicroUsd !== null
         ? imageGenerationCostMethod(args.imageGenerationOptions, result)
         : null,
     history: filterHistoryForStorage(args.history),
-  });
+  };
+
+  if (imageParts.length > 0) finishParams.is_image_generation = true;
+  await RequestLogModel.finishRun(requestLogId, finishParams);
 
   return {};
 }
@@ -243,63 +270,74 @@ async function finishTerminalRun(
         await appendGenerateStep(requestLogId, completedStep.stepIndex, args, completedStep.result);
       } catch (e) {
         logger.error(
-          `appendGenerateStep failed while finishing ${status}: ${(e as Error).message}`,
+          `appendGenerateStep failed while finishing ${status}: ${e instanceof Error ? e.message : String(e)}`,
         );
       }
     }
+
     let aggregate: Awaited<ReturnType<typeof RequestLogModel.aggregateStepUsage>> | undefined;
+
     try {
       aggregate = await RequestLogModel.aggregateStepUsage(requestLogId);
     } catch (e) {
-      logger.error(`aggregateStepUsage failed while finishing ${status}: ${(e as Error).message}`);
+      logger.error(
+        `aggregateStepUsage failed while finishing ${status}: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
 
-    await RequestLogModel.finishRun(requestLogId, {
+    const finishParams: Parameters<typeof RequestLogModel.finishRun>[1] = {
       status,
       error_message: errorMessage,
       history: args ? filterHistoryForStorage(args.history) : undefined,
-      ...(completedStep
-        ? {
-            token_name: completedStep.result.tokenName,
-            requested_model_name: withProviderPrefix(
-              args?.model,
-              args?.model ?? completedStep.result.requestedModel ?? completedStep.result.model,
-            ),
-            model_name: withProviderPrefix(args?.model, completedStep.result.model),
-          }
-        : {}),
-      ...(aggregate
-        ? {
-            input_tokens: aggregate.input_tokens,
-            output_tokens: aggregate.output_tokens,
-            cache_read_tokens: aggregate.cache_read_tokens,
-            cache_creation_tokens: aggregate.cache_creation_tokens,
-            cache_creation_5m_tokens: aggregate.cache_creation_5m_tokens,
-            cache_creation_1h_tokens: aggregate.cache_creation_1h_tokens,
-            duration_ms: aggregate.duration_ms,
-            fallback_count: aggregate.fallback_count,
-            cost_usd: aggregate.cost_usd,
-            cost_source: aggregate.cost_source,
-          }
-        : {}),
-    });
+    };
+
+    if (completedStep) {
+      finishParams.token_name = completedStep.result.tokenName;
+
+      finishParams.requested_model_name = withProviderPrefix(
+        args?.model,
+        args?.model ?? completedStep.result.requestedModel ?? completedStep.result.model,
+      );
+
+      finishParams.model_name = withProviderPrefix(args?.model, completedStep.result.model);
+    }
+
+    if (aggregate) {
+      finishParams.input_tokens = aggregate.input_tokens;
+      finishParams.output_tokens = aggregate.output_tokens;
+      finishParams.cache_read_tokens = aggregate.cache_read_tokens;
+      finishParams.cache_creation_tokens = aggregate.cache_creation_tokens;
+      finishParams.cache_creation_5m_tokens = aggregate.cache_creation_5m_tokens;
+      finishParams.cache_creation_1h_tokens = aggregate.cache_creation_1h_tokens;
+      finishParams.duration_ms = aggregate.duration_ms;
+      finishParams.fallback_count = aggregate.fallback_count;
+      finishParams.cost_usd = aggregate.cost_usd;
+      finishParams.cost_source = aggregate.cost_source;
+    }
+
+    await RequestLogModel.finishRun(requestLogId, finishParams);
   } catch (e) {
-    logger.error(`finishTerminalRun(${status}) failed: ${(e as Error).message}`);
+    logger.error(
+      `finishTerminalRun(${status}) failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
 }
 
 async function cleanupStaleRuns(): Promise<void> {
   if (staleCleanupInFlight) {
     await staleCleanupInFlight;
+
     return;
   }
 
   const now = Date.now();
+
   if (now - lastStaleCleanupStartedAt < STALE_CLEANUP_INTERVAL_MS) return;
   lastStaleCleanupStartedAt = now;
 
   const cleanup = performStaleRunCleanup();
   staleCleanupInFlight = cleanup;
+
   try {
     await cleanup;
   } finally {
@@ -310,15 +348,18 @@ async function cleanupStaleRuns(): Promise<void> {
 async function performStaleRunCleanup(): Promise<void> {
   try {
     const errorMessage = "tool-call run: no follow-up within 30 minutes";
+
     const staleIds = await RequestLogModel.expireStaleToolWaitingRuns(
       STALE_RUN_THRESHOLD_MS,
       errorMessage,
     );
+
     const cleanedCount = staleIds.length;
+
     if (cleanedCount > 0) {
       logger.info(`cleaned up ${cleanedCount} stale running request logs`);
     }
   } catch (e) {
-    logger.error(`stale cleanup failed: ${(e as Error).message}`);
+    logger.error(`stale cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 }

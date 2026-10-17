@@ -7,6 +7,7 @@ import ZapIcon from "~icons/lucide/zap";
 import { cacheHitRate, formatRequestCost, formatUsd } from "@/lib/cost";
 import { requestModelDisplay } from "@/lib/request-model";
 import { type LogsSearch } from "@/routes/logs";
+import { type RequestLogListParams } from "@/services/request-log/request-log.types";
 import { QgridService, RequestLogService, TokenService } from "@/services/services.generated";
 import { RequestLogOrderBy } from "@/services/sonamu.generated";
 
@@ -15,12 +16,13 @@ import { unpricedRequestLabel, unpricedRequestTitle } from "./total-cost";
 const PAGE_SIZE = 50;
 const UNASSIGNED = "__unassigned__";
 
-function formatDateTime(iso: string): string {
-  const d = new Date(iso);
+function formatDateTime(value: Date): string {
+  const d = new Date(value);
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   const hh = String(d.getHours()).padStart(2, "0");
   const mi = String(d.getMinutes()).padStart(2, "0");
+
   return `${mm}-${dd} ${hh}:${mi}`;
 }
 
@@ -32,6 +34,7 @@ function formatDuration(ms: number): string {
   const total = Math.round(ms / 1000);
   const m = Math.floor(total / 60);
   const s = total % 60;
+
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
@@ -62,6 +65,7 @@ function RequestModel({
     servedModel,
     imageCostMethod,
   });
+
   const hasRequestedOnly = requestedModel !== null && servedModel === null;
 
   return (
@@ -79,6 +83,7 @@ function RequestModel({
 // Non-zero TTFT is usually sub-second, so use adaptive ms/s formatting.
 function formatTtft(ms: number): string {
   if (ms <= 0) return "—";
+
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
 }
 
@@ -133,16 +138,19 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
 
   const projectFilterParam = (() => {
     if (projectFilter === UNASSIGNED) return { project_name_is_null: true as const };
+
     if (projectFilter) return { project_name: projectFilter };
+
     return {};
   })();
 
   // 목록과 비용이 같은 필터를 보도록 한 객체를 공유한다.
-  const listFilters = {
-    ...(tokenFilter ? { token_name: tokenFilter } : {}),
-    ...projectFilterParam,
-    ...(modelFilter ? { model_name: modelFilter } : {}),
-  };
+  const listFilters: Partial<RequestLogListParams> = {};
+
+  if (tokenFilter) listFilters.token_name = tokenFilter;
+  Object.assign(listFilters, projectFilterParam);
+
+  if (modelFilter) listFilters.model_name = modelFilter;
 
   const sort = search.sort ?? "id-desc";
   const separator = sort.lastIndexOf("-");
@@ -158,6 +166,7 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
       ...listFilters,
     },
   );
+
   const {
     data: costData,
     isError: isCostError,
@@ -167,6 +176,7 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
     page: 1,
     ...listFilters,
   });
+
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.ceil(total / PAGE_SIZE);
@@ -274,7 +284,9 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                   {COLUMNS.map((col) => {
                     const padX =
                       col.label === "Duration" ? "pl-5 pr-3" : col.width ? "px-4" : "px-3";
+
                     const active = col.sortKey === sortColumn;
+
                     return (
                       <th
                         key={col.label}
@@ -322,8 +334,10 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                     onClick={(e) => {
                       if (e.metaKey || e.ctrlKey) {
                         window.open(`/requests/show?id=${row.id}`, "_blank");
+
                         return;
                       }
+
                       navigate({ to: "/requests/show", search: { id: row.id } });
                     }}
                   >
@@ -339,7 +353,7 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                     </td>
                     <td className="px-4 py-1.5 whitespace-nowrap">
                       <span className="text-xs text-sand-400 tabular-nums">
-                        {formatDateTime(row.created_at as unknown as string)}
+                        {formatDateTime(row.created_at)}
                       </span>
                     </td>
                     <td className="px-4 py-1.5 whitespace-nowrap">

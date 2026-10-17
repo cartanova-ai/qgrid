@@ -16,11 +16,13 @@ const logger = getLogger(["qgrid", "effort"]);
 // Codex 구독 백엔드 모델 카탈로그(~/.codex/models_cache.json) 의 supported_reasoning_levels 합집합.
 // Public effort options exclude none/minimal. thinking:false maps to wire-level none separately.
 export const OPENAI_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
+
 export type OpenAIEffort = (typeof OPENAI_EFFORTS)[number];
 
 // Claude Code `--effort` 허용값. 모델별 상한(xhigh_effort / max_effort capability)은 Claude Code 가
 // 스스로 처리하므로 qgrid 는 provider 집합만 검사한다.
 export const ANTHROPIC_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+
 export type AnthropicEffort = (typeof ANTHROPIC_EFFORTS)[number];
 
 // 어휘 안에 있고 상한(있다면) 이하인 값만 통과시킨다. 나머지는 debug 로그 후 미지정.
@@ -31,16 +33,21 @@ function resolveWithin<T extends string>(
   target: string,
 ): T | undefined {
   if (effort === undefined) return undefined;
-  const rank = levels.indexOf(effort as T);
+  const rank = levels.findIndex((level) => level === effort);
+
   if (rank < 0) {
     logger.debug(`ignoring effort "${effort}" for ${target}: not in ${levels.join("/")}`);
+
     return undefined;
   }
+
   if (max !== undefined && rank > levels.indexOf(max)) {
     logger.debug(`ignoring effort "${effort}" for ${target}: model supports up to "${max}"`);
+
     return undefined;
   }
-  return effort as T;
+
+  return levels[rank];
 }
 
 /** canonical OpenAI model(`openai/` prefix 제거 후) 기준으로 effort 를 판정한다. */

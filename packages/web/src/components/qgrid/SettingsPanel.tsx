@@ -10,15 +10,17 @@ import { SettingService, TokenService } from "@/services/services.generated";
 import { type SettingItem } from "@/services/setting/setting.types";
 import { useUpdateTokenMutation } from "@/services/token/use-update-token-mutation";
 
-const GROUP_LABELS: Record<string, string> = {
-  qgrid: "Qgrid",
-  slack: "Slack 알림",
-  slackConnection: "Slack 연결",
-};
+const GROUP_LABELS = new Map([
+  ["qgrid", "Qgrid"],
+  ["slack", "Slack 알림"],
+  ["slackConnection", "Slack 연결"],
+]);
 
 function maskValue(value: string): string {
   if (!value) return "";
+
   if (value.length <= 12) return "•".repeat(value.length);
+
   return `${value.slice(0, 8)}${"•".repeat(12)}${value.slice(-4)}`;
 }
 
@@ -94,6 +96,7 @@ function PresetGroup({
   onChange: (next: string) => void;
 }) {
   const current = Number(value);
+
   return (
     <div className="segmented-control inline-flex">
       {presets.map((preset) => (
@@ -115,6 +118,7 @@ function PresetGroup({
 /** 값이 어디서 왔는지. 되돌림 버튼이 무엇을 지우는지 이 배지가 설명한다. */
 function SourceBadge({ source }: { source: SettingItem["source"] }) {
   const label = source === "db" ? "저장값" : source === "env" ? "환경변수" : "기본값";
+
   return (
     <span
       className={`text-[10px] px-1.5 py-0.5 rounded ${
@@ -174,23 +178,25 @@ function SettingRow({ item, disabled = false }: { item: SettingItem; disabled?: 
 
   const commit = async (next: string) => {
     setError(null);
+
     try {
       await updateMutation.mutateAsync({ key: item.key, value: next });
       await invalidate();
       setDraft(null);
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
   const reset = async () => {
     setError(null);
+
     try {
       await resetMutation.mutateAsync({ key: item.key });
       await invalidate();
       setDraft(null);
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -309,17 +315,19 @@ function KeepaliveTokenSettings({ runnerEnabled }: { runnerEnabled: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const tokensQuery = TokenService.useTokens("A", { orderBy: "ord-asc", num: 100 });
   const updateMutation = useUpdateTokenMutation();
+
   const anthropicTokens = (tokensQuery.data?.rows ?? []).filter(
     (token) => token.provider === "anthropic",
   );
 
   const toggle = async (id: number, keepaliveEnabled: boolean) => {
     setError(null);
+
     try {
       await updateMutation.mutateAsync({ id, keepaliveEnabled });
       await queryClient.invalidateQueries({ queryKey: ["Token", "getTokens"] });
     } catch (cause) {
-      setError((cause as Error).message);
+      setError(cause instanceof Error ? cause.message : String(cause));
     }
   };
 
@@ -379,12 +387,13 @@ function TriggerReminderButton() {
 
   const trigger = async () => {
     setResult(null);
+
     try {
       const { sent } = await mutation.mutateAsync();
       // 0건과 실패를 구분해준다 — 아무 반응이 없으면 버튼이 고장 난 것으로 읽힌다.
       setResult(sent === 0 ? "재로그인이 필요한 토큰이 없습니다" : `${sent}건 발송`);
     } catch (e) {
-      setResult((e as Error).message);
+      setResult(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -469,11 +478,12 @@ export function SettingsPanel() {
 
       {groups.map((group) => {
         const items = settings.filter((s) => s.group === group);
+
         return (
           <div key={group} className="panel overflow-hidden">
             <div className="panel-header flex items-center justify-between px-4 py-2.5 sm:px-5">
               <span className="text-[13px] font-medium text-sand-700">
-                {GROUP_LABELS[group] ?? group}
+                {GROUP_LABELS.get(group) ?? group}
               </span>
               {group === "slack" && <TriggerReminderButton />}
             </div>

@@ -13,6 +13,7 @@ const RETRY_AFTER_SECONDS = "30";
 // upstream 예외를 통과시킨다. 여기서는 instanceof 로 실제 계약을 확인한다.
 export function handleServerError(error: Error, reply: FastifyReply): void {
   getLogger(["qgrid"]).error(`${error}`);
+
   const statusCode =
     error instanceof SoException &&
     Number.isInteger(error.statusCode) &&
