@@ -134,6 +134,15 @@ Key decisions:
 - `--setting-sources project` is required for shared-service isolation. User/local Claude settings can load hooks or memory and leak context across requests.
 - Claude Code OAuth prompt cache sharing across tokens in the same workspace is an observed cost behavior, not a product contract. Monitor it; do not promise it.
 
+## OpenAI Realtime Voice
+
+Sources: `docs/plans/2026-10-17-openai-realtime-audio-plan.md`, `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`, `packages/api/src/utils/providers/openai/openai-realtime-protocol.ts`.
+
+- STT mirrors Codex’s subscription path (`/realtime/calls` + sideband) rather than the simpler ChatGPT-web `/backend-api/transcribe`: the latter was removed from Codex (PR #16114), ignores model/language/prompt, and retains uploads for 30 days.
+- TTS uses the direct realtime socket, which Codex treats as API-key-only, because the `/calls` sideband carries no audio and qgrid has no RTP stack. It is the one deliberate non-Codex path; a 401/403 there means the path is gated and must fail, not fall back.
+- No image-model ids were added for GPT-Image-2.5: the subscription Images route ignores the `model` field (a nonsense id returns 200 with identical usage, hosted tools echo `gpt-image-2-codex`). Re-check by sending a nonsense id; a 400 means selection became real.
+- Model ids are candidates pruned by the live matrix, not promises from the catalog: raw probes passed, but only the production client through qgrid decides what ships.
+
 ## Grok (xAI Subscription) Runtime
 
 Sources:
