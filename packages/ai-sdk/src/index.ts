@@ -1068,6 +1068,7 @@ export {
   QgridMediaHttpError,
   type QgridGrokMediaProviderOptions,
   type QgridMediaProviderConfig,
+  type QgridOpenAIMediaProviderOptions,
   type QgridXaiImageProviderOptions,
 } from "./image-model";
 
@@ -1080,7 +1081,12 @@ export {
   type QgridXaiVideoProviderOptions,
 } from "./video-model";
 
-export { type QgridXaiTranscriptionProviderOptions } from "./transcription-model";
+export {
+  type QgridOpenAITranscriptionProviderOptions,
+  type QgridXaiTranscriptionProviderOptions,
+} from "./transcription-model";
+
+export { type QgridOpenAISpeechProviderOptions } from "./speech-model";
 
 export { createQgridLogger } from "./logger";
 
@@ -1096,11 +1102,15 @@ export type {
   QgridAnthropicProviderConfig,
   QgridAnthropicProviderOptions,
   QgridGrokModel,
+  QgridGrokSpeechModel,
+  QgridGrokTranscriptionModel,
   QgridLoggerConfig,
   QgridOpenAIEffort,
   QgridOpenAIModel,
   QgridOpenAIProviderConfig,
   QgridOpenAIProviderOptions,
+  QgridOpenAISpeechModel,
+  QgridOpenAITranscriptionModel,
   QgridProviderConfig,
   QgridProviderOptions,
   QgridSpeechModel,
