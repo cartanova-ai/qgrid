@@ -2,14 +2,16 @@ import { type JSONObject, type SharedV3Warning, type TranscriptionModelV3 } from
 import { z } from "zod";
 
 import {
-  assertGrokModelId,
   assertInlineMediaFits,
   parseGrokQgridOptions,
+  parseNamespacedMediaOptions,
+  parseOpenAIQgridOptions,
   parseXaiMediaOptions,
   postMediaEndpoint,
   type QgridMediaProviderConfig,
   resolveMediaConfig,
   serializeMediaBody,
+  voiceProviderOf,
 } from "./image-model";
 import { type QgridTranscriptionModel } from "./index.types";
 import { QGRID_PROVIDER_NAME } from "./qgrid.constant";
@@ -50,6 +52,49 @@ export type QgridXaiTranscriptionProviderOptions = { language?: string };
 
 const XAI_TRANSCRIPTION_HONORED = new Set(["language"]);
 
+/**
+ * `providerOptions.openai` for OpenAI transcription, field-for-field from `@ai-sdk/openai`
+ * `openAITranscriptionModelOptions` (vercel/ai fce9210). The realtime transcription session
+ * honors `language` and `prompt`; the rest warn.
+ */
+const openaiTranscriptionOptionsSchema = z.object({
+  include: z.array(z.string()).optional(),
+  language: z.string().optional(),
+  prompt: z.string().optional(),
+  temperature: z.number().min(0).max(1).optional(),
+  timestampGranularities: z.array(z.enum(["word", "segment"])).optional(),
+  responseFormat: z.enum(["json", "verbose_json", "diarized_json"]).optional(),
+  chunkingStrategy: z
+    .union([
+      z.literal("auto"),
+      z.object({
+        type: z.literal("server_vad"),
+        threshold: z.number().min(0).max(1).optional(),
+        prefixPaddingMs: z.number().int().min(0).optional(),
+        silenceDurationMs: z.number().int().min(0).optional(),
+      }),
+    ])
+    .optional(),
+  streaming: z
+    .object({
+      delay: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(),
+      include: z.array(z.string()).optional(),
+    })
+    .optional(),
+});
+
+/**
+ * `providerOptions.openai` honored by `qgrid.transcription("openai/...")`.
+ *
+ * `prompt` steers vocabulary on `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `gpt-transcribe`
+ * and `gpt-live-transcribe`. `openai/gpt-realtime-whisper` rejects it (the server answers HTTP
+ * 400 before any upstream call). `openai/whisper-1` accepts it but the upstream ignores it
+ * (verified 2026-10-17: "qgrid" still came back as "Thread"), so do not rely on it for spelling.
+ */
+export type QgridOpenAITranscriptionProviderOptions = { language?: string; prompt?: string };
+
+const OPENAI_TRANSCRIPTION_HONORED = new Set(["language", "prompt"]);
+
 const transcribeOutputSchema = z.object({
   text: z.string(),
   language: z.string().optional(),
@@ -74,7 +119,7 @@ export function createQgridTranscription(
   modelId: QgridTranscriptionModel,
   config?: QgridMediaProviderConfig,
 ): TranscriptionModelV3 {
-  assertGrokModelId(modelId, LABEL);
+  const provider = voiceProviderOf(modelId, LABEL);
   const { serverUrl, projectName } = resolveMediaConfig(config);
 
   return {
@@ -90,22 +135,43 @@ export function createQgridTranscription(
 
       if (audio.length === 0) throw new Error(`${LABEL}: audio is empty`);
       assertInlineMediaFits([audio], LABEL);
-      const qgridOptions = parseGrokQgridOptions(options.providerOptions?.qgrid, LABEL);
 
-      const xai = parseXaiMediaOptions(
-        options.providerOptions?.xai,
-        xaiTranscriptionOptionsSchema,
-        XAI_TRANSCRIPTION_HONORED,
-        LABEL,
-      );
+      const qgridOptions =
+        provider === "openai"
+          ? parseOpenAIQgridOptions(options.providerOptions?.qgrid, LABEL)
+          : parseGrokQgridOptions(options.providerOptions?.qgrid, LABEL);
 
-      const warnings: SharedV3Warning[] = [...xai.warnings];
-      const language = xai.options?.language ?? undefined;
-
+      const warnings: SharedV3Warning[] = [];
       // Also throws before transport when the JSON body would exceed the 10 MiB body limit.
       const params: JSONObject = { model: modelId, audio, mediaType };
 
-      if (language !== undefined) params.language = language;
+      if (provider === "openai") {
+        const openai = parseNamespacedMediaOptions(
+          "openai",
+          options.providerOptions?.openai,
+          openaiTranscriptionOptionsSchema,
+          OPENAI_TRANSCRIPTION_HONORED,
+          LABEL,
+        );
+
+        warnings.push(...openai.warnings);
+
+        if (openai.options?.language !== undefined) params.language = openai.options.language;
+
+        if (openai.options?.prompt !== undefined) params.prompt = openai.options.prompt;
+      } else {
+        const xai = parseXaiMediaOptions(
+          options.providerOptions?.xai,
+          xaiTranscriptionOptionsSchema,
+          XAI_TRANSCRIPTION_HONORED,
+          LABEL,
+        );
+
+        warnings.push(...xai.warnings);
+        const language = xai.options?.language ?? undefined;
+
+        if (language !== undefined) params.language = language;
+      }
 
       if (projectName) params.projectName = projectName;
       const body = serializeMediaBody({ ...params, ...qgridOptions }, LABEL);
@@ -130,6 +196,8 @@ export function createQgridTranscription(
         text: data.text,
         // The qgrid server returns no word or segment timings.
         segments: [],
+        // OpenAI: echo of the requested language (the realtime session reports none) and a
+        // duration computed from the PCM qgrid sent.
         language: data.language,
         durationInSeconds: data.durationSec,
         warnings,

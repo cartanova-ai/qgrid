@@ -355,8 +355,8 @@ Grok model accepts the same factory config as the other models: `serverUrl` (def
 | `qgrid(id)` | `grok/grok-4.7` (default catalog model), `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`, any other `grok/<id>` | `generateText`, `streamText` |
 | `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0`, `grok/grok-imagine-image-quality` | `generateImage` |
 | `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
-| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0` | `experimental_transcribe` |
-| `qgrid.speech(id)` | `grok/grok-tts` (the id only labels the request log) | `experimental_generateSpeech` |
+| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI subscription: `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/gpt-transcribe`, `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`, `openai/whisper-1` | `experimental_transcribe` |
+| `qgrid.speech(id)` | `grok/grok-tts` (the id only labels the request log); OpenAI subscription: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1`, `openai/gpt-realtime-1.5` | `experimental_generateSpeech` |
 
 qgrid forwards a language-model id that is not in its catalog unchanged instead of rejecting it,
 as it does for OpenAI; the subscription backend decides. It may serve a different model, so check
@@ -494,6 +494,35 @@ speech.audio.uint8Array;
 
 - `experimental_transcribe` detects the audio type from its bytes and falls back to `audio/wav`; the server rejects anything that is not `audio/*`. Transcripts carry no segments (`segments: []`).
 - Speech text is limited to 15,000 characters. Unset `voice`, `language` and `outputFormat` use the server defaults `ara`, `en` and `mp3`, the only combination verified live. Other voices, languages (including `@ai-sdk/xai`'s `auto`) and codecs are passed through but unverified. The server's audio MIME type is in `providerMetadata.qgrid.mediaType`; AI SDK's `speech.audio.mediaType` is sniffed from the bytes.
+
+### OpenAI transcription and speech (ChatGPT subscription)
+
+`openai/` voice ids run on OpenAI realtime sessions with the same ChatGPT subscription tokens qgrid uses for Codex: transcription through the Codex `/realtime/calls` flow, speech through a realtime conversational model that repeats the text verbatim (there is no `gpt-4o-mini-tts` or `tts-1` on subscription). Options follow `@ai-sdk/openai` under `providerOptions.openai`; `providerOptions.qgrid.tokenName` must carry the `openai/` prefix.
+
+```typescript
+const transcript = await transcribe({
+  model: qgrid.transcription("openai/gpt-4o-mini-transcribe"),
+  audio: await readFile("meeting.wav"), // PCM16 WAV or raw PCM only
+  providerOptions: { openai: { language: "en", prompt: "qgrid, Codex" } },
+});
+
+const speech = await generateSpeech({
+  model: qgrid.speech("openai/gpt-realtime-2.1-mini"),
+  text: "Your build is ready.",
+  voice: "marin",
+  outputFormat: "wav",
+  providerOptions: { openai: { instructions: "Calm and brisk." } },
+});
+```
+
+| Model | Faithful (`@ai-sdk/openai` names) | Transformed | Unsupported (warning) |
+| --- | --- | --- | --- |
+| Transcription | `openai.language`, `openai.prompt` (not on `gpt-realtime-whisper`, which rejects it with HTTP 400; accepted but ignored upstream on `whisper-1`) | input must be PCM16 WAV (`audio/wav`) or raw PCM (`audio/pcm;rate=…;channels=…`); mp3/webm/ogg are rejected by the server with HTTP 400 until a decoder lands. `durationInSeconds` is computed from the audio sent; `language` echoes the request (the realtime session reports neither); `segments` is empty | `openai.temperature`, `openai.include`, `openai.timestampGranularities`, `openai.responseFormat`, `openai.chunkingStrategy`, `openai.streaming` |
+| Speech | `voice` (default `marin`; Codex v2 list `alloy ash ballad coral echo sage shimmer verse marin cedar`, others fail with HTTP 400), `instructions` / `openai.instructions` (style guidance appended to the verbatim-repeat prompt) | `outputFormat` `wav` (default, PCM16 24 kHz) or `pcm`; anything else falls back to `wav` with a warning, as `@ai-sdk/openai` falls back to `mp3` | `language`, `speed`, `openai.speed` |
+
+- Each transcription first runs on the Codex realtime call with a 25 s budget (the call is torn down about 30 s after creation); if that window closes before the transcript arrives, the server retries once on the direct realtime transcription socket (up to 60 s). The 7 MiB inline limit (~2.5 min of 24 kHz PCM) normally completes in a few seconds on the first path.
+- Speech is a conversational model repeating text, not a TTS model: verbatim fidelity was verified on short English sentences only; the model's own transcript of what it said is logged with the request for comparison.
+- Per-model behavior is recorded in the server repository's `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`. Known limits on 2026-10-17: `gpt-live-transcribe` and `gpt-realtime-whisper` returned roughly half of a 60 s clip (use them for short utterances); `gpt-realtime-whisper` rejects `openai.prompt` (the server answers HTTP 400 before any upstream call); `whisper-1` accepts but ignores `openai.prompt`. For speech, `gpt-realtime-2.1-mini` repeated every test text verbatim (13/13), `gpt-realtime-2.1` paraphrased once (12/13), and `gpt-realtime-1.5` often answered the text instead of repeating it (6/13); compare the logged transcript with your input when fidelity matters.
 
 ## Telemetry Logger
 

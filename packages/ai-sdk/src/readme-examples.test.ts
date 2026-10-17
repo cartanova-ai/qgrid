@@ -17,10 +17,12 @@ const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]).toString("base64");
 const mp3 = new Uint8Array([0xff, 0xfb, 0x90, 0x64, 0, 0, 0, 0]);
 const VIDEO_URL = "https://vidgen.x.ai/bucket/video.mp4";
 const seen: string[] = [];
+const sent: RequestInit[] = [];
 
 function fakeServer(url: string, init: RequestInit): Response {
   const endpoint = url.slice(url.lastIndexOf("/") + 1);
   seen.push(endpoint);
+  sent.push(init);
   if (url === VIDEO_URL) {
     return new Response(new Uint8Array([0, 0, 0, 0x18]), { headers: { "content-type": "video/mp4" } });
   }
@@ -61,6 +63,7 @@ const readFile = async (_path: string) => mp3;
 
 beforeEach(() => {
   seen.length = 0;
+  sent.length = 0;
   vi.stubGlobal("fetch", vi.fn(async (url: string | URL, init: RequestInit = {}) => fakeServer(String(url), init)));
 });
 
@@ -135,6 +138,23 @@ async function grokVoiceExample() {
   return { transcript, speech };
 }
 
+async function openaiVoiceExample() {
+  const transcript = await transcribe({
+    model: qgrid.transcription("openai/gpt-4o-mini-transcribe"),
+    audio: await readFile("meeting.wav"),
+    providerOptions: { openai: { language: "en", prompt: "qgrid, Codex" } },
+  });
+
+  const speech = await generateSpeech({
+    model: qgrid.speech("openai/gpt-realtime-2.1-mini"),
+    text: "Your build is ready.",
+    voice: "marin",
+    outputFormat: "wav",
+    providerOptions: { openai: { instructions: "Calm and brisk." } },
+  });
+  return { transcript, speech };
+}
+
 describe("README Grok examples", () => {
   it("runs the text example", async () => {
     const { text, providerMetadata } = await grokTextExample();
@@ -160,13 +180,22 @@ describe("README Grok examples", () => {
     expect(speech.audio.uint8Array).toEqual(mp3);
   });
 
+  it("runs the OpenAI transcription and speech example", async () => {
+    const { transcript, speech } = await openaiVoiceExample();
+    expect(transcript.text).toBe("hi");
+    expect(speech.audio.uint8Array).toEqual(mp3);
+    expect(speech.warnings).toEqual([]);
+    expect(JSON.parse(String(sent.at(-2)?.body)).params).toMatchObject({ language: "en", prompt: "qgrid, Codex" });
+    expect(JSON.parse(String(sent.at(-1)?.body)).params).toMatchObject({ voice: "marin", format: "wav", instructions: "Calm and brisk." });
+  });
+
   it.each(["README.md", "README.ko.md"])("%s Grok code blocks match these examples", async (file) => {
     const readme = await readTextFile(new URL(`../${file}`, import.meta.url), "utf8");
     const self = await readTextFile(new URL(import.meta.url), "utf8");
     const start = readme.indexOf(file === "README.md" ? "## Using Grok" : "## Grok 사용");
     const section = readme.slice(start, readme.indexOf("## Telemetry Logger", start));
     const blocks = [...section.matchAll(/```typescript\n([\s\S]*?)```/g)].map((m) => m[1]!);
-    expect(blocks).toHaveLength(4);
+    expect(blocks).toHaveLength(5);
     // Comments differ between languages and the examples add `return` lines; compare the code.
     const normalize = (s: string) =>
       s.split("\n").map((l) => l.replace(/\s*\/\/.*$/, "").trim()).filter(Boolean);

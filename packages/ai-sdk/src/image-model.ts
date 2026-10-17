@@ -60,6 +60,55 @@ export function assertGrokModelId(modelId: string, label: string): void {
   }
 }
 
+export type VoiceProvider = "grok" | "openai";
+
+/** Voice factories accept `grok/<id>` and `openai/<id>`; everything else throws at creation. */
+export function voiceProviderOf(modelId: string, label: string): VoiceProvider {
+  if (GROK_MODEL_ID.test(modelId)) return "grok";
+
+  if (/^openai\/[A-Za-z0-9._-]+$/.test(modelId)) return "openai";
+  throw new Error(`${label}: unsupported model ${modelId}; expected grok/<id> or openai/<id>`);
+}
+
+const openaiQgridOptionsSchema = z.object({
+  tokenName: z
+    .string()
+    .refine((value) => /^openai\/.+/.test(value.trim()), {
+      message: "tokenName must be a non-empty OpenAI token name with the openai/ prefix",
+    })
+    .optional(),
+  logger: z.boolean({ message: "logger must be a boolean" }).optional(),
+});
+
+/** `providerOptions.qgrid` accepted by OpenAI voice models. */
+export type QgridOpenAIMediaProviderOptions = z.infer<typeof openaiQgridOptionsSchema>;
+
+/** `providerOptions.qgrid` for an `openai/` voice model: tokenName must carry the openai/ prefix. */
+export function parseOpenAIQgridOptions(
+  raw: JSONValue | undefined,
+  label: string,
+): GrokQgridRequestOptions {
+  if (raw === undefined) return {};
+
+  if (!providerOptionsObjectSchema.safeParse(raw).success) {
+    throw new Error(`${label}: providerOptions.qgrid must be an object`);
+  }
+
+  const parsed = openaiQgridOptionsSchema.safeParse(raw);
+
+  if (!parsed.success) {
+    throw new Error(`${label}: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
+  }
+
+  const request: GrokQgridRequestOptions = {};
+
+  if (parsed.data.tokenName !== undefined) request.tokenName = parsed.data.tokenName;
+
+  if (parsed.data.logger === false) request.logger = false;
+
+  return request;
+}
+
 function formatMiB(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MiB`;
 }
@@ -280,14 +329,31 @@ export function parseXaiMediaOptions<T>(
   honored: ReadonlySet<string>,
   label: string,
 ): ParsedXaiMediaOptions<T> {
+  return parseNamespacedMediaOptions("xai", raw, schema, honored, label);
+}
+
+/**
+ * Validates `providerOptions.<namespace>` against the official provider's schema and warns for
+ * every set key qgrid does not honor, so code written for `@ai-sdk/xai` or `@ai-sdk/openai`
+ * keeps parsing and learns what was dropped.
+ */
+export function parseNamespacedMediaOptions<T>(
+  namespace: "xai" | "openai",
+  raw: JSONValue | undefined,
+  schema: z.ZodType<T>,
+  honored: ReadonlySet<string>,
+  label: string,
+): ParsedXaiMediaOptions<T> {
   if (raw === undefined) return { options: undefined, warnings: [] };
   const record = providerOptionsObjectSchema.safeParse(raw);
 
-  if (!record.success) throw new Error(`${label}: providerOptions.xai must be an object`);
+  if (!record.success) throw new Error(`${label}: providerOptions.${namespace} must be an object`);
   const parsed = schema.safeParse(raw);
 
   if (!parsed.success) {
-    throw new Error(`${label}: invalid providerOptions.xai: ${formatIssues(parsed.error)}`);
+    throw new Error(
+      `${label}: invalid providerOptions.${namespace}: ${formatIssues(parsed.error)}`,
+    );
   }
 
   const warnings: SharedV3Warning[] = [];
@@ -296,8 +362,8 @@ export function parseXaiMediaOptions<T>(
     if (value === undefined || value === null || honored.has(key)) continue;
     warnings.push({
       type: "unsupported",
-      feature: `providerOptions.xai.${key}`,
-      details: `qgrid does not support providerOptions.xai.${key} for this model; it was ignored.`,
+      feature: `providerOptions.${namespace}.${key}`,
+      details: `qgrid does not support providerOptions.${namespace}.${key} for this model; it was ignored.`,
     });
   }
 
