@@ -290,6 +290,8 @@ describe("OpenAIVoiceClient.transcribe", () => {
       text: "Hello from qgrid.",
       durationSec: 2.5,
       callId: "rtc_u23_test",
+      transport: "realtime-calls",
+      fallbackReason: undefined,
     });
     expect((await result).quotaHeaders.get("x-codex-primary-used-percent")).toBe("88");
     expect(socket.closed?.code).toBe(1000);
@@ -366,7 +368,87 @@ describe("OpenAIVoiceClient.transcribe", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("fails when the sideband closes before the transcript (the 30 s teardown case)", async () => {
+  it("falls back to the direct transcription socket when the sideband is torn down", async () => {
+    const ws = mockedWebSocket();
+    const fetchMock = vi.fn(async () => callsResponse());
+
+    const client = new OpenAIVoiceClient({
+      fetch: fetchMock as unknown as typeof fetch,
+      webSocketFactory: ws.factory,
+    });
+
+    const result = client.transcribe(credentials, {
+      audio: sineWav(0.2),
+      mediaType: "audio/wav",
+      model: "gpt-transcribe",
+      language: "en",
+    });
+
+    await tick();
+    const sideband = ws.sockets[0]!;
+    sideband.emit("open");
+    await tick();
+    sideband.emit("close", 1006, Buffer.from("")); // the ~30 s teardown
+    await tick();
+    await tick();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1); // no second /calls
+    expect(ws.calls).toHaveLength(2);
+    expect(ws.calls[1]?.url).toBe(`${OPENAI_REALTIME_WS_URL}?intent=transcription`);
+    expect(ws.calls[1]?.headers).toEqual(ws.calls[0]?.headers);
+
+    const direct = ws.sockets[1]!;
+    direct.emit("open");
+    await tick();
+    await tick();
+    const events = direct.sentEvents();
+    expect(events[0]).toEqual({
+      type: "session.update",
+      session: buildTranscriptionSession({ model: "gpt-transcribe", language: "en", manualCommit: true }),
+    });
+    expect(events.at(-1)).toEqual({ type: "input_audio_buffer.commit" });
+    direct.message({ type: "session.created", session: {} });
+    direct.message({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "Hello from qgrid.",
+    });
+
+    await expect(result).resolves.toMatchObject({
+      text: "Hello from qgrid.",
+      transport: "realtime-ws",
+      callId: undefined,
+      fallbackReason: expect.stringMatching(/closed before the transcript/),
+    });
+    expect((await result).quotaHeaders.size).toBe(0);
+  });
+
+  it("also falls back when the 25 s deadline expires before the transcript", async () => {
+    const ws = mockedWebSocket();
+
+    const client = new OpenAIVoiceClient({
+      fetch: (async () => callsResponse()) as unknown as typeof fetch,
+      webSocketFactory: ws.factory,
+      sttDeadlineMs: 30,
+    });
+
+    const result = client.transcribe(credentials, { audio: sineWav(0.2), mediaType: "audio/wav" });
+    await tick();
+    ws.sockets[0]!.emit("open"); // never answers
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await tick();
+
+    expect(ws.calls[1]?.url).toContain("intent=transcription");
+    const direct = ws.sockets[1]!;
+    direct.emit("open");
+    await tick();
+    await tick();
+    direct.message({ type: "conversation.item.input_audio_transcription.completed", transcript: "ok" });
+
+    await expect(result).resolves.toMatchObject({ text: "ok", transport: "realtime-ws" });
+    expect((await result).fallbackReason).toMatch(/timed out/);
+  });
+
+  it("does not fall back on a server error event or when the fallback is disabled", async () => {
     const ws = mockedWebSocket();
 
     const client = new OpenAIVoiceClient({
@@ -376,12 +458,25 @@ describe("OpenAIVoiceClient.transcribe", () => {
 
     const result = client.transcribe(credentials, { audio: sineWav(0.2), mediaType: "audio/wav" });
     await tick();
-    const socket = ws.sockets[0]!;
-    socket.emit("open");
+    ws.sockets[0]!.emit("open");
     await tick();
-    socket.emit("close", 1006, Buffer.from(""));
+    ws.sockets[0]!.message({ type: "error", error: { code: "invalid_model", message: "nope" } });
+    await expect(result).rejects.toMatchObject({ code: "invalid_model" });
+    expect(ws.calls).toHaveLength(1);
 
-    await expect(result).rejects.toMatchObject({ message: /closed before the transcript/ });
+    const strict = new OpenAIVoiceClient({
+      fetch: (async () => callsResponse()) as unknown as typeof fetch,
+      webSocketFactory: ws.factory,
+      sttDirectFallback: false,
+    });
+
+    const strictResult = strict.transcribe(credentials, { audio: sineWav(0.2), mediaType: "audio/wav" });
+    await tick();
+    ws.sockets[1]!.emit("open");
+    await tick();
+    ws.sockets[1]!.emit("close", 1006, Buffer.from(""));
+    await expect(strictResult).rejects.toMatchObject({ message: /closed before the transcript/ });
+    expect(ws.calls).toHaveLength(2);
   });
 });
 

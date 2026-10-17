@@ -91,6 +91,7 @@ Output is PCM16 24 kHz mono. The server supports `audio/pcm`, `audio/pcmu`, `aud
 ### 2.4 Deviations from Codex (exhaustive)
 
 a. **Synthetic SDP offer.** Codex sends a real browser/TUI WebRTC offer; qgrid sends a fixed minimal Opus offer (one `m=audio` section, `a=setup:actpass`, dummy fingerprint). Accepted in every probe. Risk R2.
+b′. **Direct-socket fallback for STT** (added after implementation, user decision): if the /calls attempt ends in teardown (deadline, sideband closed before the transcript), retry once on `?intent=transcription`. Server errors and 4xx never fall back.
 b. **Explicit commit.** Codex transcription mode omits `turn_detection` (server VAD). qgrid sets `turn_detection: null` and sends `input_audio_buffer.commit` so a one-shot clip is transcribed as one item.
 c. **TTS over direct WS** (§2.3). Risk R1.
 d. **No `tools`/`tool_choice`, no `x-codex-turn-metadata`, no `x-oai-attestation`** (Codex adds the latter only when an attestation provider is configured, `client.rs:903-915`).
