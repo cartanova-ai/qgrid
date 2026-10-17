@@ -1070,7 +1070,7 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<TranscribeOutpu
       ...selection,
     });
 
-    const { text, durationSec, callId } = dispatched.result;
+    const { text, durationSec, callId, transport, fallbackReason } = dispatched.result;
 
     const output: TranscribeOutput = {
       text,
@@ -1092,7 +1092,8 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<TranscribeOutpu
           args: {
             kind: "stt",
             model: route,
-            transport: "realtime-calls",
+            transport,
+            fallbackReason,
             mediaType: input.mediaType,
             audioBytes: audio.byteLength,
             language: input.language,

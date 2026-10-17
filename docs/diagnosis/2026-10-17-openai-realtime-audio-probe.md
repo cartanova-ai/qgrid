@@ -95,6 +95,10 @@ Latency: STT 3–6 s for 4 s clips, 5–10 s for 60 s (whisper-1 13 s); TTS 2–
 | `gpt-realtime-1.5` | voice-marin | pass | 2184 ms | 1.4s audio, 27 audio tokens |
 | `gpt-realtime-1.5` | voice-cedar | FAIL | 2497 ms | transcript differs: "Hello! It’s great to hear from you. How can I help you today?" |
 
+## Direct-socket fallback (added after the matrix)
+
+Forced with `VOICE_STT_DEADLINE_MS=1500` for `gpt-4o-mini-transcribe` and `gpt-transcribe`: all 8 cases completed over `realtime-ws` with the same texts as the `/calls` path (en-4s 3.9–4.2 s, ko 3.5–3.7 s, 60 s clip 6.2 s for 4o-mini but **37 s for gpt-transcribe**, lang+prompt 3.6–3.9 s). The 37 s run would have exceeded the 25 s `/calls` window, which is the case the fallback exists for. Trigger set: deadline, sideband closed/errored or handshake rejected before the transcript. Not triggered by server `error` events or `/calls` 4xx.
+
 ## Not exercised
 
 - The HTTP path (`POST /api/qgrid/transcribe`, `/speak` through the frame and dispatcher with a DB-backed token) — no local PostgreSQL. Unit tests cover routing, option mapping and the 401-refresh step; a server-side smoke should be run once a token is registered.

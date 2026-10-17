@@ -15,6 +15,7 @@
  *   VOICE_STT_MODELS     comma-separated override of the STT candidates
  *   VOICE_TTS_MODELS     comma-separated override of the TTS candidates
  *   VOICE_OUT            Markdown output path (default scripts/out/openai-voice-matrix.md)
+ *   VOICE_STT_DEADLINE_MS  override the /calls deadline (e.g. 1500 forces the direct-socket fallback)
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -137,7 +138,12 @@ async function main(): Promise<void> {
   const hello = new Uint8Array(await readFile(path.join(audioDir, "hello.wav")));
   const ko = new Uint8Array(await readFile(path.join(audioDir, "ko.wav")));
   const long60 = new Uint8Array(await readFile(path.join(audioDir, "long60.wav")));
-  const client = new OpenAIVoiceClient();
+
+  const sttDeadlineMs = process.env.VOICE_STT_DEADLINE_MS
+    ? Number(process.env.VOICE_STT_DEADLINE_MS)
+    : undefined;
+
+  const client = new OpenAIVoiceClient(sttDeadlineMs === undefined ? {} : { sttDeadlineMs });
   const rows: Row[] = [];
 
   const record = (row: Row) => {
@@ -164,12 +170,14 @@ async function main(): Promise<void> {
     }
 
     const failure = judge(result.value.text);
+    const via = result.value.transport === "realtime-ws" ? " via fallback" : "";
+
     record({
       model,
       caseName,
       pass: failure === undefined,
       ms: result.ms,
-      detail: failure ?? `"${result.value.text.slice(0, 80)}"`,
+      detail: (failure ?? `"${result.value.text.slice(0, 80)}"`) + via,
     });
   };
 

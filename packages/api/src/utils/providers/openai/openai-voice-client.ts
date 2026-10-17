@@ -23,6 +23,7 @@ import {
   OPENAI_REALTIME_WS_URL,
   OPENAI_TRANSCRIPTION_MODELS_WITHOUT_PROMPT,
   type OpenAIRealtimeCredentials,
+  type OpenAIRealtimeHeaders,
   outputAudioDeltaEvent,
   outputAudioTranscriptDoneEvent,
   prepareRealtimeInput,
@@ -49,6 +50,9 @@ import {
  * receive the transcript inside that window; 25 s leaves margin for the POST itself.
  */
 export const OPENAI_STT_DEADLINE_MS = 25_000;
+
+/** The direct transcription socket has no observed teardown; this bounds a hung fallback. */
+export const OPENAI_STT_FALLBACK_TIMEOUT_MS = 60_000;
 export const OPENAI_TTS_TIMEOUT_MS = 60_000;
 
 /** One second of 24 kHz mono PCM16 per input_audio_buffer.append. */
@@ -61,6 +65,9 @@ export interface OpenAIVoiceClientOptions {
   callsUrl?: string;
   realtimeWsUrl?: string;
   sttDeadlineMs?: number;
+  /** Retry once on the direct transcription socket when the /calls session is torn down. */
+  sttDirectFallback?: boolean;
+  sttFallbackTimeoutMs?: number;
   ttsTimeoutMs?: number;
 }
 
@@ -73,13 +80,19 @@ export interface OpenAITranscribeRequest {
   signal?: AbortSignal;
 }
 
+export type OpenAITranscriptionTransport = "realtime-calls" | "realtime-ws";
+
 export interface OpenAITranscription {
   text: string;
   /** Computed from the PCM sent, not reported by the server. */
   durationSec: number;
-  callId: string;
-  /** x-codex-* quota headers from the /calls response, for the dispatcher's quota tracker. */
+  /** Set on the Codex /calls path; undefined after the direct-socket fallback. */
+  callId: string | undefined;
+  /** x-codex-* quota headers from the /calls response; empty after the fallback. */
   quotaHeaders: CodexQuotaHeaders;
+  transport: OpenAITranscriptionTransport;
+  /** Why the /calls attempt was abandoned, when the fallback ran. */
+  fallbackReason: string | undefined;
 }
 
 export interface OpenAISpeakRequest {
@@ -300,6 +313,8 @@ export class OpenAIVoiceClient {
   private readonly callsUrl: string;
   private readonly realtimeWsUrl: string;
   private readonly sttDeadlineMs: number;
+  private readonly sttDirectFallback: boolean;
+  private readonly sttFallbackTimeoutMs: number;
   private readonly ttsTimeoutMs: number;
 
   constructor(options: OpenAIVoiceClientOptions = {}) {
@@ -309,6 +324,8 @@ export class OpenAIVoiceClient {
     this.callsUrl = options.callsUrl ?? OPENAI_REALTIME_CALLS_URL;
     this.realtimeWsUrl = options.realtimeWsUrl ?? OPENAI_REALTIME_WS_URL;
     this.sttDeadlineMs = options.sttDeadlineMs ?? OPENAI_STT_DEADLINE_MS;
+    this.sttDirectFallback = options.sttDirectFallback ?? true;
+    this.sttFallbackTimeoutMs = options.sttFallbackTimeoutMs ?? OPENAI_STT_FALLBACK_TIMEOUT_MS;
     this.ttsTimeoutMs = options.ttsTimeoutMs ?? OPENAI_TTS_TIMEOUT_MS;
   }
 
@@ -337,7 +354,48 @@ export class OpenAIVoiceClient {
       throw new OpenAIVoiceInputError(`${model} does not accept a prompt`);
     const correlation = { threadId: crypto.randomUUID(), sessionId: crypto.randomUUID() };
     const headers = buildOpenAIRealtimeHeaders(credentials, correlation);
-    const { signal, dispose } = this.deadline(request.signal, this.sttDeadlineMs);
+
+    const session = buildTranscriptionSession({
+      model,
+      language: request.language,
+      prompt: request.prompt,
+      manualCommit: true,
+    });
+
+    const durationSec = pcm.byteLength / (OPENAI_REALTIME_SAMPLE_RATE * 2);
+
+    try {
+      const viaCalls = await this.transcribeViaCalls(headers, model, session, pcm, request.signal);
+
+      return { ...viaCalls, durationSec, transport: "realtime-calls", fallbackReason: undefined };
+    } catch (error) {
+      if (!(error instanceof Error) || !this.sttDirectFallback || !isSidebandTeardownError(error))
+        throw error;
+      // The /calls session was reclaimed before the transcript arrived (about 30 s after creation
+      // with no RTP). Retry once on the direct transcription socket, which has no such window.
+      const fallbackReason = error.message;
+      const viaDirect = await this.transcribeViaDirectSocket(headers, session, pcm, request.signal);
+
+      return {
+        ...viaDirect,
+        durationSec,
+        callId: undefined,
+        quotaHeaders: new Map(),
+        transport: "realtime-ws",
+        fallbackReason,
+      };
+    }
+  }
+
+  /** Codex subscription path: POST /realtime/calls, then the sideband socket for that call. */
+  private async transcribeViaCalls(
+    headers: OpenAIRealtimeHeaders,
+    model: string,
+    session: JsonValue,
+    pcm: Uint8Array,
+    callerSignal: AbortSignal | undefined,
+  ): Promise<{ text: string; callId: string; quotaHeaders: CodexQuotaHeaders }> {
+    const { signal, dispose } = this.deadline(callerSignal, this.sttDeadlineMs);
 
     try {
       // The /calls body is Codex's exact transcription session; per-request fields follow on
@@ -367,45 +425,79 @@ export class OpenAIVoiceClient {
         throw new OpenAIProtocolError(`realtime call returned no call id (Location: ${location})`);
       const quotaHeaders = codexQuotaHeaders(response.headers);
 
-      const socket = this.webSocketFactory(
+      const text = await this.runTranscriptionSocket(
         `${this.realtimeWsUrl}?call_id=${encodeURIComponent(callId)}`,
-        { headers },
+        headers,
+        session,
+        pcm,
+        signal,
+        callerSignal,
       );
 
-      const records = socketRecords(socket, signal);
-
-      try {
-        await this.awaitOpen(records.next);
-
-        const session = buildTranscriptionSession({
-          model,
-          language: request.language,
-          prompt: request.prompt,
-          manualCommit: true,
-        });
-
-        await sendJson(socket, sessionUpdateEvent(session));
-        await this.streamPcm(socket, pcm);
-        await sendJson(socket, audioCommitEvent());
-        const text = await this.awaitTranscript(records.next);
-        socket.close(1000, "done");
-
-        return {
-          text,
-          durationSec: pcm.byteLength / (OPENAI_REALTIME_SAMPLE_RATE * 2),
-          callId,
-          quotaHeaders,
-        };
-      } catch (error) {
-        socket.terminate();
-        throw signal.aborted ? this.abortReason(request.signal, signal, error) : error;
-      } finally {
-        records.cleanup();
-      }
+      return { text, callId, quotaHeaders };
     } catch (error) {
-      throw signal.aborted ? this.abortReason(request.signal, signal, error) : error;
+      throw signal.aborted ? this.abortReason(callerSignal, signal, error) : error;
     } finally {
       dispose();
+    }
+  }
+
+  /**
+   * Direct transcription socket (wss://api.openai.com/v1/realtime?intent=transcription). Not a
+   * Codex path: Codex treats this socket as API-key-only, so it is used only as the fallback.
+   */
+  private async transcribeViaDirectSocket(
+    headers: OpenAIRealtimeHeaders,
+    session: JsonValue,
+    pcm: Uint8Array,
+    callerSignal: AbortSignal | undefined,
+  ): Promise<{ text: string }> {
+    const { signal, dispose } = this.deadline(callerSignal, this.sttFallbackTimeoutMs);
+
+    try {
+      const text = await this.runTranscriptionSocket(
+        `${this.realtimeWsUrl}?intent=transcription`,
+        headers,
+        session,
+        pcm,
+        signal,
+        callerSignal,
+      );
+
+      return { text };
+    } catch (error) {
+      throw signal.aborted ? this.abortReason(callerSignal, signal, error) : error;
+    } finally {
+      dispose();
+    }
+  }
+
+  /** session.update → append PCM → commit → await the completed transcript. */
+  private async runTranscriptionSocket(
+    url: string,
+    headers: OpenAIRealtimeHeaders,
+    session: JsonValue,
+    pcm: Uint8Array,
+    signal: AbortSignal,
+    callerSignal: AbortSignal | undefined,
+  ): Promise<string> {
+    const socket = this.webSocketFactory(url, { headers });
+    const records = socketRecords(socket, signal);
+
+    try {
+      await this.awaitOpen(records.next);
+      await sendJson(socket, sessionUpdateEvent(session));
+      await this.streamPcm(socket, pcm);
+      await sendJson(socket, audioCommitEvent());
+      const text = await this.awaitTranscript(records.next);
+      socket.close(1000, "done");
+
+      return text;
+    } catch (error) {
+      socket.terminate();
+      throw signal.aborted ? this.abortReason(callerSignal, signal, error) : error;
+    } finally {
+      records.cleanup();
     }
   }
 
@@ -617,6 +709,24 @@ export class OpenAIVoiceClient {
       };
     }
   }
+}
+
+/**
+ * Failures that mean the /calls session was reclaimed (or never reachable) rather than that the
+ * request was wrong: the 25 s deadline, the sideband closing or erroring before the transcript, a
+ * rejected sideband handshake. Server `error` events and /calls 4xx are not teardown and never
+ * trigger the fallback.
+ */
+export function isSidebandTeardownError(error: Error): boolean {
+  if (!(error instanceof OpenAIProtocolError)) return false;
+
+  if (error.code === "realtime_timeout") return true;
+
+  if (error.code !== undefined) return false;
+
+  return /closed before|handshake rejected|closed before open|record stream was closed/.test(
+    error.message,
+  );
 }
 
 /** Used by the dispatcher's single 401 → refresh → retry step. */
