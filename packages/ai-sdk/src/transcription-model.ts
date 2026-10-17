@@ -83,7 +83,14 @@ const openaiTranscriptionOptionsSchema = z.object({
     .optional(),
 });
 
-/** `providerOptions.openai` honored by `qgrid.transcription("openai/...")`. */
+/**
+ * `providerOptions.openai` honored by `qgrid.transcription("openai/...")`.
+ *
+ * `prompt` steers vocabulary on `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `gpt-transcribe`
+ * and `gpt-live-transcribe`. `openai/gpt-realtime-whisper` rejects it (the server answers HTTP
+ * 400 before any upstream call). `openai/whisper-1` accepts it but the upstream ignores it
+ * (verified 2026-10-17: "qgrid" still came back as "Thread"), so do not rely on it for spelling.
+ */
 export type QgridOpenAITranscriptionProviderOptions = { language?: string; prompt?: string };
 
 const OPENAI_TRANSCRIPTION_HONORED = new Set(["language", "prompt"]);

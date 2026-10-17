@@ -521,6 +521,9 @@ export const TranscribeInput = z.object({
   mediaType: z.string().regex(/^audio\/[A-Za-z0-9.+-]+$/, "mediaType must be audio/*"),
   language: z.string().min(1).max(16).optional(),
   // OpenAI realtime transcription only: domain vocabulary or style hint for the model.
+  // Honored by gpt-4o-mini-transcribe, gpt-4o-transcribe, gpt-transcribe, gpt-live-transcribe.
+  // gpt-realtime-whisper rejects it (400 before the upstream call); whisper-1 accepts it but the
+  // upstream ignores it, so spelling is not steered.
   prompt: z.string().min(1).max(2_000).optional(),
   ...MediaCallOptions,
 });

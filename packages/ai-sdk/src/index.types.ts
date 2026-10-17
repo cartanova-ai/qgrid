@@ -44,8 +44,9 @@ export type QgridGrokTranscriptionModel = "grok/grok-voice-transcribe-2.0";
 /**
  * OpenAI subscription speech-to-text ids, served through a realtime transcription session.
  * Known limits (2026-10-17 live matrix): `gpt-live-transcribe` and `gpt-realtime-whisper`
- * returned about half of a 60 s clip; `gpt-realtime-whisper` rejects `prompt` (HTTP 400);
- * `whisper-1` accepts but ignores `prompt`.
+ * returned about half of a 60 s clip; `gpt-realtime-whisper` rejects `openai.prompt` (HTTP 400
+ * before any upstream call); `whisper-1` accepts `openai.prompt` without error but the upstream
+ * ignores it, so it cannot steer spelling.
  */
 export type QgridOpenAITranscriptionModel =
   | "openai/gpt-4o-mini-transcribe"
