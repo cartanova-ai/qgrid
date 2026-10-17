@@ -39,13 +39,34 @@ export type QgridVideoModel =
   | "grok/grok-imagine-video-1.5-lite";
 
 /** Grok speech-to-text model ids. */
-export type QgridTranscriptionModel = "grok/grok-voice-transcribe-2.0";
+export type QgridGrokTranscriptionModel = "grok/grok-voice-transcribe-2.0";
+
+/**
+ * OpenAI subscription speech-to-text ids, served through a realtime transcription session. Only
+ * ids that passed every row of the 2026-10-17 live matrix; `gpt-live-transcribe`,
+ * `gpt-realtime-whisper` (truncate long clips) and `whisper-1` (ignores `prompt`) were dropped.
+ */
+export type QgridOpenAITranscriptionModel =
+  | "openai/gpt-4o-mini-transcribe"
+  | "openai/gpt-4o-transcribe"
+  | "openai/gpt-transcribe";
+
+export type QgridTranscriptionModel = QgridGrokTranscriptionModel | QgridOpenAITranscriptionModel;
 
 /**
  * Grok text-to-speech model id. Placeholder: the live probe verified the `/tts` endpoint with the
  * subscription JWT, but no TTS model id was observed (`/speech-models` returned 404).
  */
-export type QgridSpeechModel = "grok/grok-tts";
+export type QgridGrokSpeechModel = "grok/grok-tts";
+
+/**
+ * OpenAI subscription text-to-speech id: the realtime conversational model that repeated every
+ * matrix text verbatim on 2026-10-17 (`gpt-4o-mini-tts`/`tts-1` are unavailable on subscription;
+ * `gpt-realtime-2.1` paraphrased once and `gpt-realtime-1.5` answered instead of repeating).
+ */
+export type QgridOpenAISpeechModel = "openai/gpt-realtime-2.1-mini";
+
+export type QgridSpeechModel = QgridGrokSpeechModel | QgridOpenAISpeechModel;
 
 export type QgridImageProviderConfig = QgridCommonProviderConfig;
 

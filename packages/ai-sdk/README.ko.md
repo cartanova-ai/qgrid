@@ -345,8 +345,8 @@ qgrid는 `grok/*` 모델을 qgrid 대시보드에 등록한 xAI 구독 토큰(�
 | `qgrid(id)` | `grok/grok-4.7`(카탈로그 기본 모델), `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`, 그 밖의 `grok/<id>` | `generateText`, `streamText` |
 | `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0`, `grok/grok-imagine-image-quality` | `generateImage` |
 | `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
-| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0` | `experimental_transcribe` |
-| `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임) | `experimental_generateSpeech` |
+| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI 구독: `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/gpt-transcribe` | `experimental_transcribe` |
+| `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임); OpenAI 구독: `openai/gpt-realtime-2.1-mini` | `experimental_generateSpeech` |
 
 qgrid는 카탈로그에 없는 language model ID를 거부하지 않고 그대로 전달합니다(OpenAI와 같음). 판단은
 subscription backend가 하며 다른 모델로 응답할 수 있으므로, 실제로 실행된 모델은 request log의 응답 모델(또는
@@ -482,6 +482,35 @@ speech.audio.uint8Array;
 
 - `experimental_transcribe`는 bytes로 오디오 형식을 감지하고 실패하면 `audio/wav`를 씁니다. 서버는 `audio/*`가 아닌 값을 거부합니다. transcript에는 segment가 없습니다(`segments: []`).
 - 음성 합성 텍스트는 최대 15,000자입니다. `voice`, `language`, `outputFormat`을 지정하지 않으면 서버 기본값 `ara`, `en`, `mp3`가 쓰이며, live 검증된 조합은 이것뿐입니다. 다른 voice, language(`@ai-sdk/xai`의 `auto` 포함), codec은 그대로 전달되지만 미검증입니다. 서버가 돌려준 오디오 MIME 타입은 `providerMetadata.qgrid.mediaType`에 있고, AI SDK의 `speech.audio.mediaType`은 bytes에서 추정한 값입니다.
+
+### OpenAI 음성 인식과 합성 (ChatGPT 구독)
+
+`openai/` 음성 ID는 qgrid가 Codex에 쓰는 ChatGPT 구독 토큰으로 OpenAI realtime 세션을 사용합니다. 음성 인식은 Codex의 `/realtime/calls` 흐름을, 음성 합성은 텍스트를 그대로 읽는 realtime 대화 모델을 씁니다(구독에는 `gpt-4o-mini-tts`, `tts-1`이 없습니다). 옵션은 `providerOptions.openai` 아래 `@ai-sdk/openai` 이름을 따르고, `providerOptions.qgrid.tokenName`은 `openai/` 접두사가 필요합니다.
+
+```typescript
+const transcript = await transcribe({
+  model: qgrid.transcription("openai/gpt-4o-mini-transcribe"),
+  audio: await readFile("meeting.wav"), // PCM16 WAV 또는 raw PCM만
+  providerOptions: { openai: { language: "en", prompt: "qgrid, Codex" } },
+});
+
+const speech = await generateSpeech({
+  model: qgrid.speech("openai/gpt-realtime-2.1-mini"),
+  text: "Your build is ready.",
+  voice: "marin",
+  outputFormat: "wav",
+  providerOptions: { openai: { instructions: "Calm and brisk." } },
+});
+```
+
+| 모델 | 그대로 전달(`@ai-sdk/openai` 이름) | 변환 | 미지원(경고) |
+| --- | --- | --- | --- |
+| Transcription | `openai.language`, `openai.prompt` | 입력은 PCM16 WAV(`audio/wav`) 또는 raw PCM(`audio/pcm;rate=…;channels=…`)만 가능하며 mp3/webm/ogg는 디코더가 추가되기 전까지 서버가 HTTP 400으로 거부합니다. `durationInSeconds`는 보낸 오디오에서 계산하고 `language`는 요청값을 그대로 돌려줍니다(realtime 세션은 둘 다 보고하지 않음). `segments`는 비어 있습니다 | `openai.temperature`, `openai.include`, `openai.timestampGranularities`, `openai.responseFormat`, `openai.chunkingStrategy`, `openai.streaming` |
+| Speech | `voice`(기본 `marin`; Codex v2 목록 `alloy ash ballad coral echo sage shimmer verse marin cedar`, 그 외는 HTTP 400), `instructions` / `openai.instructions`(원문 그대로 읽기 지시문 뒤에 붙는 스타일 안내) | `outputFormat`은 `wav`(기본, PCM16 24 kHz) 또는 `pcm`; 그 외 값은 `@ai-sdk/openai`가 `mp3`로 되돌리듯 경고와 함께 `wav`로 바뀝니다 | `language`, `speed`, `openai.speed` |
+
+- 음성 인식 한 건의 전체 예산은 25초입니다(realtime call은 생성 약 30초 뒤 정리됨). 7 MiB 인라인 제한(24 kHz PCM 약 2.5분)은 몇 초 안에 끝납니다.
+- 음성 합성은 TTS 모델이 아니라 텍스트를 반복하는 대화 모델입니다. 원문 그대로 읽는지는 짧은 영어 문장에서만 검증했고, 모델이 실제로 말한 transcript를 요청 로그에 함께 남겨 비교할 수 있습니다.
+- 모델별 가용성은 서버 저장소의 `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md` live 매트릭스로 확정합니다. 2026-10-17 검증에서 제외된 ID: `gpt-live-transcribe`, `gpt-realtime-whisper`(60초 클립의 절반 정도만 반환), `whisper-1`(`prompt` 무시), `gpt-realtime-2.1`(13회 중 1회 의역), `gpt-realtime-1.5`(텍스트를 읽지 않고 답변).
 
 ## Telemetry Logger
 
