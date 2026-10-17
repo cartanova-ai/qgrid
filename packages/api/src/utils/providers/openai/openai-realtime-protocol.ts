@@ -54,21 +54,36 @@ export function isOpenAIRealtimeVoice(value: string): value is OpenAIRealtimeVoi
 }
 
 /**
- * Speech-to-text ids that passed every row of the live matrix on 2026-10-17
- * (docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md). Dropped there: gpt-live-transcribe
- * and gpt-realtime-whisper (truncate a 60 s clip to about half), whisper-1 (ignores `prompt`).
+ * Speech-to-text ids reachable on subscription (live matrix 2026-10-17,
+ * docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md). Known limits, kept as documentation
+ * rather than exclusions (user decision): gpt-live-transcribe and gpt-realtime-whisper returned
+ * about half of a 60 s clip; gpt-realtime-whisper rejects `prompt` (server `invalid_value`);
+ * whisper-1 accepts but ignores `prompt`.
  */
 export const OPENAI_TRANSCRIPTION_MODELS = [
   "gpt-4o-mini-transcribe",
   "gpt-4o-transcribe",
   "gpt-transcribe",
+  "gpt-live-transcribe",
+  "gpt-realtime-whisper",
+  "whisper-1",
 ] as const;
 
+/** Rejects `prompt` upstream; qgrid fails fast with a 400 instead of a wasted realtime call. */
+export const OPENAI_TRANSCRIPTION_MODELS_WITHOUT_PROMPT: ReadonlySet<string> = new Set([
+  "gpt-realtime-whisper",
+]);
+
 /**
- * Text-to-speech (realtime conversational) ids that repeated every matrix text verbatim.
- * gpt-realtime-2.1 paraphrased once and gpt-realtime-1.5 answered instead of repeating; dropped.
+ * Text-to-speech (realtime conversational) ids. Verbatim fidelity on the 2026-10-17 matrix:
+ * gpt-realtime-2.1-mini 13/13, gpt-realtime-2.1 12/13 (one paraphrase), gpt-realtime-1.5 6/13
+ * (often answers the text instead of repeating it). Default stays 2.1-mini.
  */
-export const OPENAI_SPEECH_MODELS = ["gpt-realtime-2.1-mini"] as const;
+export const OPENAI_SPEECH_MODELS = [
+  "gpt-realtime-2.1-mini",
+  "gpt-realtime-2.1",
+  "gpt-realtime-1.5",
+] as const;
 
 /**
  * A minimal Opus-only SDP offer. Codex sends a real WebRTC offer; qgrid has no RTP peer and only

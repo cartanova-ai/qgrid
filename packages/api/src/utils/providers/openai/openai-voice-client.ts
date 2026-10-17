@@ -21,6 +21,7 @@ import {
   OPENAI_REALTIME_SAMPLE_RATE,
   OPENAI_REALTIME_SYNTHETIC_SDP,
   OPENAI_REALTIME_WS_URL,
+  OPENAI_TRANSCRIPTION_MODELS_WITHOUT_PROMPT,
   type OpenAIRealtimeCredentials,
   outputAudioDeltaEvent,
   outputAudioTranscriptDoneEvent,
@@ -331,6 +332,9 @@ export class OpenAIVoiceClient {
 
     if (pcm.byteLength === 0) throw new OpenAIVoiceInputError("audio contains no samples");
     const model = request.model ?? OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
+
+    if (request.prompt !== undefined && OPENAI_TRANSCRIPTION_MODELS_WITHOUT_PROMPT.has(model))
+      throw new OpenAIVoiceInputError(`${model} does not accept a prompt`);
     const correlation = { threadId: crypto.randomUUID(), sessionId: crypto.randomUUID() };
     const headers = buildOpenAIRealtimeHeaders(credentials, correlation);
     const { signal, dispose } = this.deadline(request.signal, this.sttDeadlineMs);
