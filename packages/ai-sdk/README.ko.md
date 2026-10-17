@@ -505,7 +505,7 @@ const speech = await generateSpeech({
 
 | 모델 | 그대로 전달(`@ai-sdk/openai` 이름) | 변환 | 미지원(경고) |
 | --- | --- | --- | --- |
-| Transcription | `openai.language`, `openai.prompt` | 입력은 PCM16 WAV(`audio/wav`) 또는 raw PCM(`audio/pcm;rate=…;channels=…`)만 가능하며 mp3/webm/ogg는 디코더가 추가되기 전까지 서버가 HTTP 400으로 거부합니다. `durationInSeconds`는 보낸 오디오에서 계산하고 `language`는 요청값을 그대로 돌려줍니다(realtime 세션은 둘 다 보고하지 않음). `segments`는 비어 있습니다 | `openai.temperature`, `openai.include`, `openai.timestampGranularities`, `openai.responseFormat`, `openai.chunkingStrategy`, `openai.streaming` |
+| Transcription | `openai.language`, `openai.prompt`(`gpt-realtime-whisper`는 HTTP 400으로 거부, `whisper-1`은 받지만 업스트림이 무시) | 입력은 PCM16 WAV(`audio/wav`) 또는 raw PCM(`audio/pcm;rate=…;channels=…`)만 가능하며 mp3/webm/ogg는 디코더가 추가되기 전까지 서버가 HTTP 400으로 거부합니다. `durationInSeconds`는 보낸 오디오에서 계산하고 `language`는 요청값을 그대로 돌려줍니다(realtime 세션은 둘 다 보고하지 않음). `segments`는 비어 있습니다 | `openai.temperature`, `openai.include`, `openai.timestampGranularities`, `openai.responseFormat`, `openai.chunkingStrategy`, `openai.streaming` |
 | Speech | `voice`(기본 `marin`; Codex v2 목록 `alloy ash ballad coral echo sage shimmer verse marin cedar`, 그 외는 HTTP 400), `instructions` / `openai.instructions`(원문 그대로 읽기 지시문 뒤에 붙는 스타일 안내) | `outputFormat`은 `wav`(기본, PCM16 24 kHz) 또는 `pcm`; 그 외 값은 `@ai-sdk/openai`가 `mp3`로 되돌리듯 경고와 함께 `wav`로 바뀝니다 | `language`, `speed`, `openai.speed` |
 
 - 음성 인식 한 건의 전체 예산은 25초입니다(realtime call은 생성 약 30초 뒤 정리됨). 7 MiB 인라인 제한(24 kHz PCM 약 2.5분)은 몇 초 안에 끝납니다.
