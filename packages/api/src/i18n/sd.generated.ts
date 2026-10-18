@@ -235,6 +235,7 @@ const entityLabels = {
   "entity.RequestLog.service_tier": "Requested OpenAI service tier",
   "entity.RequestLog.effort": "effort level",
   "entity.RequestLog.history": "inject_items 히스토리",
+  "entity.RequestLog.input_images": "현재 user turn 입력 이미지",
   "entity.RequestLog.tools": "요청에 장착된 tool 정의 목록",
   "entity.RequestLog.json_schema":
     "structured output 요청의 JSON Schema 원문 (detail 의 response 타입 표시용)",

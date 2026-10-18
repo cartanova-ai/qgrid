@@ -165,6 +165,13 @@
       "desc": "inject_items 히스토리"
     },
     {
+      "name": "input_images",
+      "type": "json",
+      "id": "InputImages",
+      "nullable": true,
+      "desc": "현재 user turn 입력 이미지"
+    },
+    {
       "name": "tools",
       "type": "json",
       "id": "ToolDefinitions",
@@ -297,6 +304,7 @@
       "effort",
       "service_tier",
       "history",
+      "input_images",
       "tools",
       "status",
       "response_json_ok",

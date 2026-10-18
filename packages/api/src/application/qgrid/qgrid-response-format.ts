@@ -101,7 +101,7 @@ export function buildImageGenerationToolSteps(
   }));
 }
 
-function extractInputImagesForToolArgs(args: QueryInput): Array<{
+export function extractInputImagesForToolArgs(args: QueryInput): Array<{
   mediaType?: string;
   data?: string;
   url?: string;

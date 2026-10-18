@@ -7,6 +7,7 @@ import {
 } from "./qgrid-image-generation";
 import {
   buildImageGenerationToolSteps,
+  extractInputImagesForToolArgs,
   formatResponseForLog,
   getImageParts,
 } from "./qgrid-response-format";
@@ -84,6 +85,7 @@ export async function beforeQuery(args: QueryInput): Promise<{
     await cleanupStaleRuns();
   } else {
     await cleanupStaleRuns();
+    const inputImages = extractInputImagesForToolArgs(args);
     requestLogId = await RequestLogModel.createRun({
       user_prompt: args.prompt,
       system_prompt: args.system,
@@ -92,6 +94,7 @@ export async function beforeQuery(args: QueryInput): Promise<{
       service_tier: args.model?.startsWith("openai/") ? args.serviceTier : undefined,
       project_name: args.projectName,
       history: filterHistoryForStorage(args.history),
+      input_images: inputImages.length > 0 ? inputImages : undefined,
       tools: args.tools?.length ? args.tools : undefined,
       is_image_generation: args.imageGeneration === "auto" ? false : args.imageGeneration,
       json_schema: args.jsonSchema ?? null,

@@ -122,6 +122,20 @@ describe("qgrid run lifecycle start", () => {
     expect(createRunMock).toHaveBeenCalledWith(expect.objectContaining({ service_tier: expected }));
   });
 
+  it("logs current-turn input images on the run", async () => {
+    await beforeQuery({
+      prompt: "describe",
+      model: "openai/gpt-6-sol",
+      input: [
+        { type: "text", text: "describe", text_elements: [] },
+        { type: "image", url: "data:image/jpeg;base64,AQID" },
+      ],
+    });
+    expect(createRunMock).toHaveBeenCalledWith(expect.objectContaining({
+      input_images: [{ mediaType: "image/jpeg", data: "AQID", byteSize: 3 }],
+    }));
+  });
+
   it.each([false, true, undefined])("does not log ignored effort when thinking is %s", async (thinking) => {
     await beforeQuery({ prompt: "hi", model: "openai/gpt-6-sol", thinking, effort: "high" });
     expect(createRunMock).toHaveBeenCalledWith(expect.objectContaining({

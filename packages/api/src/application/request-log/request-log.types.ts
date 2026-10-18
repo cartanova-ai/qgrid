@@ -16,6 +16,17 @@ export const HistoryItems = z.array(
 );
 export type HistoryItems = z.infer<typeof HistoryItems>;
 
+// 현재 user turn의 입력 이미지. image_generation tool_args.inputImages와 같은 형태다.
+export const InputImages = z.array(
+  z.object({
+    mediaType: z.string().optional(),
+    data: z.string().optional(),
+    url: z.string().optional(),
+    byteSize: z.number().optional(),
+  }),
+);
+export type InputImages = z.infer<typeof InputImages>;
+
 // 요청에 장착된 tool 정의 목록 — 저장 형태는 QgridTool 계약을 그대로 따른다.
 export const ToolDefinitions = z.array(QgridTool);
 export type ToolDefinitions = z.infer<typeof ToolDefinitions>;
