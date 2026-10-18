@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
   qgrid,
@@ -1381,98 +1381,94 @@ describe("qgrid AI SDK provider", () => {
     expectTypeOf<Extract<keyof QgridOpenAIProviderOptions, "imageGeneration" | "imageGenerationOptions">>().toEqualTypeOf<never>();
   });
 
-  it("does not send image input for normal non-image-generation calls", async () => {
-    let queryBody: unknown;
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        if (url.includes("/query")) {
-          queryBody = init?.body ? JSON.parse(String(init.body)) : {};
-          return new Response(
-            JSON.stringify({
-              text: "ok",
-              content: [{ type: "text", text: "ok" }],
-              finishReason: "stop",
-              model: "gpt-5.5",
-              usage,
-              durationMs: 100,
-              costUsd: 0,
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
-        }
-        return new Response("{}", { status: 200 });
-      }),
-    );
-
-    await qgrid("openai/gpt-5.5").doGenerate({
-      prompt: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "describe this" },
-            { type: "file", mediaType: "image/png", data: "iVBORw0KGgoBAgM" },
-          ],
-        },
-      ],
-    } as never);
-
-    expect((queryBody as { args: Record<string, unknown> }).args).toMatchObject({
-      prompt: "describe this",
+  describe("language-model image input", () => {
+    let queryBody: { args: Record<string, unknown> };
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url.includes("/query")) {
+            queryBody = JSON.parse(String(init?.body));
+            return new Response(
+              JSON.stringify({
+                text: "ok",
+                content: [{ type: "text", text: "ok" }],
+                finishReason: "stop",
+                model: "gpt-5.5",
+                usage,
+                durationMs: 100,
+                costUsd: 0,
+              }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            );
+          }
+          return new Response("{}", { status: 200 });
+        }),
+      );
     });
-    expect((queryBody as { args: Record<string, unknown> }).args.input).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(
-      "[qgrid] 1 image message part(s) were ignored because qgrid language models do not support image input. For image generation or editing, use generateImage with qgrid.image().",
-    );
-  });
+    const prompt = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "earlier" },
+          { type: "file", mediaType: "image/png", data: "iVBORw0KGgoBAgM" },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "ok" }] },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "describe this" },
+          { type: "file", mediaType: "image/jpeg", data: new Uint8Array([1, 2, 3]) },
+        ],
+      },
+    ];
 
-  it("does not send history images for normal non-image-generation calls", async () => {
-    let queryBody: unknown;
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        if (url.includes("/query")) {
-          queryBody = init?.body ? JSON.parse(String(init.body)) : {};
-          return new Response(
-            JSON.stringify({
-              text: "ok",
-              content: [{ type: "text", text: "ok" }],
-              finishReason: "stop",
-              model: "gpt-5.5",
-              usage,
-              durationMs: 100,
-              costUsd: 0,
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
-        }
-        return new Response("{}", { status: 200 });
-      }),
-    );
+    it("sends user images to openai models as input and history input_image", async () => {
+      const result = await qgrid("openai/gpt-5.5").doGenerate({ prompt } as never);
 
-    await qgrid("openai/gpt-5.5").doGenerate({
-      prompt: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "earlier" },
-            { type: "file", mediaType: "image/png", data: "iVBORw0KGgoBAgM" },
-          ],
-        },
-        { role: "assistant", content: [{ type: "text", text: "ok" }] },
-        { role: "user", content: [{ type: "text", text: "continue" }] },
-      ],
-    } as never);
+      expect(queryBody.args).toMatchObject({
+        prompt: "describe this",
+        input: [
+          { type: "text", text: "describe this", text_elements: [] },
+          { type: "image", url: "data:image/jpeg;base64,AQID" },
+        ],
+      });
+      expect(JSON.parse(String(queryBody.args.history))[0].content).toEqual([
+        { type: "input_text", text: "earlier" },
+        { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgoBAgM" },
+      ]);
+      expect(result.warnings).toEqual([]);
+    });
 
-    const history = JSON.parse(
-      String((queryBody as { args: Record<string, unknown> }).args.history),
-    );
-    expect(JSON.stringify(history)).not.toContain("input_image");
-    expect(warn).toHaveBeenCalledWith(
-      "[qgrid] 1 image message part(s) were ignored because qgrid language models do not support image input. For image generation or editing, use generateImage with qgrid.image().",
-    );
+    it("drops images for anthropic models with an unsupported warning", async () => {
+      const result = await qgrid("anthropic/claude-haiku-4-5").doGenerate({ prompt } as never);
+
+      expect(queryBody.args.input).toBeUndefined();
+      expect(String(queryBody.args.history)).not.toContain("input_image");
+      expect(result.warnings).toEqual([
+        expect.objectContaining({ type: "unsupported", feature: "image input" }),
+      ]);
+    });
+
+    it("sends user images to prepareStream for openai streaming", async () => {
+      let prepareBody: { args: Record<string, unknown> } | undefined;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init?: RequestInit) => {
+          prepareBody = JSON.parse(String(init?.body));
+          return new Response("stop", { status: 500 });
+        }),
+      );
+
+      await expect(qgrid("openai/gpt-5.5").doStream({ prompt } as never)).rejects.toThrow(
+        "prepareStream 500",
+      );
+      expect(prepareBody?.args.input).toEqual([
+        { type: "text", text: "describe this", text_elements: [] },
+        { type: "image", url: "data:image/jpeg;base64,AQID" },
+      ]);
+    });
   });
 
 
