@@ -48,8 +48,9 @@ availability or identical limits on qgrid's ChatGPT-subscription route.
 ### GPT-6 Astra, Sol, Luna, and GPT-6.1 Sol
 
 `openai/gpt-6-astra` uses the existing text generation, streaming and structured-output paths.
-The model supports image input, but qgrid's language-model SDK adapter does not support general
-vision: it ignores image parts with a warning. Image generation/editing references belong to
+The model supports image input. The language-model SDK adapter forwards user-message image parts
+as `input_image` (image→text); assistant image parts are dropped with an `unsupported` warning.
+Image generation/editing references belong to
 `generateImage({ model: qgrid.image(...), prompt: { text, images } })`; dashboard chat uses its
 own raw/server image inputs.
 Standard API-equivalent prices per million tokens are input $10, cached input $1, cache write
