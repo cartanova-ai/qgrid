@@ -1,13 +1,19 @@
 import {
   type JSONSchema7,
   type JSONValue,
+  type LanguageModelV3FilePart,
   type LanguageModelV3FunctionTool,
   type LanguageModelV3Message,
 } from "@ai-sdk/provider";
 import { type ModelMessage, type SystemModelMessage } from "ai";
 import { z } from "zod";
 
-import { type AppendStepInput, type CreateRunInput, type FinishRunInput } from "./index.types";
+import {
+  type AppendStepInput,
+  type CreateRunInput,
+  type FinishRunInput,
+  type QgridInputPart,
+} from "./index.types";
 
 const createRunOutputSchema = z.object({ requestLogId: z.number() });
 const appendStepOutputSchema = z.object({ stepId: z.number() });
@@ -190,12 +196,14 @@ export async function* parseSSE(
 
 type PromptTextPart = { type: "input_text"; text: string };
 
+type ResponsesUserPart = PromptTextPart | { type: "input_image"; image_url: string };
+
 /** Responses-style history item replayed to the qgrid server. */
 export type PromptHistoryItem =
   | {
       type: "message";
       role: "user";
-      content: Array<PromptTextPart | { type: "input_image"; image_url: string }>;
+      content: ResponsesUserPart[];
     }
   | { type: "message"; role: "assistant"; content: Array<{ type: "output_text"; text: string }> }
   | { type: "function_call"; name: string; arguments: string; call_id: string }
@@ -205,23 +213,45 @@ type ExtractPromptAndHistoryResult = {
   prompt: string;
   system: string | undefined;
   history: PromptHistoryItem[];
+  /** Current user turn parts; present only when it carries an image. */
+  input?: QgridInputPart[];
+  imageUrls: string[];
   droppedImageCount: number;
 };
 
 type UserContent = Extract<LanguageModelV3Message, { role: "user" }>["content"];
 
-type PromptContentPart = Extract<
+type MessagePart = Extract<
   LanguageModelV3Message,
   { role: "user" | "assistant" }
 >["content"][number];
 
+interface PromptParts {
+  text: string;
+  parts: ResponsesUserPart[];
+  imageUrls: string[];
+  droppedImageCount: number;
+}
+
 // Prompt helpers
+// User image parts are forwarded only with includeImages; assistant images are always dropped.
 export function extractPromptAndHistory(
   messages: LanguageModelV3Message[],
+  options: { includeImages?: boolean } = {},
 ): ExtractPromptAndHistoryResult {
+  const includeImages = options.includeImages ?? false;
+  const imageUrls: string[] = [];
   let droppedImageCount = 0;
   let system: string | undefined;
   const nonSystem: LanguageModelV3Message[] = [];
+
+  const extractUser = (content: UserContent) => {
+    const extracted = extractPromptParts(content, includeImages);
+    imageUrls.push(...extracted.imageUrls);
+    droppedImageCount += extracted.droppedImageCount;
+
+    return extracted;
+  };
 
   for (const msg of messages) {
     if (msg.role === "system") {
@@ -232,30 +262,17 @@ export function extractPromptAndHistory(
   }
 
   if (nonSystem.length === 0) {
-    return { prompt: "", system, history: [], droppedImageCount };
-  }
-
-  const first = nonSystem[0];
-
-  if (nonSystem.length === 1 && first.role === "user") {
-    const extracted = extractPromptTextParts(first.content);
-    droppedImageCount += extracted.droppedImageCount;
-
-    return {
-      prompt: extracted.text,
-      system,
-      history: [],
-      droppedImageCount,
-    };
+    return { prompt: "", system, history: [], imageUrls, droppedImageCount };
   }
 
   const last = nonSystem[nonSystem.length - 1];
   let prompt = "";
+  let input: QgridInputPart[] | undefined;
 
   if (last.role === "user") {
-    const extracted = extractPromptTextParts(last.content);
+    const extracted = extractUser(last.content);
     prompt = extracted.text;
-    droppedImageCount += extracted.droppedImageCount;
+    input = inputPartsFromPromptParts(extracted.parts);
   }
 
   const historyEnd = last.role === "user" ? nonSystem.length - 1 : nonSystem.length;
@@ -266,8 +283,7 @@ export function extractPromptAndHistory(
     const msg = nonSystem[i];
 
     if (msg.role === "user") {
-      const extracted = extractPromptTextParts(msg.content);
-      droppedImageCount += extracted.droppedImageCount;
+      const extracted = extractUser(msg.content);
       const content = extracted.parts;
       history.push({
         type: "message",
@@ -311,32 +327,71 @@ export function extractPromptAndHistory(
     }
   }
 
-  return { prompt, system, history, droppedImageCount };
+  const result: ExtractPromptAndHistoryResult = {
+    prompt,
+    system,
+    history,
+    imageUrls,
+    droppedImageCount,
+  };
+
+  if (input) result.input = input;
+
+  return result;
 }
 
-interface PromptTextParts {
-  text: string;
-  parts: PromptTextPart[];
-  droppedImageCount: number;
-}
-
-function extractPromptTextParts(content: UserContent): PromptTextParts {
-  const parts: PromptTextPart[] = [];
+function extractPromptParts(content: UserContent, includeImages: boolean): PromptParts {
+  const parts: ResponsesUserPart[] = [];
+  const texts: string[] = [];
+  const imageUrls: string[] = [];
   let droppedImageCount = 0;
 
   for (const part of content) {
     if ("text" in part) {
       parts.push({ type: "input_text", text: part.text });
+      texts.push(part.text);
     } else if (isImagePart(part)) {
-      droppedImageCount++;
+      const url = includeImages ? imageUrl(part) : undefined;
+
+      if (url) {
+        parts.push({ type: "input_image", image_url: url });
+        imageUrls.push(url);
+      } else {
+        droppedImageCount++;
+      }
     }
   }
 
-  return { text: parts.map((part) => part.text).join("\n"), parts, droppedImageCount };
+  return { text: texts.join("\n"), parts, imageUrls, droppedImageCount };
 }
 
-function isImagePart(part: PromptContentPart): boolean {
+function inputPartsFromPromptParts(parts: ResponsesUserPart[]): QgridInputPart[] | undefined {
+  if (!parts.some((part) => part.type === "input_image")) return undefined;
+
+  return parts.flatMap((part): QgridInputPart[] => {
+    if (part.type === "input_image") return [{ type: "image", url: part.image_url }];
+
+    return part.text ? [{ type: "text", text: part.text, text_elements: [] }] : [];
+  });
+}
+
+function isImagePart(part: MessagePart): part is LanguageModelV3FilePart {
   return part.type === "file" && part.mediaType.toLowerCase().startsWith("image/");
+}
+
+// AI SDK image file part → URL the Responses API accepts (data:/http(s):), else undefined.
+function imageUrl(part: LanguageModelV3FilePart): string | undefined {
+  const mediaType = part.mediaType === "image/*" ? "image/png" : part.mediaType;
+  const { data } = part;
+
+  if (data instanceof URL) return /^https?:$/i.test(data.protocol) ? data.toString() : undefined;
+
+  if (data instanceof Uint8Array) return `data:${mediaType};base64,${bytesToBase64(data)}`;
+
+  if (/^(https?:|data:)/i.test(data)) return data;
+
+  // Any other scheme is not base64 payload.
+  return /^[a-z][a-z0-9+.-]*:/i.test(data) ? undefined : `data:${mediaType};base64,${data}`;
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
@@ -363,14 +418,14 @@ export function assertImageInputFitsJsonTransport(imageUrls: string[]): void {
 
     if (url.length > MAX_IMAGE_INPUT_DATA_URL_CHARS) {
       throw new Error(
-        `qgrid: image input is too large for JSON transport (${url.length} chars). Compress or resize it before passing it to generateImage, for example as WebP/JPEG under ${MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL} total base64 data-url chars.`,
+        `qgrid: image input is too large for JSON transport (${url.length} chars). Compress or resize it before passing it to qgrid, for example as WebP/JPEG under ${MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL} total base64 data-url chars.`,
       );
     }
   }
 
   if (totalDataUrlChars > MAX_IMAGE_INPUT_DATA_URL_CHARS) {
     throw new Error(
-      `qgrid: image inputs are too large for JSON transport (${totalDataUrlChars} total chars). Compress or resize them before passing them to generateImage, for example as WebP/JPEG under ${MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL} total base64 data-url chars.`,
+      `qgrid: image inputs are too large for JSON transport (${totalDataUrlChars} total chars). Compress or resize them before passing them to qgrid, for example as WebP/JPEG under ${MAX_IMAGE_INPUT_DATA_URL_CHARS_LABEL} total base64 data-url chars.`,
     );
   }
 }

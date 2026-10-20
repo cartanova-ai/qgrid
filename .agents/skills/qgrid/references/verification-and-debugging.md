@@ -202,9 +202,9 @@ Generated SSE handlers missing a newly added event field:
 
 - Either removed key makes `generateText` and `streamText` fail before transport. Use `generateImage` with `qgrid.image()` and flat `QgridImageProviderOptions` for image output.
 
-`qgrid language models do not support image input`:
+`unsupported` warning with `feature: "image input"`:
 
-- General vision remains unsupported by the language adapter; it ignores image parts with this warning. Reference-image editing belongs in `generateImage`'s `prompt: { text, images }`.
+- The language adapter dropped image parts: all of them on `anthropic/` models, and assistant-message images on any model. User-message images on `openai/` models are sent as image input. Reference-image editing belongs in `generateImage`'s `prompt: { text, images }`.
 
 `image generation is not supported on the Anthropic route`:
 
@@ -216,7 +216,7 @@ Generated SSE handlers missing a newly added event field:
 
 `reference image input is too large for JSON transport`:
 
-- AI SDK reference-image guard. The client passed a base64 image data URL large enough to likely exceed qgrid's JSON request body transport. Compress or resize the image before calling `generateImage`, preferably as WebP/JPEG.
+- AI SDK reference-image guard. The client passed a base64 image data URL large enough to likely exceed qgrid's JSON request body transport. Compress or resize the image before calling `generateImage` or an `openai/` language model with image input, preferably as WebP/JPEG.
 
 `qgrid query transport failed: response headers timed out`:
 

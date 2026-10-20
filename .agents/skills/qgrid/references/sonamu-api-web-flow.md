@@ -78,7 +78,7 @@ Chat model presets: the model `<select>` lists the served subset of `QgridSuppor
 
 The monit tab's vitals strip shows per-provider in-flight counts, an in-flight sparkline, token chips with quota gauges (fed by the dispatcher's 60-second rate-limits cache; `resetsAt` arrives as ms epoch), and a 1-hour per-provider request/error/cache-hit stats line polled separately every 30 seconds.
 
-Reference input images for image generation render in the detail view under the user prompt from the first synthetic `image_generation` step's `tool_args.inputImages`. Keep the prompt itself text-only, redact large base64 in request JSON views, and avoid rendering duplicate input previews for multi-output image turns.
+Current-turn input images render in the detail view under the user prompt from `request_logs.input_images` (subset `A` only, not the list subset). Logs created before that column fall back to the first synthetic `image_generation` step's `tool_args.inputImages`. Keep the prompt itself text-only, redact large base64 in request JSON views, and avoid rendering duplicate input previews for multi-output image turns.
 
 ## Verification
 

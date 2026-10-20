@@ -334,7 +334,9 @@ alpha when saving. Fully opaque, entirely empty, or invalid PNG results fail exp
 not remove backgrounds or resize output. Apply any final crop/resize policy in the consuming app.
 
 `generateText` and `streamText` use the language-model interface, which has no image-generation
-options. General vision is also unsupported there: image parts are ignored with a warning. Use
+options. Image input (image→text) works on `openai/` models: user-message image parts are sent
+to the model. `anthropic/` models and assistant-message images drop image parts and report an
+`unsupported` warning in `result.warnings`. Use
 `generateImage` references when the intended result is a generated or edited image. Dashboard
 `qgrid_chat` registers an internal image tool by default: its chat model decides whether to
 generate an image, writes a self-contained prompt, and selects up to five recent conversation

@@ -121,7 +121,7 @@ type LoggedInputImage = {
   byteSize?: number;
 };
 
-function extractInputImagesForToolArgs(args: QueryInput): LoggedInputImage[] {
+export function extractInputImagesForToolArgs(args: QueryInput): LoggedInputImage[] {
   const images = args.input?.filter((item) => item.type === "image") ?? [];
 
   return images.map((image) => {

@@ -29,6 +29,7 @@ import {
   type HistoryItems,
   type RequestLogListParams,
   type RequestLogSaveParams,
+  type InputImages,
   ToolDefinitions,
   type ToolView,
 } from "./request-log.types";
@@ -592,6 +593,7 @@ class RequestLogModelClass extends BaseModelClass<
     service_tier?: string | null;
     project_name?: string | null;
     history?: HistoryItems;
+    input_images?: InputImages;
     tools?: ToolDefinitions;
     is_image_generation?: boolean;
     is_structured?: boolean;
@@ -624,6 +626,8 @@ class RequestLogModelClass extends BaseModelClass<
     };
 
     if (params.history !== undefined) row.history = params.history;
+
+    if (params.input_images) row.input_images = params.input_images;
 
     if (params.tools !== undefined) row.tools = params.tools;
     wdb.ubRegister("request_logs", row);

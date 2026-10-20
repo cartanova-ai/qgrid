@@ -45,6 +45,8 @@ export default {
   "entity.listManage": (name: string) => `${name} 목록 관리`,
   "error.alreadyProcessed": "이미 처리되었습니다",
   "error.badRequest": "잘못된 요청입니다",
+  // Upstream and validation messages that are shown to the caller verbatim in every locale.
+  "error.detail": (detail: string) => detail,
   "error.duplicateRow": "중복된 데이터입니다",
   "error.entityNotFound": (name: string, id: number | string) => `존재하지 않는 ${name} ID ${id}`,
   "error.forbidden": "권한이 없습니다",

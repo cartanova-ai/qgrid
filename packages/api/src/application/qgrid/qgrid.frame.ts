@@ -1890,6 +1890,9 @@ class QgridFrameClass extends BaseFrameClass {
       disconnect.dispose();
     }
 
+    // An overlapping poll may have finished the job while this one awaited upstream.
+    if (job.final) return job.final;
+
     const status: VideoStatusOutput = { status: summary.status, mimeType: "video/mp4" };
 
     if (job.requestLogId !== undefined) status.requestLogId = job.requestLogId;
@@ -1910,7 +1913,7 @@ class QgridFrameClass extends BaseFrameClass {
 
     if (summary.error) final.error = summary.error;
 
-    // Set before any await: concurrent polls return this result instead of logging again.
+    // Set before finishVideoRun's await: overlapping polls return this result instead of logging again.
     job.final = final;
     await finishVideoRun(job, final, cost);
 

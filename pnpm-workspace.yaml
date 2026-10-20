@@ -233,3 +233,19 @@ overrides:
   axios@>=0.8.1 <0.28.0: ">=0.28.0"
   mdast-util-to-hast@>=13.0.0 <13.2.1: ">=13.2.1"
   prismjs@<1.30.0: ">=1.30.0"
+
+minimumReleaseAgeExclude:
+  - sonamu@0.11.16
+
+# Upstream peer ranges lag the versions their own parents install; remove each once upstream widens it.
+peerDependencyRules:
+  allowedVersions:
+    # @sonamu-kit/tasks pins logtape 2.0.0 while sonamu 0.11 installs 2.2.2.
+    "@sonamu-kit/tasks>@logtape/logtape": 2.2.2
+    # bentocache still declares kysely ^0.27; better-auth 1.6 installs 0.28.
+    bentocache>kysely: ^0.28.0
+    # @sonamu-kit/react-components depends on react-day-picker 8, which predates React 19 and date-fns 4.
+    react-day-picker>react: ^19.0.0
+    react-day-picker>date-fns: ^4.0.0
+    # tsdown's dts plugin accepts TypeScript ~7.0; sonamu 0.11 requires the 7.1 dev build.
+    rolldown-plugin-dts>typescript: 7.1.0-dev.20260831.1

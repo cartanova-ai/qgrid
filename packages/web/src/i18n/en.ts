@@ -47,6 +47,7 @@ export default {
   "entity.listManage": (name: string) => `Manage ${name} List`,
   "error.alreadyProcessed": "Already processed",
   "error.badRequest": "Bad request",
+  "error.detail": (detail: string) => detail,
   "error.duplicateRow": "Duplicate data",
   "error.forbidden": "Forbidden",
   "error.internalServerError": "Internal server error",

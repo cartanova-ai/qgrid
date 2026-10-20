@@ -8,10 +8,12 @@ import {
 } from "./qgrid-image-generation";
 import {
   buildImageGenerationToolSteps,
+  extractInputImagesForToolArgs,
   formatResponseForLog,
   getImageParts,
 } from "./qgrid-response-format";
 import { type QgridRunContext, type QueryInput, type QueryOutput } from "./qgrid.types";
+import { composeSystemWithSchemaContract } from "./schema-prompt";
 
 const logger = getLogger(["qgrid", "run-lifecycle"]);
 const STALE_RUN_THRESHOLD_MS = 30 * 60 * 1000;
@@ -102,14 +104,18 @@ export async function beforeQuery(args: QueryInput): Promise<{
     await cleanupStaleRuns();
   } else {
     await cleanupStaleRuns();
+    const inputImages = extractInputImagesForToolArgs(args);
     requestLogId = await RequestLogModel.createRun({
       user_prompt: args.prompt,
-      system_prompt: args.system,
+      system_prompt: args.model?.startsWith("anthropic/")
+        ? composeSystemWithSchemaContract(args.system, args)
+        : args.system,
       requested_model_name: args.model,
       effort: args.thinking === false ? undefined : args.effort,
       service_tier: args.model?.startsWith("openai/") ? args.serviceTier : undefined,
       project_name: args.projectName,
       history: filterHistoryForStorage(args.history),
+      input_images: inputImages.length > 0 ? inputImages : undefined,
       tools: args.tools?.length ? args.tools : undefined,
       is_image_generation: args.imageGeneration === "auto" ? false : args.imageGeneration,
       json_schema: args.jsonSchema ?? null,

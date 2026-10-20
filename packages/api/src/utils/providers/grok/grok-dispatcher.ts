@@ -774,18 +774,24 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
 
   // ---- Eligibility (§5.1) -------------------------------------------------
 
-  /** `held` counts reservations the caller already holds on `token` (re-checks mid-request). */
+  /**
+   * `held` counts reservations the caller already holds on `token` (re-checks mid-request).
+   * `ungated` skips the admission gates and checks only that the credentials are usable.
+   */
   ineligibility(
     token: GrokTokenState,
     requestClass: GrokRequestClass,
     now: number,
     held = 0,
+    ungated = false,
   ): IneligibleReason | undefined {
     if (!token.credentials || token.invalidReason) return "inactive";
 
     if (token.reauthRequired) return "reauth";
 
     if (token.refreshFailedUntil > now) return "refresh_failed";
+
+    if (ungated) return undefined;
     const settings = token.settings?.value;
 
     if (settings?.kind === "ok" && settings.onDemandEnabled === true) return "on_demand";
@@ -1063,6 +1069,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       excluded?: ReadonlySet<number>;
       signal?: AbortSignal;
       deadline?: number;
+      ungated?: boolean;
     } = {},
   ): Promise<Reservation> {
     this.checkVersionGate(requestClass);
@@ -1076,7 +1083,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
           await this.prefetch(preferred, options.signal);
           options.signal?.throwIfAborted();
           const now = this.now();
-          const reason = this.ineligibility(preferred, requestClass, now);
+          const reason = this.ineligibility(preferred, requestClass, now, 0, options.ungated);
 
           if (!reason) return this.reserve(preferred);
 
@@ -1393,7 +1400,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
    */
   async withAttempts<T>(
     requestClass: GrokRequestClass,
-    selection: MediaTokenSelection & { signal: AbortSignal; deadline?: number },
+    selection: MediaTokenSelection & { signal: AbortSignal; deadline?: number; ungated?: boolean },
     attempt: (
       token: GrokTokenState,
       credentials: GrokCredentials,
@@ -1439,7 +1446,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
           const blocked =
             credentials.accessToken === gated?.accessToken
               ? undefined
-              : await this.regate(token, requestClass, selection.signal);
+              : await this.regate(token, requestClass, selection.signal, selection.ungated);
 
           gated = credentials;
 
@@ -1524,10 +1531,11 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     token: GrokTokenState,
     requestClass: GrokRequestClass,
     signal: AbortSignal,
+    ungated?: boolean,
   ): Promise<Error | undefined> {
     await this.prefetch(token, signal);
     signal.throwIfAborted();
-    const reason = this.ineligibility(token, requestClass, this.now(), 1);
+    const reason = this.ineligibility(token, requestClass, this.now(), 1, ungated);
 
     return reason ? this.preferredError(token, reason) : undefined;
   }
@@ -1889,7 +1897,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
 
   async runPort<T>(
     requestClass: GrokRequestClass,
-    selection: MediaTokenSelection,
+    selection: MediaTokenSelection & { ungated?: boolean },
     signal: AbortSignal | undefined,
     call: (credentials: GrokCredentials) => Promise<T>,
   ): Promise<MediaDispatchResult<T>> {
@@ -1900,6 +1908,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       {
         preferredTokenId: selection.preferredTokenId,
         requirePreferredToken: selection.requirePreferredToken,
+        ungated: selection.ungated,
         signal: active,
       },
       async (token, credentials) => ({
@@ -1964,7 +1973,10 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     );
   }
 
-  /** Polls on the token that started the job; no selection, no failover. */
+  /**
+   * Polls on the token that started the job; no selection, no failover. The job is already
+   * admitted (and billed), so quota, cooldown and capacity gates must not strand its result.
+   */
   async getVideo(
     tokenId: number,
     requestId: string,
@@ -1974,7 +1986,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
 
     return this.runPort(
       "video",
-      { preferredTokenId: tokenId, requirePreferredToken: true },
+      { preferredTokenId: tokenId, requirePreferredToken: true, ungated: true },
       signal,
       (credentials) => media.getVideo(mediaAuth(credentials), requestId, signal),
     );

@@ -87,5 +87,15 @@
     ".superpowers/**",
     ".windsurf/**",
     "tools/oxlint/anti-slop/**"
+  ],
+  "overrides": [
+    {
+      // Sonamu lints generated code from a temp file at the package root, where its relative
+      // imports do not resolve; type-aware fixes there see `any` and drop required assertions.
+      "files": ["**/.sonamu-oxlint-*.ts"],
+      "rules": {
+        "typescript/no-unnecessary-type-assertion": "off"
+      }
+    }
   ]
 }

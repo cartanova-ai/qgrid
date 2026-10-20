@@ -112,6 +112,25 @@ describe("qgrid run lifecycle start", () => {
     });
   });
 
+  it.each([undefined, "Caller system"])(
+    "logs the Anthropic schema instructions with system=%s",
+    async (system) => {
+      const jsonSchema = '{"type":"object","properties":{"answer":{"type":"string"}}}';
+      await beforeQuery({
+        prompt: "hi",
+        model: "anthropic/claude-opus-5-5",
+        system,
+        jsonSchema,
+      });
+
+      const saved = createRunMock.mock.calls[0]![0];
+      expect(saved.system_prompt).toContain("## Output Format");
+      expect(saved.system_prompt).toContain(`<output-json-schema>\n${jsonSchema}\n</output-json-schema>`);
+      if (system) expect(saved.system_prompt).toMatch(/^Caller system\n\n/);
+      expect(saved.json_schema).toBe(jsonSchema);
+    },
+  );
+
   it.each([
     ["openai/gpt-6-sol", "fast", "fast"],
     ["openai/gpt-6-sol", "flex", "flex"],
@@ -120,6 +139,20 @@ describe("qgrid run lifecycle start", () => {
   ] as const)("logs service tier for %s with %s", async (model, serviceTier, expected) => {
     await beforeQuery({ prompt: "hi", model, serviceTier });
     expect(createRunMock).toHaveBeenCalledWith(expect.objectContaining({ service_tier: expected }));
+  });
+
+  it("logs current-turn input images on the run", async () => {
+    await beforeQuery({
+      prompt: "describe",
+      model: "openai/gpt-6-sol",
+      input: [
+        { type: "text", text: "describe", text_elements: [] },
+        { type: "image", url: "data:image/jpeg;base64,AQID" },
+      ],
+    });
+    expect(createRunMock).toHaveBeenCalledWith(expect.objectContaining({
+      input_images: [{ mediaType: "image/jpeg", data: "AQID", byteSize: 3 }],
+    }));
   });
 
   it.each([false, true, undefined])("does not log ignored effort when thinking is %s", async (thinking) => {

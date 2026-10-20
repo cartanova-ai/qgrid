@@ -75,13 +75,6 @@ const threadCoordStore = new Map<string, { coord: QgridThreadCoord; expiresAt: n
 const CACHE_AFFINITY_NAMESPACE = "qgrid-cache-affinity-v1";
 const MAX_THREAD_COORDS = 1_000;
 
-function warnDroppedImages(droppedImageCount: number): void {
-  if (droppedImageCount <= 0) return;
-  console.warn(
-    `[qgrid] ${droppedImageCount} image message part(s) were ignored because qgrid language models do not support image input. For image generation or editing, use generateImage with qgrid.image().`,
-  );
-}
-
 function isGrokModel(modelId: string): boolean {
   return modelId.startsWith("grok/");
 }
@@ -149,18 +142,24 @@ type PreparedPrompt = {
   system: string | undefined;
   history: PromptHistoryItem[];
   input?: QgridInputPart[];
+  droppedImageCount: number;
 };
 
 // Grok keeps user image parts: the current turn's images travel in `input`, earlier user turns
-// carry Responses-style `input_image` parts in history. Other providers drop images with a warning.
+// carry Responses-style `input_image` parts in history. openai/ keeps them through the shared
+// extractor; other providers drop images with a warning.
 function preparePrompt(modelId: string, messages: LanguageModelV3Message[]): PreparedPrompt {
-  const extracted = extractPromptAndHistory(messages);
-
   if (!isGrokModel(modelId)) {
-    warnDroppedImages(extracted.droppedImageCount);
+    const { imageUrls, ...prepared } = extractPromptAndHistory(messages, {
+      includeImages: modelId.startsWith("openai/"),
+    });
 
-    return extracted;
+    assertImageInputFitsJsonTransport(imageUrls);
+
+    return prepared;
   }
+
+  const extracted = extractPromptAndHistory(messages);
 
   const userMessages = messages.filter(
     (message): message is UserMessage => message.role === "user",
@@ -222,9 +221,13 @@ function preparePrompt(modelId: string, messages: LanguageModelV3Message[]): Pre
   }
 
   assertImageInputFitsJsonTransport(imageUrls);
-  warnDroppedImages(extracted.droppedImageCount - keptImageCount);
 
-  const prepared: PreparedPrompt = { prompt: extracted.prompt, system: extracted.system, history };
+  const prepared: PreparedPrompt = {
+    prompt: extracted.prompt,
+    system: extracted.system,
+    history,
+    droppedImageCount: extracted.droppedImageCount - keptImageCount,
+  };
 
   if (input) prepared.input = input;
 
@@ -369,19 +372,27 @@ function setThreadCoord(sessionKey: string, coord: QgridThreadCoord): void {
 
 function providerWarnings(
   options: QgridResolvedProviderOptions,
+  droppedImageCount: number,
   xaiWarnings: SharedV3Warning[] = [],
 ): LanguageModelV3GenerateResult["warnings"] {
-  const warnings: SharedV3Warning[] =
-    options.fallbackModels === undefined
-      ? []
-      : [
-          {
-            type: "unsupported",
-            feature: "providerOptions.qgrid.fallbackModels",
-            details:
-              "fallbackModels is deprecated and ignored; qgrid does not implement model fallback routing.",
-          },
-        ];
+  const warnings: SharedV3Warning[] = [];
+
+  if (options.fallbackModels !== undefined) {
+    warnings.push({
+      type: "unsupported",
+      feature: "providerOptions.qgrid.fallbackModels",
+      details:
+        "fallbackModels is deprecated and ignored; qgrid does not implement model fallback routing.",
+    });
+  }
+
+  if (droppedImageCount > 0) {
+    warnings.push({
+      type: "unsupported",
+      feature: "image input",
+      details: `${droppedImageCount} image part(s) were ignored. Only user-message images on openai/ and grok/ models are sent; for image generation or editing, use generateImage with qgrid.image().`,
+    });
+  }
 
   return [...warnings, ...xaiWarnings];
 }
@@ -599,7 +610,11 @@ export function qgrid(
       const hasTools = tools && tools.length > 0;
       const qgridOptions = getQgridProviderOptions(options);
       const xaiOptions = resolveXaiOptions(modelId, options);
-      const { prompt, system, history, input } = preparePrompt(modelId, options.prompt);
+
+      const { prompt, system, history, input, droppedImageCount } = preparePrompt(
+        modelId,
+        options.prompt,
+      );
 
       const effectiveEffort =
         qgridOptions.thinking === false
@@ -750,7 +765,7 @@ export function qgrid(
         content,
         finishReason,
         usage: toAiSdkUsage(data.usage),
-        warnings: providerWarnings(qgridOptions, xaiOptions.warnings),
+        warnings: providerWarnings(qgridOptions, droppedImageCount, xaiOptions.warnings),
         providerMetadata: qgridProviderMetadata(data),
         response: { modelId: data.model },
       };
@@ -776,7 +791,12 @@ export function qgrid(
       const timeoutMs = qgridOptions.timeoutMs;
       const logger = qgridOptions.logger;
       const tokenName = qgridOptions.tokenName;
-      const { prompt, system, history, input } = preparePrompt(modelId, options.prompt);
+
+      const { prompt, system, history, input, droppedImageCount } = preparePrompt(
+        modelId,
+        options.prompt,
+      );
+
       const sessionKey = qgridOptions.sessionKey ?? xaiOptions.promptCacheKey;
       const cacheAffinityKey = await deriveCacheAffinityKey(modelId, sessionKey);
 
@@ -900,7 +920,7 @@ export function qgrid(
         try {
           controller.enqueue({
             type: "stream-start",
-            warnings: providerWarnings(qgridOptions, xaiOptions.warnings),
+            warnings: providerWarnings(qgridOptions, droppedImageCount, xaiOptions.warnings),
           });
           let streamCompleted = false;
 
