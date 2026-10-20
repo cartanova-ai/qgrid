@@ -10,6 +10,7 @@
  * @see https://platform.claude.com/docs/en/about-claude/pricing
  */
 
+import { GROK_USD_PER_TICK } from "../grok/grok-constants";
 import { type OpenAIEffort } from "./effort";
 
 export interface ModelCosts {
@@ -227,6 +228,72 @@ const ANTHROPIC_COSTS: Record<string, ModelCosts> = {
 // @see https://help.openai.com/en/articles/20001106-codex-rate-card
 const DEFAULT_COSTS: ModelCosts = { inputTokens: 3, outputTokens: 15, cachedInputTokens: 0.3 };
 
+// -- Grok (xAI) --
+//
+// Fallback only. Grok chat, image and video responses report `usage.cost_in_usd_ticks`, which is
+// authoritative (costSource "provider"); these rows price a response that omitted it.
+// Source: api.x.ai/v1/language-models and /image-generation-models read with the subscription JWT
+// in the 2026-10-16 live probe. One tick is 1e-10 USD (grok-4.7 lists 20000/5000/60000 ticks per
+// input/cached/output token against the public $2/$0.50/$6 per million).
+const GROK_TICKS_PER_USD = Math.round(1 / GROK_USD_PER_TICK);
+
+/** USD for a provider-reported `cost_in_usd_ticks` amount. */
+export function usdFromGrokTicks(ticks: number): number {
+  return ticks / GROK_TICKS_PER_USD;
+}
+
+function grokTokenCosts(input: number, cached: number, output: number): ModelCosts {
+  // ticks per token -> USD per 1M tokens.
+  const perMillion = (ticks: number) => (ticks * 1_000_000) / GROK_TICKS_PER_USD;
+  return {
+    inputTokens: perMillion(input),
+    cachedInputTokens: perMillion(cached),
+    outputTokens: perMillion(output),
+  };
+}
+
+const GROK_COSTS: Record<string, ModelCosts> = {
+  "grok-4.7": grokTokenCosts(20_000, 5_000, 60_000),
+  "grok-4.6": grokTokenCosts(20_000, 5_000, 60_000),
+  "grok-4.5": grokTokenCosts(20_000, 5_000, 60_000),
+};
+
+// Ticks per generated image at the default 1k resolution (the probe's quality 1k image cost exactly
+// this amount). Unlisted image models have no estimate.
+const GROK_IMAGE_PRICE_TICKS: Record<string, number> = {
+  "grok-imagine-image-quality": 500_000_000,
+};
+
+export interface GrokMediaCost {
+  costUsd: number;
+  costSource: "provider" | "pricing_table";
+  /** Ticks reported by xAI, or the catalog-price estimate in ticks. */
+  ticks: number;
+}
+
+/**
+ * Image cost: the reported ticks when present, otherwise the per-image catalog price times the
+ * image count. Undefined when neither is known, so callers store an unknown cost, not a guess.
+ */
+export function grokImageCost(
+  model: string,
+  imageCount: number,
+  reportedTicks?: number,
+): GrokMediaCost | undefined {
+  if (reportedTicks !== undefined) return grokReportedCost(reportedTicks);
+  const perImage = GROK_IMAGE_PRICE_TICKS[model.split("/").pop() ?? model];
+  if (perImage === undefined) return undefined;
+  const ticks = perImage * imageCount;
+  return { costUsd: usdFromGrokTicks(ticks), costSource: "pricing_table", ticks };
+}
+
+/** Video/voice cost: only a provider-reported amount; there is no catalog estimate. */
+export function grokReportedCost(reportedTicks: number | undefined): GrokMediaCost | undefined {
+  return reportedTicks === undefined
+    ? undefined
+    : { costUsd: usdFromGrokTicks(reportedTicks), costSource: "provider", ticks: reportedTicks };
+}
+
 /** Codex 백엔드가 이 모델에 허용하는 최대 effort. 카탈로그에 없는 모델은 xhigh 까지다. */
 export function openaiModelMaxEffort(model: string): OpenAIEffort {
   return OPENAI_COSTS[model]?.maxEffort ?? "xhigh";
@@ -234,7 +301,12 @@ export function openaiModelMaxEffort(model: string): OpenAIEffort {
 
 export function getModelCosts(model: string): ModelCosts {
   const normalizedModel = (model.split("/").pop() ?? model).replace(/\[1m\]$/i, "");
-  return OPENAI_COSTS[normalizedModel] ?? ANTHROPIC_COSTS[normalizedModel] ?? DEFAULT_COSTS;
+  return (
+    OPENAI_COSTS[normalizedModel] ??
+    ANTHROPIC_COSTS[normalizedModel] ??
+    GROK_COSTS[normalizedModel] ??
+    DEFAULT_COSTS
+  );
 }
 
 // Verified Fast API rates for the currently served Codex models (2026-10-16).

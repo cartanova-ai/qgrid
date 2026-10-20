@@ -157,6 +157,30 @@ export const QgridToolResultInput = z.object({
 });
 export type QgridToolResultInput = z.infer<typeof QgridToolResultInput>;
 
+// Opaque per-provider namespaces forwarded to the dispatcher. Only grok/* models read `xai`;
+// other providers ignore it (the AI SDK already warns and drops it for non-grok ids).
+export const XaiQueryProviderOptions = z.object({
+  serviceTier: z.enum(["default", "priority"]).optional(),
+  parallelToolCalls: z.boolean().optional(),
+});
+export type XaiQueryProviderOptions = z.infer<typeof XaiQueryProviderOptions>;
+
+export const QueryProviderOptions = z.object({
+  xai: XaiQueryProviderOptions.optional(),
+});
+export type QueryProviderOptions = z.infer<typeof QueryProviderOptions>;
+
+export const XaiProviderMetadata = z.object({
+  costInUsdTicks: z.number().optional(),
+  contextWindow: z.number().optional(),
+});
+export type XaiProviderMetadata = z.infer<typeof XaiProviderMetadata>;
+
+export const QueryProviderMetadata = z.object({
+  xai: XaiProviderMetadata.optional(),
+});
+export type QueryProviderMetadata = z.infer<typeof QueryProviderMetadata>;
+
 export const QueryInput = z.looseObject({
   system: z.string().optional(),
   prompt: z.string(),
@@ -188,6 +212,7 @@ export const QueryInput = z.looseObject({
   imageGeneration: z.union([z.boolean(), z.literal("auto")]).optional(),
   // qgrid 가격 추정 및 Codex 이미지 요청 힌트. 이미지 모델은 gpt-image-2 로 고정 가정한다.
   imageGenerationOptions: ImageGenerationOptions.optional(),
+  providerOptions: QueryProviderOptions.optional(),
 });
 export type QueryInput = z.infer<typeof QueryInput>;
 
@@ -225,6 +250,7 @@ export const QueryOutput = z.object({
   ttftMs: z.number(),
   costUsd: z.number(),
   costSource: CostSource,
+  providerMetadata: QueryProviderMetadata.optional(),
   runContext: QgridRunContext.optional(),
 });
 export type QueryOutput = z.infer<typeof QueryOutput>;
@@ -259,12 +285,233 @@ export const StreamEvents = z.object({
     ttftMs: z.number(),
     costUsd: z.number(),
     costSource: CostSource,
+    providerMetadata: QueryProviderMetadata.optional(),
     content: z.array(QgridContent),
     runContext: QgridRunContext.optional(),
   }),
   error: z.object({ message: z.string() }),
 });
 export type StreamEvents = z.infer<typeof StreamEvents>;
+
+// --- Grok media and voice ---
+
+const MiB = 1024 * 1024;
+// Fastify bodyLimit for every JSON request; sonamu.config.ts reads it from here.
+export const REQUEST_BODY_LIMIT_BYTES = 10 * MiB;
+// Media rides inside that JSON body as base64 (4 chars per 3 bytes), so a 10 MiB body carries at
+// most 10 MiB x 3/4 = 7.5 MiB of decoded bytes; 0.5 MiB is left for the prompt, options and JSON
+// framing. The same budget bounds the audio clip, each inline image, and the sum of a request's
+// inline images, so every request the schema accepts also fits the transport.
+export const MEDIA_MAX_INLINE_BYTES = 7 * MiB;
+const MEDIA_MAX_INLINE_LABEL = `${MEDIA_MAX_INLINE_BYTES / MiB} MiB`;
+export const MEDIA_MAX_REFERENCE_IMAGES = 5;
+
+const IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]*={0,2})$/;
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+
+function base64DecodedBytes(data: string): number {
+  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+  return Math.floor((data.length * 3) / 4) - padding;
+}
+
+/** Decoded bytes of the inline (data URL) images among `refs`; https URLs cost nothing here. */
+function inlineImageBytes(refs: ReadonlyArray<string | undefined>): number {
+  let total = 0;
+  for (const ref of refs) {
+    const match = ref === undefined ? null : IMAGE_DATA_URL.exec(ref);
+    if (match) total += base64DecodedBytes(match[2]!);
+  }
+  return total;
+}
+
+const INLINE_IMAGES_TOTAL_MESSAGE = `inline images exceed ${MEDIA_MAX_INLINE_LABEL} in total`;
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+// An https URL (fetched by xAI, never by qgrid) or a base64 image data URL within
+// MEDIA_MAX_INLINE_BYTES.
+export const MediaImageRef = z
+  .string()
+  .min(1)
+  .superRefine((value, ctx) => {
+    if (value.startsWith("data:")) {
+      const match = IMAGE_DATA_URL.exec(value);
+      if (!match || match[2]!.length % 4 !== 0) {
+        ctx.addIssue({
+          code: "custom",
+          message: "image data URLs must be base64 image/png, image/jpeg or image/webp",
+        });
+      } else if (base64DecodedBytes(match[2]!) > MEDIA_MAX_INLINE_BYTES) {
+        ctx.addIssue({
+          code: "custom",
+          message: `image data URL exceeds ${MEDIA_MAX_INLINE_LABEL}`,
+        });
+      }
+      return;
+    }
+    if (!isHttpsUrl(value)) {
+      ctx.addIssue({ code: "custom", message: "image URLs must use https or a data URL" });
+    }
+  });
+
+const GrokModelId = z.string().regex(/^grok\/[A-Za-z0-9._-]+$/, "model must be grok/<id>");
+
+const MediaCallOptions = {
+  // Exact token address (grok/<name>), same contract as QueryInput.tokenName.
+  tokenName: z.string().optional(),
+  projectName: z.string().optional(),
+  // false writes no request log, as for query.
+  logger: z.boolean().optional(),
+};
+
+export const GenerateImagesInput = z
+  .object({
+    model: GrokModelId,
+    prompt: z.string().min(1),
+    n: z.number().int().min(1).max(3).optional(),
+    aspectRatio: z.string().min(1).max(16).optional(),
+    resolution: z.string().min(1).max(16).optional(),
+    quality: z.string().min(1).max(16).optional(),
+    outputFormat: z.enum(["png", "jpeg", "webp"]).optional(),
+    // Present: /images/edits with these references; absent: /images/generations.
+    referenceImages: z.array(MediaImageRef).min(1).max(MEDIA_MAX_REFERENCE_IMAGES).optional(),
+    ...MediaCallOptions,
+  })
+  .refine((input) => inlineImageBytes(input.referenceImages ?? []) <= MEDIA_MAX_INLINE_BYTES, {
+    message: INLINE_IMAGES_TOTAL_MESSAGE,
+    path: ["referenceImages"],
+  });
+export type GenerateImagesInput = z.infer<typeof GenerateImagesInput>;
+
+export const MediaCostSource = z.enum(["provider", "pricing_table"]);
+export type MediaCostSource = z.infer<typeof MediaCostSource>;
+
+export const GenerateImagesOutput = z.object({
+  requestLogId: z.number().optional(),
+  model: z.string(),
+  tokenName: z.string(),
+  images: z.array(
+    z.object({
+      b64: z.string(),
+      mimeType: z.string(),
+      revisedPrompt: z.string().optional(),
+    }),
+  ),
+  usage: z.object({
+    imageCount: z.number(),
+    costInUsdTicks: z.number().optional(),
+  }),
+  // Absent when xAI reported no cost and the model has no catalog price.
+  costUsd: z.number().optional(),
+  costSource: MediaCostSource.optional(),
+});
+export type GenerateImagesOutput = z.infer<typeof GenerateImagesOutput>;
+
+export const VideoStartInput = z
+  .object({
+    model: GrokModelId,
+    prompt: z.string().min(1),
+    duration: z.number().int().min(1).max(15).optional(),
+    aspectRatio: z.string().min(1).max(16).optional(),
+    resolution: z.enum(["480p", "720p", "1080p"]).optional(),
+    image: MediaImageRef.optional(),
+    lastFrame: MediaImageRef.optional(),
+    referenceImages: z.array(MediaImageRef).min(1).max(MEDIA_MAX_REFERENCE_IMAGES).optional(),
+    // edit-video and extend-video need a source video, which qgrid does not accept.
+    mode: z.enum(["reference-to-video"]).optional(),
+    ...MediaCallOptions,
+  })
+  .refine((input) => input.mode !== "reference-to-video" || input.referenceImages !== undefined, {
+    message: "reference-to-video needs at least one referenceImages entry",
+    path: ["referenceImages"],
+  })
+  // Every inline image shares the one request body.
+  .refine(
+    (input) =>
+      inlineImageBytes([input.image, input.lastFrame, ...(input.referenceImages ?? [])]) <=
+      MEDIA_MAX_INLINE_BYTES,
+    { message: INLINE_IMAGES_TOTAL_MESSAGE, path: ["referenceImages"] },
+  );
+export type VideoStartInput = z.infer<typeof VideoStartInput>;
+
+export const VideoStartOutput = z.object({
+  // Unguessable server-side handle; polling must present the same projectName as the start.
+  jobHandle: z.string(),
+  model: z.string(),
+  requestLogId: z.number().optional(),
+});
+export type VideoStartOutput = z.infer<typeof VideoStartOutput>;
+
+export const VideoStatusInput = z.object({
+  jobHandle: z.string().regex(/^[A-Za-z0-9_-]{22}$/),
+  projectName: z.string().optional(),
+});
+export type VideoStatusInput = z.infer<typeof VideoStatusInput>;
+
+export const VideoStatusOutput = z.object({
+  status: z.enum(["pending", "done", "failed"]),
+  // The upstream api.x.ai URL, returned unchanged; qgrid never fetches or stores the video.
+  url: z.string().optional(),
+  mimeType: z.literal("video/mp4"),
+  durationSec: z.number().optional(),
+  costInUsdTicks: z.number().optional(),
+  costUsd: z.number().optional(),
+  error: z.string().optional(),
+  requestLogId: z.number().optional(),
+});
+export type VideoStatusOutput = z.infer<typeof VideoStatusOutput>;
+
+export const TranscribeInput = z.object({
+  model: GrokModelId.optional(),
+  // Base64 audio bytes (no data: prefix), at most MEDIA_MAX_INLINE_BYTES decoded.
+  audio: z
+    .string()
+    .min(1)
+    .refine((value) => value.length % 4 === 0 && BASE64.test(value), "audio must be base64")
+    .refine(
+      (value) => base64DecodedBytes(value) <= MEDIA_MAX_INLINE_BYTES,
+      `audio exceeds ${MEDIA_MAX_INLINE_LABEL}`,
+    ),
+  mediaType: z.string().regex(/^audio\/[A-Za-z0-9.+-]+$/, "mediaType must be audio/*"),
+  language: z.string().min(1).max(16).optional(),
+  ...MediaCallOptions,
+});
+export type TranscribeInput = z.infer<typeof TranscribeInput>;
+
+export const TranscribeOutput = z.object({
+  text: z.string(),
+  language: z.string().optional(),
+  durationSec: z.number().optional(),
+  model: z.string(),
+  tokenName: z.string(),
+  requestLogId: z.number().optional(),
+});
+export type TranscribeOutput = z.infer<typeof TranscribeOutput>;
+
+export const SpeakInput = z.object({
+  model: GrokModelId.optional(),
+  text: z.string().min(1).max(15_000),
+  voice: z.string().min(1).max(64).optional(),
+  language: z.string().min(1).max(16).optional(),
+  format: z.enum(["mp3", "wav", "pcm", "mulaw", "alaw"]).optional(),
+  ...MediaCallOptions,
+});
+export type SpeakInput = z.infer<typeof SpeakInput>;
+
+export const SpeakOutput = z.object({
+  // Base64 audio bytes.
+  audio: z.string(),
+  mimeType: z.string(),
+  tokenName: z.string(),
+  requestLogId: z.number().optional(),
+});
+export type SpeakOutput = z.infer<typeof SpeakOutput>;
 
 // ─── Run Lifecycle ───
 
@@ -353,6 +600,26 @@ export const OAuthStartResult = z.object({
 });
 export type OAuthStartResult = z.infer<typeof OAuthStartResult>;
 
+// Grok device-code login (RFC 8628). The web shows userCode/verificationUri and polls
+// oauthPollGrokDevice every `interval` seconds until `added` or an error.
+export const GrokDeviceCodeStart = z.object({
+  deviceCode: z.string(),
+  userCode: z.string(),
+  verificationUri: z.string(),
+  verificationUriComplete: z.string().optional(),
+  expiresIn: z.number(),
+  interval: z.number(),
+});
+export type GrokDeviceCodeStart = z.infer<typeof GrokDeviceCodeStart>;
+
+export const GrokDevicePollResult = z.object({
+  status: z.enum(["pending", "slow_down", "added"]),
+  name: z.string().optional(),
+  // Seconds to wait before the next poll; grows on slow_down.
+  intervalSec: z.number().optional(),
+});
+export type GrokDevicePollResult = z.infer<typeof GrokDevicePollResult>;
+
 const RateWindow = z
   .object({
     utilization: z.number().nullable(),
@@ -366,6 +633,15 @@ export const UsageResponse = z.object({
   provider: z.string().optional(),
   fiveHour: RateWindow.optional(),
   sevenDay: RateWindow.optional(),
+  // Grok: billing period label (USAGE_PERIOD_TYPE_WEEKLY|MONTHLY); the window itself is in sevenDay.
+  periodType: z.string().nullable().optional(),
+  tier: z.string().nullable().optional(),
+  // Grok D6: on-demand billing enabled at xAI excludes the token from routing.
+  onDemandExcluded: z.boolean().optional(),
+  // Grok: Zero Data Retention at xAI excludes the token from video only (plan §11).
+  zdrVideoExcluded: z.boolean().optional(),
+  // Grok: token-window keepalive does not apply; the UI says so.
+  keepaliveApplicable: z.boolean().optional(),
 });
 export type UsageResponse = z.infer<typeof UsageResponse>;
 
@@ -392,6 +668,7 @@ export const HealthResponse = z.object({
   providers: z.object({
     openai: ProviderStartupState,
     anthropic: ProviderStartupState,
+    grok: ProviderStartupState.optional(),
   }),
 });
 export type HealthResponse = z.infer<typeof HealthResponse>;

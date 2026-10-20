@@ -1,0 +1,164 @@
+{
+  "source": {
+    "binary": "grok-build 1.0.60",
+    "buildId": "01a8e1c591c0",
+    "capturedAt": "2026-10-16T08:08:47Z",
+    "tool": "Proxyman HAR",
+    "note": "system prompt and tool list elided; only shapes are pinned"
+  },
+  "request": {
+    "method": "POST",
+    "url": "https://cli-chat-proxy.grok.com/v1/responses",
+    "headerOrder": [
+      "content-type",
+      "user-agent",
+      "x-grok-client-mode",
+      "x-xai-token-auth",
+      "x-authenticateresponse",
+      "x-compactions-remaining",
+      "x-compaction-at",
+      "x-grok-client-version",
+      "x-grok-user-id",
+      "x-grok-conv-group-id",
+      "x-grok-client-identifier",
+      "authorization",
+      "traceparent",
+      "x-grok-conv-id",
+      "x-grok-req-id",
+      "x-grok-model-override",
+      "x-grok-session-id",
+      "x-grok-agent-id",
+      "x-grok-turn-idx",
+      "accept",
+      "x-grok-doom-loop-check",
+      "x-grok-exact-repetition-check",
+      "content-encoding",
+      "accept-encoding"
+    ],
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "grok-shell/1.0.60 (macos; aarch64)",
+      "x-grok-client-mode": "headless",
+      "x-xai-token-auth": "xai-grok-cli",
+      "x-authenticateresponse": "authenticate-response",
+      "x-compactions-remaining": "1",
+      "x-compaction-at": "204800",
+      "x-grok-client-version": "1.0.60",
+      "x-grok-user-id": "<user-id>",
+      "x-grok-conv-group-id": "<conv-group-id>",
+      "x-grok-client-identifier": "grok-shell",
+      "authorization": "Bearer <redacted>",
+      "traceparent": "<traceparent>",
+      "x-grok-conv-id": "<conv-id>",
+      "x-grok-req-id": "<req-id>",
+      "x-grok-model-override": "grok-4.7",
+      "x-grok-session-id": "<session-id>",
+      "x-grok-agent-id": "<agent-id>",
+      "x-grok-turn-idx": "1",
+      "accept": "text/event-stream",
+      "x-grok-doom-loop-check": "1024",
+      "x-grok-exact-repetition-check": "64",
+      "content-encoding": "zstd",
+      "accept-encoding": "gzip, br, deflate"
+    },
+    "bodyKeys": [
+      "include",
+      "input",
+      "model",
+      "prompt_cache_key",
+      "reasoning",
+      "store",
+      "stream",
+      "tools"
+    ],
+    "body": {
+      "include": ["reasoning.encrypted_content", "no_inline_citations"],
+      "model": "grok-4.7",
+      "prompt_cache_key": "<conv-id>",
+      "reasoning": {
+        "effort": "high",
+        "summary": "concise"
+      },
+      "store": false,
+      "stream": true,
+      "inputShape": [
+        {
+          "type": "message",
+          "role": "system",
+          "contentType": "string"
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "contentType": "string"
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "contentType": "string"
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "contentType": "string"
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "contentType": "string"
+        }
+      ],
+      "toolTypes": ["function", "x_search"],
+      "toolCount": 26
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "x-zero-data-retention": "true",
+      "x-ratelimit-limit-tokens": "53000000",
+      "x-ratelimit-remaining-tokens": "53000000",
+      "x-ratelimit-limit-requests": "8300",
+      "x-ratelimit-remaining-requests": "8300",
+      "x-request-id": "19bfa1b2-a163-9e0c-8de1-832a73e2695e",
+      "x-data-retention": "zdr",
+      "x-models-etag": "\"4849638883941606653\"",
+      "x-grok-context-window": "256000"
+    },
+    "terminalUsage": {
+      "input_tokens": 27150,
+      "input_tokens_details": {
+        "cached_tokens": 6528
+      },
+      "output_tokens": 336,
+      "output_tokens_details": {
+        "reasoning_tokens": 335
+      },
+      "total_tokens": 27486,
+      "num_sources_used": 0,
+      "num_server_side_tools_used": 0,
+      "cost_in_usd_ticks": 465240000,
+      "context_details": {
+        "input_tokens": 27150,
+        "output_tokens": 344
+      }
+    },
+    "eventTypes": [
+      "response.created",
+      "response.in_progress",
+      "response.output_item.added",
+      "response.reasoning_summary_part.added",
+      "response.reasoning_summary_text.delta",
+      "response.reasoning_summary_text.done",
+      "response.reasoning_summary_part.done",
+      "response.output_item.done",
+      "response.content_part.added",
+      "response.output_text.delta",
+      "response.output_text.done",
+      "response.content_part.done",
+      "response.completed"
+    ],
+    "endsWithDone": false
+  }
+}

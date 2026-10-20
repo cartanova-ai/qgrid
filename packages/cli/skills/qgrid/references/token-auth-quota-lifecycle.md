@@ -9,6 +9,7 @@ Use this reference before changing token storage, OAuth flows, token activation,
 - Token APIs
 - Anthropic OAuth flow
 - OpenAI OAuth and refresh flow
+- Grok OAuth, refresh, and quota flow
 - Token sync and reconcile
 - Provider runtime consequences
 - Quota threshold semantics
@@ -24,7 +25,8 @@ Use this reference before changing token storage, OAuth flows, token activation,
 - Token subscriber: `packages/api/src/application/qgrid/token-subscriber.ts`.
 - OpenAI direct OAuth/refresh/quota: `packages/api/src/utils/providers/openai/openai-oauth.ts`, `openai-refresh.ts`, `openai-quota.ts`.
 - Anthropic quota: `packages/api/src/utils/providers/anthropic/anthropic-quota.ts`.
-- Provider token event handlers: `openai-dispatcher.ts`, `anthropic-dispatcher.ts`.
+- Grok OAuth/refresh/quota: `packages/api/src/utils/providers/grok/grok-oauth.ts`, `grok-refresh.ts`, `grok-quota.ts`.
+- Provider token event handlers: `openai-dispatcher.ts`, `anthropic-dispatcher.ts`, `grok-dispatcher.ts`.
 
 ## Token Table Contract
 
@@ -71,10 +73,29 @@ Anthropic credentials:
 }
 ```
 
-Duplicate account replacement is account-identifier based:
+Grok credentials (`packages/api/src/utils/providers/grok/grok-types.ts`):
+
+```ts
+{
+  authMode: "oauth";
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: string;
+  issuer: "https://auth.x.ai";
+  clientId: string;
+  scopes: string[];
+  userId: string;
+  sessionId: string;
+  agentId: string;
+  subscriptionTier?: string;
+}
+```
+
+Duplicate account replacement is account-identifier based (`packages/api/src/application/token/token.model.ts`):
 
 - OpenAI: `credentials.accountId`.
 - Anthropic: `credentials.accountUuid`.
+- Grok: `credentials.userId`.
 
 ## Token APIs
 
@@ -152,6 +173,26 @@ Usage/quota:
 - Threshold uses primary `usedPercent`.
 - Usage lookup failure is fail-open for routing.
 
+## Grok OAuth, Refresh, And Quota Flow
+
+Grok supports two OAuth entry paths (`grok-oauth.ts`, `packages/api/src/application/qgrid/qgrid.frame.ts`):
+
+1. Browser PKCE uses xAI OIDC discovery, a random `127.0.0.1` callback, the grok-build client id/scopes/referrer, and code-paste completion from either a full callback URL or bare code.
+2. Device code starts at `auth.x.ai/oauth2/device/code` and polls the token endpoint at the returned interval; `slow_down` adds five seconds.
+
+The resulting access token must be an `at+jwt` issued by `auth.x.ai`. Qgrid confirms identity through `/user?include=subscription` and stores `userId` as the account identity key (`grok-oauth.ts`, `grok-types.ts`, `token.model.ts`).
+
+Refresh starts 300 seconds plus stable 0–60 second jitter before expiry, is single-flight per token, keeps the previous refresh token when xAI does not rotate it, and persists rotated credentials before exposing them. `invalid_grant` and `invalid_client` require re-login; other failures remain transient. A generation 401 permits one forced refresh and same-token retry (`grok-refresh.ts`, `grok-dispatcher.ts`).
+
+Quota and spending controls use two proxy reads (`grok-quota.ts`, `grok-dispatcher.ts`):
+
+| Read | Routing fields | Cache/failure policy |
+|---|---|---|
+| `/billing?format=credits` | camelCase `config.creditUsagePercent`, weekly `currentPeriod`, prepaid balance | 60-second cache; lookup failure fails open |
+| `/settings` | `on_demand_enabled`, minimum client version, feature/tier flags | 60-second cache; `true` excludes the account under D6; lookup failure fails open |
+
+The observed weekly billing window begins at subscription start, not a calendar boundary (`docs/diagnosis/2026-10-16-grok-live-probe.md`). Quota exhaustion blocks only the affected request class until period end (one-hour fallback); a fresh below-threshold billing read clears blocks (`grok-dispatcher.ts`).
+
 ## Token Sync And Reconcile
 
 On server start, qgrid creates PostgreSQL triggers for `tokens_changed`.
@@ -176,7 +217,8 @@ On DELETE or missing row:
 
 - remove from `QgridDispatcher.tokens`;
 - call OpenAI `onTokenRemoved`;
-- call Anthropic `onTokenRemoved`.
+- call Anthropic `onTokenRemoved`;
+- call Grok `onTokenRemoved`.
 
 OpenAI row changes:
 
@@ -192,6 +234,12 @@ Anthropic row changes:
 - inactive row: remove from pool.
 - reconcile uses active Anthropic rows to replace the in-memory pool.
 
+Grok row changes (`packages/api/src/application/qgrid/token-subscriber.ts`, `grok-dispatcher.ts`):
+
+- active INSERT/UPDATE: validate credentials and upsert account metadata plus selector weight.
+- inactive or deleted row: remove it from the in-memory pool and weighted selector.
+- reconcile uses active Grok rows to replace the in-memory pool.
+
 ## Provider Runtime Consequences
 
 OpenAI token changes create, update, deactivate, or remove in-memory credential metadata.
@@ -201,6 +249,8 @@ OpenAI token changes create, update, deactivate, or remove in-memory credential 
 - If no active OpenAI tokens remain, queued OpenAI requests are rejected.
 
 Anthropic token changes only affect the in-memory token pool because every request fresh-spawns Claude Code.
+
+Grok token changes update the in-memory OAuth credentials, quota/settings cache generation, and weighted selector. Grok has no child process; media and chat reserve the selected account for the request (`grok-dispatcher.ts`).
 
 ## Auth-Dead Detection And Token Registration
 
@@ -232,6 +282,9 @@ When a refresh fails in a way that only re-login can fix, qgrid removes the toke
   `recovered` once a later quota check falls below the threshold. Metadata generations prevent an
   in-flight lookup from restoring a block after a threshold or lifecycle change. The state is not
   persisted across server restarts.
+- Grok also keeps threshold and exhaustion blocks in memory. Its exhaustion block is request-class
+  scoped, and `/settings.on_demand_enabled = true` independently excludes the entire account
+  (`packages/api/src/utils/providers/grok/grok-dispatcher.ts`).
 - If all ready/eligible tokens are over threshold, qgrid throws `QuotaThresholdExceededError`.
 - Log messages use `quota_threshold gate` with reasons such as `over_threshold`, `lookup_fail_open`, and `all_exceeded`.
 

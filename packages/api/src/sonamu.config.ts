@@ -14,7 +14,12 @@ import {
   stopExpiredTokenReminder,
 } from "./application/qgrid/expired-token-reminder";
 import { QgridDispatcher } from "./application/qgrid/qgrid.dispatcher";
-import { QgridFrame } from "./application/qgrid/qgrid.frame";
+import {
+  mapRequestBodyTooLarge,
+  persistGrokCredentials,
+  QgridFrame,
+} from "./application/qgrid/qgrid.frame";
+import { REQUEST_BODY_LIMIT_BYTES } from "./application/qgrid/qgrid.types";
 import { TokenSubscriber } from "./application/qgrid/token-subscriber";
 import { ensureTokensTrigger } from "./application/qgrid/token-trigger-setup";
 import {
@@ -25,6 +30,9 @@ import {
 import { loadSettings, setSettingChangeHandler } from "./application/setting/setting.store";
 import { handleServerError } from "./server-error-handler";
 import { AnthropicDispatcher } from "./utils/providers/anthropic/anthropic-dispatcher";
+import { GrokDispatcher, GrokRefreshCoordinator } from "./utils/providers/grok";
+import { GrokMediaClient } from "./utils/providers/grok/grok-media-client";
+import { GrokVoiceClient } from "./utils/providers/grok/grok-voice-client";
 import { stopOpenAICallbackRelay } from "./utils/providers/openai/openai-callback-relay";
 import { OpenAIDispatcher } from "./utils/providers/openai/openai-dispatcher";
 
@@ -93,7 +101,8 @@ export default defineConfig({
   server: {
     listen: { port, host },
     fastify: {
-      bodyLimit: 10 * 1024 * 1024,
+      // Grok media input limits are derived from this; see MEDIA_MAX_INLINE_BYTES.
+      bodyLimit: REQUEST_BODY_LIMIT_BYTES,
     },
     plugins: {
       formbody: true,
@@ -195,6 +204,27 @@ export default defineConfig({
           log.warn(`anthropic dispatcher failed: ${(e as Error).message}`);
         }
 
+        try {
+          const grokRefresher = new GrokRefreshCoordinator({ persist: persistGrokCredentials });
+          const grokDispatcher = new GrokDispatcher({
+            refresher: grokRefresher,
+            media: new GrokMediaClient(),
+            voice: new GrokVoiceClient(),
+          });
+          await grokDispatcher.start();
+          QgridFrame.grokRefresher = grokRefresher;
+          QgridDispatcher.grokDispatcher = grokDispatcher;
+          QgridDispatcher.startupState.grok = "ready";
+          // The subscriber's startup reconcile ran before this dispatcher existed; a failure here
+          // is retried by the periodic reconcile and does not make the runtime unusable.
+          await subscriber
+            .reconcile()
+            .catch((e) => log.warn(`grok initial reconcile failed: ${(e as Error).message}`));
+        } catch (e) {
+          QgridDispatcher.startupState.grok = "failed";
+          log.warn(`grok dispatcher failed: ${(e as Error).message}`);
+        }
+
         subscriber.tokenChangeHandler = () => {
           void rescheduleTokenWindowKeepalive();
         };
@@ -224,13 +254,17 @@ export default defineConfig({
         if (QgridDispatcher.anthropicDispatcher) {
           await QgridDispatcher.anthropicDispatcher.stop();
         }
+        const grokDispatcher = QgridDispatcher.grokDispatcher;
+        if (grokDispatcher instanceof GrokDispatcher) {
+          await grokDispatcher.stop();
+        }
         if (QgridDispatcher.subscriber) {
           await QgridDispatcher.subscriber.stop();
         }
         log.info("graceful shutdown");
       },
       onError: (error, _request, reply) => {
-        handleServerError(error, reply);
+        handleServerError(mapRequestBodyTooLarge(error), reply);
       },
     },
   },

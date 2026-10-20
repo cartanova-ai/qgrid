@@ -51,6 +51,19 @@ const TokenCredentials = z.union([
     accountId: z.string(),
     planType: z.string().optional(),
   }),
+  z.object({
+    authMode: z.literal("oauth"),
+    accessToken: z.string(),
+    refreshToken: z.string(),
+    expiresAt: z.string(),
+    issuer: z.literal("https://auth.x.ai"),
+    clientId: z.string(),
+    scopes: z.array(z.string()),
+    userId: z.string(),
+    sessionId: z.string(),
+    agentId: z.string(),
+    subscriptionTier: z.string().optional(),
+  }),
 ]);
 type TokenCredentials = z.infer<typeof TokenCredentials>;
 
@@ -229,6 +242,7 @@ export type RequestLogBaseSchema = z.infer<typeof RequestLogBaseSchema> & {
     "is_structured",
     "id",
   ];
+  readonly __json__: readonly ["history", "input_images", "tools"];
 };
 
 // BaseSchema: RequestLogStep
@@ -329,6 +343,7 @@ export type TokenBaseSchema = z.infer<typeof TokenBaseSchema> & {
     "keepalive_enabled",
     "id",
   ];
+  readonly __json__: readonly ["credentials"];
 };
 
 // BaseListParams: RequestLog

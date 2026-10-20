@@ -13,6 +13,7 @@ import {
 
 import { SD } from "../../i18n/sd.generated";
 import { calculateCostUsd } from "../../utils/providers/common/model-cost";
+import { isProviderId, type ProviderId } from "../../utils/providers/common/provider-types";
 import { type RequestLogSubsetKey, type RequestLogSubsetMapping } from "../sonamu.generated";
 import { requestLogLoaderQueries, requestLogSubsetQueries } from "../sonamu.generated.sso";
 import {
@@ -32,6 +33,16 @@ import { formatZodCode } from "./zod-code-format";
 export const MICRO_USD = 1_000_000;
 const REQUEST_LOG_RUN_LOCK_CLASS_ID = 718;
 const TOOL_ENUM_VALUE_LIMIT = 6;
+
+/**
+ * 비용을 알 수 없는 non-token 요청(Grok STT/TTS, ticks 없는 video). provider 비용 없이
+ * 토큰 0 으로 성공 저장되므로 SUM 은 건너뛰고 legacy 재계산도 $0 으로 매긴다 — 합계에
+ * 빠졌다는 신호를 따로 센다. 실패/중단/진행 중 row 는 과금 대상이 아니라 제외하고,
+ * 이미지 row 는 `unknownImageCostCount` 가 이미 센다.
+ */
+export const UNKNOWN_MEDIA_COST_PREDICATE =
+  "request_logs.status = 'succeeded' AND request_logs.cost_usd IS NULL AND request_logs.cost_source IS NULL" +
+  " AND request_logs.is_image_generation = false AND request_logs.input_tokens = 0 AND request_logs.output_tokens = 0";
 
 function decodeStoredTools(value: unknown): ToolDefinitions | null {
   if (!value) return null;
@@ -124,6 +135,13 @@ function isAnthropicUsageRow(row: Pick<RequestLogUsageRow, "token_name" | "model
     row.model_name?.startsWith("claude-") === true ||
     row.model_name?.startsWith("anthropic/claude-") === true
   );
+}
+
+/** Provider of a provider-qualified model id (`openai/`, `anthropic/`, `grok/`); legacy ids are unknown. */
+export function providerOfModelName(modelName: string | null | undefined): ProviderId | "unknown" {
+  const slash = modelName?.indexOf("/") ?? -1;
+  const prefix = slash > 0 ? modelName?.slice(0, slash) : undefined;
+  return isProviderId(prefix) ? prefix : "unknown";
 }
 
 function canonicalModelName(modelName: string): string {
@@ -380,12 +398,7 @@ class RequestLogModelClass extends BaseModelClass<
       { requests: number; errors: number; inputTokens: number; cacheReadTokens: number }
     >();
     rows.forEach((row) => {
-      const model = row.requested_model_name ?? "";
-      const provider = model.startsWith("openai/")
-        ? "openai"
-        : model.startsWith("anthropic/")
-          ? "anthropic"
-          : "unknown";
+      const provider = providerOfModelName(row.requested_model_name);
       const agg = byProvider.get(provider) ?? {
         requests: 0,
         errors: 0,
@@ -467,10 +480,10 @@ class RequestLogModelClass extends BaseModelClass<
 
       return {
         name: tool.name,
-        ...(tool.description !== undefined ? { description: tool.description } : {}),
+        ...(tool.description === undefined ? {} : { description: tool.description }),
         parameterCount: Object.keys(inputSchema.properties ?? {}).length,
         inputZod,
-        ...(inputZod !== fullInputZod ? { fullInputZod } : {}),
+        ...(inputZod === fullInputZod ? {} : { fullInputZod }),
       };
     });
   }
@@ -514,9 +527,9 @@ class RequestLogModelClass extends BaseModelClass<
       json_schema: params.json_schema ?? null,
       is_structured:
         params.is_structured ?? (params.json_schema !== null && params.json_schema !== undefined),
-      ...(params.history !== undefined ? { history: params.history as { type: string }[] } : {}),
+      ...(params.history === undefined ? {} : { history: params.history as { type: string }[] }),
       ...(params.input_images ? { input_images: params.input_images } : {}),
-      ...(params.tools !== undefined ? { tools: params.tools } : {}),
+      ...(params.tools === undefined ? {} : { tools: params.tools }),
     });
     return wdb.transaction(async (trx) => {
       const ids = await trx.ubUpsert("request_logs");
@@ -754,16 +767,16 @@ class RequestLogModelClass extends BaseModelClass<
         output_tokens: aggregate.output_tokens,
         cache_read_tokens: aggregate.cache_read_tokens,
         cache_creation_tokens: aggregate.cache_creation_tokens,
-        ...(aggregate.cache_creation_5m_tokens !== undefined
-          ? { cache_creation_5m_tokens: aggregate.cache_creation_5m_tokens }
-          : {}),
-        ...(aggregate.cache_creation_1h_tokens !== undefined
-          ? { cache_creation_1h_tokens: aggregate.cache_creation_1h_tokens }
-          : {}),
+        ...(aggregate.cache_creation_5m_tokens === undefined
+          ? {}
+          : { cache_creation_5m_tokens: aggregate.cache_creation_5m_tokens }),
+        ...(aggregate.cache_creation_1h_tokens === undefined
+          ? {}
+          : { cache_creation_1h_tokens: aggregate.cache_creation_1h_tokens }),
         duration_ms: aggregate.duration_ms,
         fallback_count: aggregate.fallback_count,
         cost_usd: aggregate.cost_usd,
-        ...(aggregate.cost_source !== undefined ? { cost_source: aggregate.cost_source } : {}),
+        ...(aggregate.cost_source === undefined ? {} : { cost_source: aggregate.cost_source }),
         ttft_ms:
           firstTtft?.ttft_ms === null || firstTtft?.ttft_ms === undefined
             ? 0
@@ -829,7 +842,7 @@ class RequestLogModelClass extends BaseModelClass<
    */
   async totalCost(
     rawParams: RequestLogListParams = { num: 0, page: 1 },
-  ): Promise<{ usd: number; unknownImageCostCount: number }> {
+  ): Promise<{ usd: number; unknownImageCostCount: number; unknownCostCount: number }> {
     const params = {
       num: 0,
       page: 1,
@@ -855,6 +868,7 @@ class RequestLogModelClass extends BaseModelClass<
         unknownImageCostCount: Puri.rawNumber(
           "COUNT(*) FILTER (WHERE request_logs.is_image_generation = true AND request_logs.image_cost_usd IS NULL)",
         ),
+        unknownCostCount: Puri.rawNumber(`COUNT(*) FILTER (WHERE ${UNKNOWN_MEDIA_COST_PREDICATE})`),
       })
       .first();
 
@@ -896,7 +910,11 @@ class RequestLogModelClass extends BaseModelClass<
         alreadySummed
       );
     }, storedTotal);
-    return { usd, unknownImageCostCount: Number(stored?.unknownImageCostCount ?? 0) };
+    return {
+      usd,
+      unknownImageCostCount: Number(stored?.unknownImageCostCount ?? 0),
+      unknownCostCount: Number(stored?.unknownCostCount ?? 0),
+    };
   }
 
   async distinctProjectNames(): Promise<string[]> {

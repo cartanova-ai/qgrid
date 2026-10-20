@@ -1812,3 +1812,329 @@ describe("provider 별 effort 타입", () => {
     expect([invalidThinking, invalidAnthropicThinking]).toHaveLength(2);
   });
 });
+
+describe("qgrid Grok language model", () => {
+  type Captured = { url: string; args: Record<string, unknown> };
+
+  function grokOutput(overrides: Record<string, unknown> = {}) {
+    return {
+      text: "ok",
+      content: [{ type: "text", text: "ok" }],
+      finishReason: "stop",
+      model: "grok-4.7",
+      tokenName: "grok/main",
+      usage,
+      durationMs: 10,
+      costUsd: 0.001,
+      costSource: "provider",
+      providerMetadata: { xai: { costInUsdTicks: 12_345, contextWindow: 256_000 } },
+      ...overrides,
+    };
+  }
+
+  function stubQuery(responses: Array<Record<string, unknown>>): Captured[] {
+    const calls: Captured[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const args = JSON.parse(String(init?.body)).args;
+        calls.push({ url, args });
+        return Response.json(responses[Math.min(calls.length - 1, responses.length - 1)]);
+      }),
+    );
+    return calls;
+  }
+
+  const userPrompt = (text: string) => [{ role: "user", content: [{ type: "text", text }] }];
+
+  it("accepts grok/ ids in the overload and posts to the query endpoint without a default effort", async () => {
+    const calls = stubQuery([grokOutput()]);
+    const model = qgrid("grok/grok-4.7", { defaultEffort: "xhigh" });
+    expect(model.modelId).toBe("grok/grok-4.7");
+    await model.doGenerate({ prompt: userPrompt("hi") } as never);
+    await qgrid("grok/grok-4.7").doGenerate({ prompt: userPrompt("hi") } as never);
+
+    expect(calls[0]?.url).toBe("http://localhost:44900/api/qgrid/query");
+    expect(calls[0]?.args).toMatchObject({ prompt: "hi", model: "grok/grok-4.7", effort: "xhigh" });
+    expect(calls[1]?.args).not.toHaveProperty("effort");
+    expect(calls[1]?.args).not.toHaveProperty("providerOptions");
+  });
+
+  it("keeps current and history image parts for grok models", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    const calls = stubQuery([grokOutput()]);
+    await qgrid("grok/grok-4.7").doGenerate({
+      prompt: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "earlier" },
+            { type: "file", mediaType: "image/png", data: new Uint8Array([0x89, 0x50, 0x4e, 0x47]) },
+          ],
+        },
+        { role: "assistant", content: [{ type: "text", text: "seen" }] },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "compare" },
+            { type: "file", mediaType: "image/jpeg", data: new URL("https://example.com/a.jpg") },
+            { type: "file", mediaType: "image/*", data: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]) },
+          ],
+        },
+      ],
+    } as never);
+
+    const args = calls[0]!.args;
+    expect(args.prompt).toBe("compare");
+    expect(args.input).toEqual([
+      { type: "text", text: "compare", text_elements: [] },
+      { type: "image", url: "https://example.com/a.jpg" },
+      { type: "image", url: "data:image/jpeg;base64,/9j/4A==" },
+    ]);
+    expect(JSON.parse(String(args.history))).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "earlier" },
+          { type: "input_image", image_url: "data:image/png;base64,iVBORw==" },
+        ],
+      },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "seen" }] },
+    ]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("still drops image parts for anthropic models with a warning", async () => {
+    const calls = stubQuery([grokOutput({ model: "claude-opus-4-8", providerMetadata: undefined })]);
+    const result = await qgrid("anthropic/claude-opus-4-8").doGenerate({
+      prompt: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "describe" },
+            { type: "file", mediaType: "image/png", data: "iVBORw0KGgoBAgM" },
+          ],
+        },
+      ],
+    } as never);
+    expect(calls[0]?.args.input).toBeUndefined();
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({ type: "unsupported", feature: "image input" }),
+    );
+  });
+
+  it("maps providerOptions.xai and reports rejected keys as warnings", async () => {
+    const calls = stubQuery([grokOutput()]);
+    const result = await qgrid("grok/grok-4.7").doGenerate({
+      prompt: userPrompt("hi"),
+      providerOptions: {
+        xai: {
+          reasoningEffort: "medium",
+          store: true,
+          previousResponseId: "resp_1",
+          serviceTier: "priority",
+          parallelToolCalls: false,
+          promptCacheKey: "conv-1",
+        },
+      },
+    } as never);
+
+    const args = calls[0]!.args;
+    expect(args.effort).toBe("medium");
+    expect(args).not.toHaveProperty("providerOptions");
+    expect(args).not.toHaveProperty("serviceTier");
+    expect(args.cacheAffinityKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(args)).not.toContain("conv-1");
+    expect(result.warnings).toEqual([
+      { type: "unsupported", feature: "providerOptions.xai.store", details: "qgrid always sends store: false" },
+      {
+        type: "unsupported",
+        feature: "providerOptions.xai.previousResponseId",
+        details: "qgrid replays conversation history itself",
+      },
+      {
+        type: "unsupported",
+        feature: "providerOptions.xai.serviceTier",
+        details: "the Grok subscription proxy's handling of serviceTier is unverified",
+      },
+      {
+        type: "unsupported",
+        feature: "providerOptions.xai.parallelToolCalls",
+        details: "the Grok subscription proxy's handling of parallelToolCalls is unverified",
+      },
+    ]);
+  });
+
+  it("lets providerOptions.qgrid.effort win over providerOptions.xai.reasoningEffort", async () => {
+    const calls = stubQuery([grokOutput()]);
+    await qgrid("grok/grok-4.7").doGenerate({
+      prompt: userPrompt("hi"),
+      providerOptions: { qgrid: { effort: "high" }, xai: { reasoningEffort: "low" } },
+    } as never);
+    expect(calls[0]?.args.effort).toBe("high");
+  });
+
+  it("rejects malformed providerOptions.xai before any request", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      qgrid("grok/grok-4.7").doGenerate({
+        prompt: userPrompt("hi"),
+        providerOptions: { xai: { reasoningEffort: "extreme" } },
+      } as never),
+    ).rejects.toThrow("invalid providerOptions.xai");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("ignores providerOptions.xai on non-grok models with one warning", async () => {
+    const calls = stubQuery([grokOutput({ model: "gpt-5.5", providerMetadata: undefined })]);
+    const result = await qgrid("openai/gpt-5.5").doGenerate({
+      prompt: userPrompt("hi"),
+      providerOptions: { xai: { reasoningEffort: "high", store: true } },
+    } as never);
+    expect(calls[0]?.args.effort).toBe("low");
+    expect(calls[0]?.args).not.toHaveProperty("providerOptions");
+    expect(result.warnings).toEqual([
+      {
+        type: "unsupported",
+        feature: "providerOptions.xai",
+        details: "providerOptions.xai applies only to grok/ models and was ignored for openai/gpt-5.5.",
+      },
+    ]);
+  });
+
+  it("surfaces providerMetadata.xai next to providerMetadata.qgrid in generate and stream", async () => {
+    stubQuery([grokOutput()]);
+    const generated = await qgrid("grok/grok-4.7").doGenerate({ prompt: userPrompt("hi") } as never);
+    expect(generated.providerMetadata?.xai).toEqual({ costInUsdTicks: 12_345, contextWindow: 256_000 });
+    expect(generated.providerMetadata?.qgrid).toMatchObject({ model: "grok-4.7", costSource: "provider" });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.includes("prepareStream")
+          ? Response.json({ streamId: "grok" })
+          : new Response(sseDone(grokOutput())),
+      ),
+    );
+    const streamed = await qgrid("grok/grok-4.7").doStream({ prompt: userPrompt("hi") } as never);
+    const parts: Array<{ type: string; providerMetadata?: unknown }> = [];
+    const reader = streamed.stream.getReader();
+    for (let next = await reader.read(); !next.done; next = await reader.read()) parts.push(next.value);
+    expect(parts.find((part) => part.type === "finish")?.providerMetadata).toMatchObject({
+      xai: { costInUsdTicks: 12_345, contextWindow: 256_000 },
+    });
+  });
+
+  it("omits providerMetadata.xai when the server does not report it", async () => {
+    stubQuery([grokOutput({ providerMetadata: undefined })]);
+    const result = await qgrid("grok/grok-4.7").doGenerate({ prompt: userPrompt("hi") } as never);
+    expect(result.providerMetadata).not.toHaveProperty("xai");
+  });
+
+  it("round-trips native function tools with the same wire shape as openai", async () => {
+    const toolCallOutput = grokOutput({
+      text: "",
+      content: [
+        { type: "tool-call", toolCallId: "call_1", toolName: "getWeather", input: '{"city":"call_1"}' },
+      ],
+      finishReason: "tool-calls",
+      runContext: { requestLogId: 7 },
+    });
+    const calls = stubQuery([toolCallOutput, grokOutput({ text: "sunny", content: [{ type: "text", text: "sunny" }] })]);
+
+    const grok = qgrid("grok/grok-4.7");
+    const first = await grok.doGenerate({ prompt: userPrompt("weather"), tools: [tool()] } as never);
+    expect(first.finishReason).toEqual({ unified: "tool-calls", raw: "tool_call" });
+    expect(first.content).toEqual([
+      { type: "tool-call", toolCallId: "call_1", toolName: "getWeather", input: '{"city":"call_1"}' },
+    ]);
+
+    const followUp = [
+      ...userPrompt("weather"),
+      {
+        role: "assistant",
+        content: [
+          { type: "tool-call", toolCallId: "call_1", toolName: "getWeather", input: { city: "call_1" } },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call_1",
+            toolName: "getWeather",
+            output: { type: "json", value: { temperature: "call_1" } },
+          },
+        ],
+      },
+    ];
+    const second = await grok.doGenerate({ prompt: followUp, tools: [tool()] } as never);
+    expect(second.content).toEqual([{ type: "text", text: "sunny" }]);
+    expect(calls[1]?.args).toMatchObject({
+      runContext: { requestLogId: 7 },
+      toolResults: [{ toolCallId: "call_1", output: '{"temperature":"call_1"}' }],
+    });
+    expect(JSON.parse(String(calls[1]?.args.history))).toEqual(
+      expect.arrayContaining([
+        { type: "function_call", name: "getWeather", arguments: '{"city":"call_1"}', call_id: "call_1" },
+        { type: "function_call_output", call_id: "call_1", output: '{"temperature":"call_1"}' },
+      ]),
+    );
+
+    await qgrid("openai/gpt-5.5").doGenerate({ prompt: userPrompt("weather"), tools: [tool()] } as never);
+    expect(calls[2]?.args.tools).toEqual(calls[0]?.args.tools);
+    expect(calls[0]?.args.tools).toEqual([
+      { name: "getWeather", description: "Get weather", inputSchema: tool().inputSchema },
+    ]);
+  });
+
+  it("maps streamed native tool calls for grok", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.includes("prepareStream")
+          ? Response.json({ streamId: "grok-tools" })
+          : new Response(
+              sseDone(
+                grokOutput({
+                  text: "",
+                  content: [{ type: "tool-call", toolCallId: "call_s", toolName: "getWeather", input: "{}" }],
+                  finishReason: "tool-calls",
+                }),
+              ),
+            ),
+      ),
+    );
+    const result = await qgrid("grok/grok-4.7").doStream({ prompt: userPrompt("weather"), tools: [tool()] } as never);
+    const parts: Array<{ type: string }> = [];
+    const reader = result.stream.getReader();
+    for (let next = await reader.read(); !next.done; next = await reader.read()) parts.push(next.value);
+    expect(parts).toContainEqual({ type: "tool-call", toolCallId: "call_s", toolName: "getWeather", input: "{}" });
+    expect(parts.find((part) => part.type === "finish")).toMatchObject({
+      finishReason: { unified: "tool-calls", raw: "tool_call" },
+    });
+  });
+
+  it("replaces the stored threadCoord when a failover response carries a new workerId", async () => {
+    const coord = (workerId: number) => ({ workerId, threadId: "k", epoch: -1, systemHash: "h" });
+    const calls = stubQuery([
+      grokOutput({ runContext: { threadCoord: coord(1) } }),
+      grokOutput({ runContext: { threadCoord: coord(2) } }),
+      grokOutput({ runContext: { threadCoord: coord(2) } }),
+    ]);
+    const model = qgrid("grok/grok-4.7");
+    const options = { prompt: userPrompt("hi"), providerOptions: { qgrid: { sessionKey: "grok-failover" } } } as never;
+    await model.doGenerate(options);
+    await model.doGenerate(options);
+    await model.doGenerate(options);
+
+    expect(calls[0]?.args).not.toHaveProperty("runContext");
+    expect(calls[1]?.args.runContext).toEqual({ threadCoord: coord(1) });
+    expect(calls[2]?.args.runContext).toEqual({ threadCoord: coord(2) });
+    expect(calls[0]?.args.cacheAffinityKey).toMatch(/^[0-9a-f]{64}$/);
+  });
+});

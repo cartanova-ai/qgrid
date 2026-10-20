@@ -10,6 +10,7 @@ Do not copy these notes blindly into implementation. Use them to find the releva
 - Tool calling and request-log lifecycle
 - OpenAI/Codex runtime
 - Anthropic/Claude Code runtime
+- Grok (xAI subscription) runtime
 - Token sync and quota thresholds
 - Weighted token routing
 - Request logs, metrics, and dashboard
@@ -132,6 +133,28 @@ Key decisions:
 - Spawn env must be whitelisted. Never pass inherited `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or `ANTHROPIC_BASE_URL` unless intentionally building an API-key/proxy path.
 - `--setting-sources project` is required for shared-service isolation. User/local Claude settings can load hooks or memory and leak context across requests.
 - Claude Code OAuth prompt cache sharing across tokens in the same workspace is an observed cost behavior, not a product contract. Monitor it; do not promise it.
+
+## Grok (xAI Subscription) Runtime
+
+Sources:
+
+- `docs/plans/2026-10-16-grok-provider-integration-plan.md`
+- `docs/diagnosis/2026-10-16-grok-live-probe.md`
+- `packages/api/src/utils/providers/grok/*`
+- `packages/api/src/application/qgrid/qgrid.dispatcher.ts`
+
+Key decisions:
+
+- **D1 — accepted terms risk:** The user accepted the risk of using an xAI subscription token from a non-official client and authorized the bounded live probe. This is recorded acceptance, not a claim that xAI permits every deployment.
+- **D2 — reproduce grok-build:** Qgrid sends the full installed grok-build fingerprint. `GROK_BUILD_VERSION` is a source pin, not an environment override; changing it requires a new installed-binary capture, golden fixture, build id, and fingerprint test.
+- **D3 — subscription OAuth only:** Grok tokens must be `at+jwt` OAuth credentials issued by `auth.x.ai`. Raw xAI API keys are outside qgrid's subscription-pooling purpose.
+- **D4 — URL video delivery:** Return the upstream `api.x.ai` video URL in the AI SDK URL result. Qgrid does not download, proxy, or persist video bytes.
+- **D5 — no new workspace package:** Grok runtime code lives under `packages/api/src/utils/providers/grok/`; SDK adapters stay in `packages/ai-sdk/src/`.
+- **D6 — exclude on-demand billing:** An account with `/settings.on_demand_enabled = true` is ineligible. There is no per-token override because the exclusion closes accidental paid usage.
+- **D7 — shared weighted routing:** Grok uses the common `SmoothWeightedRoundRobin` with `tokens.weight`, after quota, on-demand, cooldown, entitlement, and optional in-flight gates.
+- **D8 — preserve tool emulation:** Grok remains on qgrid's shared strict action-envelope tool contract. The provider can emit native function calls, but qgrid callers continue to receive the same emulated AI SDK multi-step lifecycle as the other routes.
+
+Current implementation evidence is in `grok-constants.ts`, `grok-dispatcher.ts`, `grok-oauth.ts`, `grok-media-client.ts`, `packages/api/src/application/qgrid/qgrid.frame.ts`, and `qgrid.dispatcher.ts`. See `references/grok-runtime.md` for operational details and unverified gaps.
 
 ## Token Sync And Quota Thresholds
 

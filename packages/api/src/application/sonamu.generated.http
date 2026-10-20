@@ -325,6 +325,12 @@ Content-Type: application/json
       "size": "auto",
       "background": "auto",
       "outputFormat": "png"
+    },
+    "providerOptions": {
+      "xai": {
+        "serviceTier": "default",
+        "parallelToolCalls": false
+      }
     }
   }
 }
@@ -390,6 +396,12 @@ Content-Type: application/json
       "size": "auto",
       "background": "auto",
       "outputFormat": "png"
+    },
+    "providerOptions": {
+      "xai": {
+        "serviceTier": "default",
+        "parallelToolCalls": false
+      }
     }
   }
 }
@@ -591,6 +603,127 @@ Content-Type: application/json
 
 {
   "name": "NAME"
+}
+
+###
+
+POST {{baseUrl}}/api/qgrid/oauthStartGrok
+Content-Type: application/json
+
+{
+  "name": "NAME"
+}
+
+###
+
+POST {{baseUrl}}/api/qgrid/oauthStartGrokDevice
+Content-Type: application/json
+
+{
+  "name": "NAME"
+}
+
+###
+
+POST {{baseUrl}}/api/qgrid/oauthPollGrokDevice
+Content-Type: application/json
+
+{
+  "deviceCode": "DEVICECODE"
+}
+
+###
+
+POST {{baseUrl}}/api/qgrid/generateImages
+Content-Type: application/json
+
+{
+  "params": {
+    "model": "MODEL",
+    "prompt": "PROMPT",
+    "n": 1,
+    "aspectRatio": "ASPECTRATIO",
+    "resolution": "RESOLUTION",
+    "quality": "QUALITY",
+    "outputFormat": "png",
+    "referenceImages": [
+      "REFERENCEIMAGES"
+    ],
+    "tokenName": "TOKENNAME",
+    "projectName": "PROJECTNAME",
+    "logger": false
+  }
+}
+
+###
+
+POST {{baseUrl}}/api/qgrid/videoStart
+Content-Type: application/json
+
+{
+  "params": {
+    "model": "MODEL",
+    "prompt": "PROMPT",
+    "duration": 1,
+    "aspectRatio": "ASPECTRATIO",
+    "resolution": "480p",
+    "image": "IMAGE",
+    "lastFrame": "LASTFRAME",
+    "referenceImages": [
+      "REFERENCEIMAGES"
+    ],
+    "mode": "reference-to-video",
+    "tokenName": "TOKENNAME",
+    "projectName": "PROJECTNAME",
+    "logger": false
+  }
+}
+
+###
+
+POST {{baseUrl}}/api/qgrid/videoStatus
+Content-Type: application/json
+
+{
+  "params": {
+    "jobHandle": "JOBHANDLE",
+    "projectName": "PROJECTNAME"
+  }
+}
+
+###
+
+POST {{baseUrl}}/api/qgrid/transcribe
+Content-Type: application/json
+
+{
+  "params": {
+    "model": "MODEL",
+    "audio": "AUDIO",
+    "mediaType": "MEDIATYPE",
+    "language": "LANGUAGE",
+    "tokenName": "TOKENNAME",
+    "projectName": "PROJECTNAME",
+    "logger": false
+  }
+}
+
+###
+
+POST {{baseUrl}}/api/qgrid/speak
+Content-Type: application/json
+
+{
+  "params": {
+    "model": "MODEL",
+    "text": "TEXT",
+    "voice": "VOICE",
+    "language": "LANGUAGE",
+    "format": "mp3",
+    "tokenName": "TOKENNAME",
+    "projectName": "PROJECTNAME",
+    "logger": false
+  }
 }
 
 ###

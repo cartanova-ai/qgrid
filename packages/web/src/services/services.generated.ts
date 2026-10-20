@@ -26,6 +26,18 @@ import {
   FinishRunInput,
   TokenStats,
   OAuthStartResult,
+  GrokDeviceCodeStart,
+  GrokDevicePollResult,
+  GenerateImagesInput,
+  GenerateImagesOutput,
+  VideoStartInput,
+  VideoStartOutput,
+  VideoStatusInput,
+  VideoStatusOutput,
+  TranscribeInput,
+  TranscribeOutput,
+  SpeakInput,
+  SpeakOutput,
   UsageResponse,
   HealthResponse,
 } from "./qgrid/qgrid.types";
@@ -168,7 +180,7 @@ export namespace TokenService {
 
   export const useReorderMutation = () =>
     useMutation({
-      mutationFn: (params: { ids: number[] }) => reorder(params.ids),
+      mutationFn: (params: { ids: number[] }) => TokenService.reorder(params.ids),
     });
 
   export async function del(ids: number[]): Promise<number> {
@@ -181,7 +193,7 @@ export namespace TokenService {
 
   export const useDelMutation = () =>
     useMutation({
-      mutationFn: (params: { ids: number[] }) => del(params.ids),
+      mutationFn: (params: { ids: number[] }) => TokenService.del(params.ids),
     });
 }
 
@@ -314,7 +326,7 @@ export namespace SettingService {
   export const useUpdateSettingMutation = () =>
     useMutation({
       mutationFn: (params: { key: string; value: string }) =>
-        updateSetting(params.key, params.value),
+        SettingService.updateSetting(params.key, params.value),
     });
 
   export async function resetSetting(key: string): Promise<{ applies: SettingApplies }> {
@@ -327,7 +339,7 @@ export namespace SettingService {
 
   export const useResetSettingMutation = () =>
     useMutation({
-      mutationFn: (params: { key: string }) => resetSetting(params.key),
+      mutationFn: (params: { key: string }) => SettingService.resetSetting(params.key),
     });
 
   export async function triggerExpiryReminder(): Promise<{ sent: number }> {
@@ -339,7 +351,7 @@ export namespace SettingService {
 
   export const useTriggerExpiryReminderMutation = () =>
     useMutation({
-      mutationFn: (params: void) => triggerExpiryReminder(),
+      mutationFn: (params: void) => SettingService.triggerExpiryReminder(),
     });
 }
 
@@ -459,7 +471,8 @@ export namespace RequestLogStepService {
 
   export const useSaveMutation = () =>
     useMutation({
-      mutationFn: (params: { spa: RequestLogStepSaveParams[] }) => save(params.spa),
+      mutationFn: (params: { spa: RequestLogStepSaveParams[] }) =>
+        RequestLogStepService.save(params.spa),
     });
 
   export async function del(ids: number[]): Promise<number> {
@@ -472,7 +485,7 @@ export namespace RequestLogStepService {
 
   export const useDelMutation = () =>
     useMutation({
-      mutationFn: (params: { ids: number[] }) => del(params.ids),
+      mutationFn: (params: { ids: number[] }) => RequestLogStepService.del(params.ids),
     });
 }
 
@@ -586,7 +599,7 @@ export namespace RequestLogService {
 
   export const useSaveMutation = () =>
     useMutation({
-      mutationFn: (params: { spa: RequestLogSaveParams[] }) => save(params.spa),
+      mutationFn: (params: { spa: RequestLogSaveParams[] }) => RequestLogService.save(params.spa),
     });
 
   export async function responseTypeTs(
@@ -643,7 +656,7 @@ export namespace RequestLogService {
 
   export const useDelMutation = () =>
     useMutation({
-      mutationFn: (params: { ids: number[] }) => del(params.ids),
+      mutationFn: (params: { ids: number[] }) => RequestLogService.del(params.ids),
     });
 }
 
@@ -658,7 +671,7 @@ export namespace QgridService {
 
   export const useQueryMutation = () =>
     useMutation({
-      mutationFn: (params: { args: QueryInput }) => query(params.args),
+      mutationFn: (params: { args: QueryInput }) => QgridService.query(params.args),
     });
 
   export async function prepareStream(args: QueryInput): Promise<{ streamId: string }> {
@@ -671,7 +684,7 @@ export namespace QgridService {
 
   export const usePrepareStreamMutation = () =>
     useMutation({
-      mutationFn: (params: { args: QueryInput }) => prepareStream(params.args),
+      mutationFn: (params: { args: QueryInput }) => QgridService.prepareStream(params.args),
     });
 
   export function useQueryStream(
@@ -713,6 +726,12 @@ export namespace QgridService {
           ttftMs: number;
           costUsd: number;
           costSource: "provider" | "pricing_table" | "mixed";
+          providerMetadata?: {
+            xai?: {
+              costInUsdTicks?: number;
+              contextWindow?: number;
+            };
+          };
           content:
             | {
                 type: "text";
@@ -804,6 +823,12 @@ export namespace QgridService {
         ttftMs: number;
         costUsd: number;
         costSource: "provider" | "pricing_table" | "mixed";
+        providerMetadata?: {
+          xai?: {
+            costInUsdTicks?: number;
+            contextWindow?: number;
+          };
+        };
         content:
           | {
               type: "text";
@@ -868,7 +893,7 @@ export namespace QgridService {
 
   export const useCreateRunMutation = () =>
     useMutation({
-      mutationFn: (params: { input: CreateRunInput }) => createRun(params.input),
+      mutationFn: (params: { input: CreateRunInput }) => QgridService.createRun(params.input),
     });
 
   export async function appendStep(input: AppendStepInput): Promise<{ stepId: number }> {
@@ -881,7 +906,7 @@ export namespace QgridService {
 
   export const useAppendStepMutation = () =>
     useMutation({
-      mutationFn: (params: { input: AppendStepInput }) => appendStep(params.input),
+      mutationFn: (params: { input: AppendStepInput }) => QgridService.appendStep(params.input),
     });
 
   export async function finishRun(input: FinishRunInput): Promise<{ ok: boolean }> {
@@ -894,7 +919,7 @@ export namespace QgridService {
 
   export const useFinishRunMutation = () =>
     useMutation({
-      mutationFn: (params: { input: FinishRunInput }) => finishRun(params.input),
+      mutationFn: (params: { input: FinishRunInput }) => QgridService.finishRun(params.input),
     });
 
   export async function stats(): Promise<TokenStats[]> {
@@ -920,7 +945,7 @@ export namespace QgridService {
 
   export async function totalCost(
     params?: RequestLogListParams,
-  ): Promise<{ usd: number; unknownImageCostCount: number }> {
+  ): Promise<{ usd: number; unknownImageCostCount: number; unknownCostCount: number }> {
     return fetch({
       method: "GET",
       url: `/api/qgrid/totalCost?${qs.stringify({ params })}`,
@@ -998,7 +1023,7 @@ export namespace QgridService {
   export const useAddTokenMutation = () =>
     useMutation({
       mutationFn: (params: { provider: string; credentials: TokenCredentials; name: string }) =>
-        addToken(params.provider, params.credentials, params.name),
+        QgridService.addToken(params.provider, params.credentials, params.name),
     });
 
   export async function updateToken(
@@ -1025,7 +1050,7 @@ export namespace QgridService {
 
   export const useRemoveTokenMutation = () =>
     useMutation({
-      mutationFn: (params: { id: number }) => removeToken(params.id),
+      mutationFn: (params: { id: number }) => QgridService.removeToken(params.id),
     });
 
   export async function toggleToken(id: number): Promise<{ active: boolean }> {
@@ -1038,7 +1063,7 @@ export namespace QgridService {
 
   export const useToggleTokenMutation = () =>
     useMutation({
-      mutationFn: (params: { id: number }) => toggleToken(params.id),
+      mutationFn: (params: { id: number }) => QgridService.toggleToken(params.id),
     });
 
   export async function oauthStart(name: string): Promise<OAuthStartResult> {
@@ -1051,7 +1076,7 @@ export namespace QgridService {
 
   export const useOauthStartMutation = () =>
     useMutation({
-      mutationFn: (params: { name: string }) => oauthStart(params.name),
+      mutationFn: (params: { name: string }) => QgridService.oauthStart(params.name),
     });
 
   export async function oauthComplete(
@@ -1066,7 +1091,7 @@ export namespace QgridService {
 
   export const useOauthCompleteMutation = () =>
     useMutation({
-      mutationFn: (params: { pastedCode: string }) => oauthComplete(params.pastedCode),
+      mutationFn: (params: { pastedCode: string }) => QgridService.oauthComplete(params.pastedCode),
     });
 
   export async function oauthStartOpenAI(name: string): Promise<OAuthStartResult> {
@@ -1079,7 +1104,113 @@ export namespace QgridService {
 
   export const useOauthStartOpenAIMutation = () =>
     useMutation({
-      mutationFn: (params: { name: string }) => oauthStartOpenAI(params.name),
+      mutationFn: (params: { name: string }) => QgridService.oauthStartOpenAI(params.name),
+    });
+
+  export async function oauthStartGrok(name: string): Promise<OAuthStartResult> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/oauthStartGrok`,
+      data: { name },
+    });
+  }
+
+  export const useOauthStartGrokMutation = () =>
+    useMutation({
+      mutationFn: (params: { name: string }) => QgridService.oauthStartGrok(params.name),
+    });
+
+  export async function oauthStartGrokDevice(name: string): Promise<GrokDeviceCodeStart> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/oauthStartGrokDevice`,
+      data: { name },
+    });
+  }
+
+  export const useOauthStartGrokDeviceMutation = () =>
+    useMutation({
+      mutationFn: (params: { name: string }) => QgridService.oauthStartGrokDevice(params.name),
+    });
+
+  export async function oauthPollGrokDevice(deviceCode: string): Promise<GrokDevicePollResult> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/oauthPollGrokDevice`,
+      data: { deviceCode },
+    });
+  }
+
+  export const useOauthPollGrokDeviceMutation = () =>
+    useMutation({
+      mutationFn: (params: { deviceCode: string }) =>
+        QgridService.oauthPollGrokDevice(params.deviceCode),
+    });
+
+  export async function generateImages(params: GenerateImagesInput): Promise<GenerateImagesOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/generateImages`,
+      data: { params },
+    });
+  }
+
+  export const useGenerateImagesMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: GenerateImagesInput }) =>
+        QgridService.generateImages(params.params),
+    });
+
+  export async function videoStart(params: VideoStartInput): Promise<VideoStartOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/videoStart`,
+      data: { params },
+    });
+  }
+
+  export const useVideoStartMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: VideoStartInput }) => QgridService.videoStart(params.params),
+    });
+
+  export async function videoStatus(params: VideoStatusInput): Promise<VideoStatusOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/videoStatus`,
+      data: { params },
+    });
+  }
+
+  export const useVideoStatusMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: VideoStatusInput }) => QgridService.videoStatus(params.params),
+    });
+
+  export async function transcribe(params: TranscribeInput): Promise<TranscribeOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/transcribe`,
+      data: { params },
+    });
+  }
+
+  export const useTranscribeMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: TranscribeInput }) => QgridService.transcribe(params.params),
+    });
+
+  export async function speak(params: SpeakInput): Promise<SpeakOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/speak`,
+      data: { params },
+    });
+  }
+
+  export const useSpeakMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: SpeakInput }) => QgridService.speak(params.params),
     });
 
   export async function usage(tokenId?: number): Promise<UsageResponse> {

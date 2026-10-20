@@ -8,10 +8,17 @@ import { createFenceStripTransform } from "../../utils/providers/anthropic/fence
 import { getAccessToken } from "../../utils/providers/common/credentials";
 import { calculateCostUsd } from "../../utils/providers/common/model-cost";
 import {
+  type GenerateRequest,
   type GenerateResult,
+  type GenerateStreamCallbacks,
+  type ProviderDispatcher,
   type StreamCallbacks,
 } from "../../utils/providers/common/provider-dispatcher";
-import { type JsonValue } from "../../utils/providers/common/provider-types";
+import {
+  isProviderId,
+  type JsonValue,
+  type ProviderId,
+} from "../../utils/providers/common/provider-types";
 import {
   parseAndValidateCallerSchemas,
   serializeAndValidateDispatchSchema,
@@ -41,6 +48,53 @@ export type InternalQueryInput = QueryInput & {
   requirePreferredToken?: boolean;
 };
 
+// qgrid 상위가 provider 에 요구하는 실행 계약. 스트리밍은 공통 ProviderDispatcher 에 아직 없어서
+// 여기서 합친다.
+export type StreamingProviderDispatcher = ProviderDispatcher & {
+  generateStream(req: GenerateRequest, cb: GenerateStreamCallbacks): Promise<void>;
+};
+
+// TokenSubscriber 가 grok row 를 전달하는 계약. credentials 는 DB JSONB 원본이며 dispatcher 가
+// 자체 스키마로 검증한다.
+export type GrokTokenRow = {
+  id: number;
+  name: string;
+  credentials: unknown;
+  quotaThreshold: number | null;
+  weight: number;
+};
+
+export interface GrokTokenSink {
+  onTokenAdded(
+    id: number,
+    name: string,
+    credentials: unknown,
+    quotaThreshold: number | null,
+    weight: number,
+  ): void | Promise<void>;
+  onTokenUpdated(
+    id: number,
+    name: string,
+    credentials: unknown,
+    quotaThreshold: number | null,
+    weight: number,
+  ): void | Promise<void>;
+  onTokenRemoved(id: number): void | Promise<void>;
+  replaceTokens(rows: GrokTokenRow[]): void | Promise<void>;
+}
+
+export type GrokProviderDispatcher = StreamingProviderDispatcher & GrokTokenSink;
+
+export type QgridDispatcherOptions = {
+  grokDispatcher?: GrokProviderDispatcher | null;
+};
+
+const PROVIDER_LABELS: Record<ProviderId, string> = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  grok: "Grok",
+};
+
 export class QgridDispatcherClass {
   tokens = new Map<number, TokenSubsetA>();
 
@@ -49,21 +103,74 @@ export class QgridDispatcherClass {
   requestCounts = new Map<string, number>();
 
   subscriber: TokenSubscriber | null = null;
-  openaiDispatcher: OpenAIDispatcher | null = null;
-  anthropicDispatcher: AnthropicDispatcher | null = null;
+
+  // provider route prefix → 실행 dispatcher. 등록되지 않은 provider 는 not-ready 로 응답한다.
+  readonly dispatchers = new Map<ProviderId, StreamingProviderDispatcher>();
+  #openaiDispatcher: OpenAIDispatcher | null = null;
+  #anthropicDispatcher: AnthropicDispatcher | null = null;
+  #grokDispatcher: GrokProviderDispatcher | null = null;
 
   // HTTP가 dispatcher보다 먼저 열리므로 초기화 중과 초기화 실패를 구분한다.
-  startupState: Record<"openai" | "anthropic", ProviderStartupState> = {
+  // grok 은 bootstrap 이 붙기 전까지 상태가 없으며, 없으면 기동 중으로 본다.
+  startupState: Record<"openai" | "anthropic", ProviderStartupState> &
+    Partial<Record<"grok", ProviderStartupState>> = {
     openai: "starting",
     anthropic: "starting",
   };
 
+  constructor(options: QgridDispatcherOptions = {}) {
+    if (options.grokDispatcher) this.grokDispatcher = options.grokDispatcher;
+  }
+
+  get openaiDispatcher(): OpenAIDispatcher | null {
+    return this.#openaiDispatcher;
+  }
+
+  set openaiDispatcher(dispatcher: OpenAIDispatcher | null) {
+    this.#openaiDispatcher = dispatcher;
+    this.register("openai", dispatcher);
+  }
+
+  get anthropicDispatcher(): AnthropicDispatcher | null {
+    return this.#anthropicDispatcher;
+  }
+
+  set anthropicDispatcher(dispatcher: AnthropicDispatcher | null) {
+    this.#anthropicDispatcher = dispatcher;
+    this.register("anthropic", dispatcher);
+  }
+
+  get grokDispatcher(): GrokProviderDispatcher | null {
+    return this.#grokDispatcher;
+  }
+
+  set grokDispatcher(dispatcher: GrokProviderDispatcher | null) {
+    this.#grokDispatcher = dispatcher;
+    this.register("grok", dispatcher);
+  }
+
+  register(provider: ProviderId, dispatcher: StreamingProviderDispatcher | null): void {
+    if (dispatcher) this.dispatchers.set(provider, dispatcher);
+    else this.dispatchers.delete(provider);
+  }
+
   // 초기화 중에는 503 + Retry-After, 초기화 실패에는 500을 반환한다.
-  notReadyError(provider: "openai" | "anthropic"): Error {
-    const label = provider === "openai" ? "OpenAI" : "Anthropic";
+  notReadyError(provider: ProviderId): Error {
+    const label = PROVIDER_LABELS[provider];
     return this.startupState[provider] === "failed"
       ? new InternalServerErrorException(SD("qgrid.dispatcherFailed")(label))
       : new ServiceUnavailableException(SD("qgrid.dispatcherStarting")(label));
+  }
+
+  // prefix 없는/미지원 prefix 는 기존대로 ProcessError, 지원 provider 의 미등록은 not-ready.
+  resolveDispatcher(
+    input: QueryInput,
+    provider: string | undefined,
+  ): { provider: ProviderId; dispatcher: StreamingProviderDispatcher } {
+    if (!isProviderId(provider)) throw directLlmApiFallbackNotImplemented(input);
+    const dispatcher = this.dispatchers.get(provider);
+    if (!dispatcher) throw this.notReadyError(provider);
+    return { provider, dispatcher };
   }
 
   recordCompleted(provider: string, tokenName: string): void {
@@ -88,55 +195,11 @@ export class QgridDispatcherClass {
     const route = parseProviderRoute(input.model);
     const outputSchema = buildAndValidateStrictOutputSchema(input, route.provider);
     const answerKind = input.jsonSchema ? ("json" as const) : ("text" as const);
+    const { provider, dispatcher } = this.resolveDispatcher(input, route.provider);
 
-    if (route.provider === "openai") {
-      if (!this.openaiDispatcher) throw this.notReadyError("openai");
-
-      const decision = decideConvRouting(input, {
-        directOpenAI: true,
-        modelNamespace: `openai/${route.model}`,
-      });
-      const result = await this.openaiDispatcher.generate({
-        model: route.model,
-        systemPrompt: input.system,
-        outputSchema,
-        stopAfterOutputMessage: input.tools?.length
-          ? (text, phase) => isToolCallEnvelope(text, input.tools!, answerKind, phase)
-          : undefined,
-        thinking: input.thinking,
-        effort: input.thinking === false ? undefined : input.effort,
-        verbosity: input.verbosity,
-        reasoningSummary: input.reasoningSummary,
-        serviceTier: input.serviceTier,
-        timeoutMs: input.timeout,
-        coldInput: decision.coldInput,
-        coldHistory: decision.coldHistory,
-        promptCacheKey: input.imageGeneration ? undefined : decision.promptCacheKey,
-        preferredTokenId:
-          input.preferredTokenId ?? (input.imageGeneration ? undefined : decision.preferredTokenId),
-        requirePreferredToken: input.requirePreferredToken,
-        abortSignal,
-        imageGeneration: input.imageGeneration,
-        imageGenerationOptions: input.imageGenerationOptions,
-      });
-      this.recordCompleted("openai", result.tokenName);
-
-      // 이미지 요청은 cold-only(R8)라 재사용 좌표를 발급하지 않는다. 좌표를 실으면
-      // sessionKey 소비자의 warm 좌표를 죽은 좌표로 덮어써 다음 텍스트 turn 이 cold 로 떨어진다.
-      const coord = input.imageGeneration
-        ? undefined
-        : issueConvContext(result.threadCoord, decision, result.threadCoord.workerId);
-
-      return applyToolCallEmulation(toEmulationResult(result, input.serviceTier), input.tools, {
-        threadCoord: coord,
-        images: result.images,
-        answerKind,
-      });
-    } else if (route.provider === "anthropic") {
-      if (!this.anthropicDispatcher) throw this.notReadyError("anthropic");
-
+    if (provider === "anthropic") {
       const decision = decideConvRouting(input);
-      const result = await this.anthropicDispatcher.generate({
+      const result = await dispatcher.generate({
         model: input.model,
         systemPrompt: composeSystemWithSchemaContract(input.system, input),
         thinking: input.thinking,
@@ -149,7 +212,7 @@ export class QgridDispatcherClass {
         imageGeneration: input.imageGeneration,
         imageGenerationOptions: input.imageGenerationOptions,
       });
-      this.recordCompleted("anthropic", result.tokenName);
+      this.recordCompleted(provider, result.tokenName);
 
       return applyToolCallEmulation(toEmulationResult(result), input.tools, {
         threadCoord: issueConvContext(result.threadCoord, decision),
@@ -157,7 +220,31 @@ export class QgridDispatcherClass {
       });
     }
 
-    throw directLlmApiFallbackNotImplemented(input);
+    const decision = decideConvRouting(input, {
+      directProvider: provider,
+      modelNamespace: `${provider}/${route.model}`,
+    });
+    const result = await dispatcher.generate({
+      ...buildDirectRequest(input, route.model, outputSchema, answerKind, abortSignal),
+      promptCacheKey: input.imageGeneration ? undefined : decision.promptCacheKey,
+      preferredTokenId:
+        input.preferredTokenId ?? (input.imageGeneration ? undefined : decision.preferredTokenId),
+      coldInput: decision.coldInput,
+      coldHistory: decision.coldHistory,
+    });
+    this.recordCompleted(provider, result.tokenName);
+
+    // 이미지 요청은 cold-only(R8)라 재사용 좌표를 발급하지 않는다. 좌표를 실으면
+    // sessionKey 소비자의 warm 좌표를 죽은 좌표로 덮어써 다음 텍스트 turn 이 cold 로 떨어진다.
+    const coord = input.imageGeneration
+      ? undefined
+      : issueConvContext(result.threadCoord, decision, result.threadCoord.workerId);
+
+    return applyToolCallEmulation(toEmulationResult(result, input.serviceTier), input.tools, {
+      threadCoord: coord,
+      images: result.images,
+      answerKind,
+    });
   }
 
   async queryStream(
@@ -168,65 +255,9 @@ export class QgridDispatcherClass {
     const route = parseProviderRoute(input.model);
     const outputSchema = buildAndValidateStrictOutputSchema(input, route.provider);
     const answerKind = input.jsonSchema ? ("json" as const) : ("text" as const);
+    const { provider, dispatcher } = this.resolveDispatcher(input, route.provider);
 
-    if (route.provider === "openai") {
-      if (!this.openaiDispatcher) throw this.notReadyError("openai");
-
-      const decision = decideConvRouting(input, {
-        directOpenAI: true,
-        modelNamespace: `openai/${route.model}`,
-      });
-      await this.openaiDispatcher.generateStream(
-        {
-          model: route.model,
-          systemPrompt: input.system,
-          outputSchema,
-          stopAfterOutputMessage: input.tools?.length
-            ? (text, phase) => isToolCallEnvelope(text, input.tools!, answerKind, phase)
-            : undefined,
-          thinking: input.thinking,
-          effort: input.thinking === false ? undefined : input.effort,
-          verbosity: input.verbosity,
-          reasoningSummary: input.reasoningSummary,
-          serviceTier: input.serviceTier,
-          timeoutMs: input.timeout,
-          coldInput: decision.coldInput,
-          coldHistory: decision.coldHistory,
-          promptCacheKey: decision.promptCacheKey,
-          preferredTokenId: input.preferredTokenId ?? decision.preferredTokenId,
-          requirePreferredToken: input.requirePreferredToken,
-          abortSignal,
-          imageGeneration: input.imageGeneration,
-          imageGenerationOptions: input.imageGenerationOptions,
-        },
-        {
-          onDelta: cb.onDelta,
-          onThreadId: cb.onThreadId,
-          onTurnId: cb.onTurnId,
-          onComplete: (turnResult) => {
-            this.recordCompleted("openai", turnResult.tokenName);
-            cb.onComplete(
-              applyToolCallEmulation(
-                toEmulationResult(turnResult, input.serviceTier),
-                input.tools,
-                {
-                  threadCoord: issueConvContext(
-                    turnResult.threadCoord,
-                    decision,
-                    turnResult.threadCoord.workerId,
-                  ),
-                  answerKind,
-                },
-              ),
-            );
-          },
-          onError: cb.onError,
-        },
-      );
-      return;
-    } else if (route.provider === "anthropic") {
-      if (!this.anthropicDispatcher) throw this.notReadyError("anthropic");
-
+    if (provider === "anthropic") {
       // 구조화 응답은 최종 텍스트와 델타 모두 코드펜스를 제거한다.
       const hasSchemaContract = input.jsonSchema !== undefined || Boolean(input.tools?.length);
       const fenceStrip = hasSchemaContract ? createFenceStripTransform() : undefined;
@@ -238,7 +269,7 @@ export class QgridDispatcherClass {
         : cb.onDelta;
 
       const decision = decideConvRouting(input);
-      await this.anthropicDispatcher.generateStream(
+      await dispatcher.generateStream(
         {
           model: input.model,
           systemPrompt: composeSystemWithSchemaContract(input.system, input),
@@ -256,7 +287,7 @@ export class QgridDispatcherClass {
           onDelta: emitDelta,
           onThreadId: cb.onThreadId,
           onComplete: (turnResult) => {
-            this.recordCompleted("anthropic", turnResult.tokenName);
+            this.recordCompleted(provider, turnResult.tokenName);
             // 닫는 펜스 판정 때문에 보류한 텍스트를 완료 전에 방출한다.
             const rest = fenceStrip?.flush();
             if (rest) cb.onDelta(rest);
@@ -275,8 +306,71 @@ export class QgridDispatcherClass {
       return;
     }
 
-    throw directLlmApiFallbackNotImplemented(input);
+    const decision = decideConvRouting(input, {
+      directProvider: provider,
+      modelNamespace: `${provider}/${route.model}`,
+    });
+    await dispatcher.generateStream(
+      {
+        ...buildDirectRequest(input, route.model, outputSchema, answerKind, abortSignal),
+        promptCacheKey: decision.promptCacheKey,
+        preferredTokenId: input.preferredTokenId ?? decision.preferredTokenId,
+        coldInput: decision.coldInput,
+        coldHistory: decision.coldHistory,
+      },
+      {
+        onDelta: cb.onDelta,
+        onThreadId: cb.onThreadId,
+        onTurnId: cb.onTurnId,
+        onComplete: (turnResult) => {
+          this.recordCompleted(provider, turnResult.tokenName);
+          cb.onComplete(
+            applyToolCallEmulation(toEmulationResult(turnResult, input.serviceTier), input.tools, {
+              threadCoord: issueConvContext(
+                turnResult.threadCoord,
+                decision,
+                turnResult.threadCoord.workerId,
+              ),
+              answerKind,
+            }),
+          );
+        },
+        onError: cb.onError,
+      },
+    );
   }
+}
+
+// Direct provider(OpenAI, Grok) 공통 요청 필드. cache affinity 필드는 stream 여부에 따라 호출부가 채운다.
+function buildDirectRequest(
+  input: InternalQueryInput,
+  model: string,
+  outputSchema: JsonValue | undefined,
+  answerKind: "json" | "text",
+  abortSignal: AbortSignal | undefined,
+): Omit<GenerateRequest, "coldInput" | "coldHistory" | "promptCacheKey" | "preferredTokenId"> {
+  return {
+    model,
+    systemPrompt: input.system,
+    outputSchema,
+    stopAfterOutputMessage: input.tools?.length
+      ? (text, phase) => isToolCallEnvelope(text, input.tools!, answerKind, phase)
+      : undefined,
+    thinking: input.thinking,
+    effort: input.thinking === false ? undefined : input.effort,
+    verbosity: input.verbosity,
+    reasoningSummary: input.reasoningSummary,
+    serviceTier: input.serviceTier,
+    timeoutMs: input.timeout,
+    requirePreferredToken: input.requirePreferredToken,
+    abortSignal,
+    imageGeneration: input.imageGeneration,
+    imageGenerationOptions: input.imageGenerationOptions,
+    // Opaque namespaces; the Grok dispatcher reads `xai`, OpenAI ignores it.
+    ...(input.providerOptions?.xai
+      ? { providerOptions: { xai: { ...input.providerOptions.xai } } }
+      : {}),
+  };
 }
 
 function parseProviderRoute(model: string | undefined): { provider?: string; model: string } {
@@ -347,7 +441,10 @@ function toEmulationResult(
   result: GenerateResult,
   serviceTier?: string,
 ): Omit<QueryOutput, "content" | "finishReason" | "runContext"> {
-  const hasProviderCost = result.costUsd !== undefined && result.costUsd > 0;
+  // A provider that labels its own cost (Grok ticks) is authoritative even at 0; otherwise only a
+  // positive provider cost (Claude Code total_cost_usd) wins over the price table.
+  const hasProviderCost =
+    result.costUsd !== undefined && (result.costSource === "provider" || result.costUsd > 0);
   return {
     text: result.text,
     tokenName: result.tokenName,
@@ -379,7 +476,10 @@ function toEmulationResult(
           },
           serviceTier,
         ),
-    costSource: hasProviderCost ? "provider" : "pricing_table",
+    costSource: hasProviderCost ? (result.costSource ?? "provider") : "pricing_table",
+    ...(result.providerMetadata?.xai
+      ? { providerMetadata: { xai: result.providerMetadata.xai } }
+      : {}),
   };
 }
 

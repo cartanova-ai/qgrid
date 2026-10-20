@@ -3,8 +3,96 @@ import { useState } from "react";
 import KeyIcon from "~icons/lucide/key-round";
 import PlusIcon from "~icons/lucide/plus";
 
+import { DeviceCodeEntry } from "./DeviceCodeEntry";
 import { OAuthCodeEntry } from "./OAuthCodeEntry";
-import { useOAuthLoginFlow } from "./use-oauth-login-flow";
+import { type Provider, useOAuthLoginFlow } from "./use-oauth-login-flow";
+
+function Spinner({ light }: { light: boolean }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span
+        className={`w-3.5 h-3.5 border-2 border-t-transparent rounded-full animate-spin ${light ? "border-white" : "border-sand-400"}`}
+      />
+      Waiting for login...
+    </span>
+  );
+}
+
+function OrDivider() {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="flex-1 h-px bg-sand-200" />
+      <span className="text-[10px] text-sand-400 uppercase">or</span>
+      <div className="flex-1 h-px bg-sand-200" />
+    </div>
+  );
+}
+
+/** Provider 선택 버튼들. 상태는 상위(`useOAuthLoginFlow`)가 소유한다. */
+export function AddTokenProviderOptions({
+  disabled,
+  loadingProvider,
+  onStart,
+  onStartGrokDevice,
+}: {
+  disabled: boolean;
+  loadingProvider: Provider | null;
+  onStart: (provider: Provider) => void;
+  onStartGrokDevice: () => void;
+}) {
+  const secondary =
+    "w-full py-2.5 text-sm font-medium rounded-md border border-sand-300 text-sand-700 hover:bg-sand-100 disabled:opacity-50 transition-colors duration-150 flex items-center justify-center gap-2";
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        className="w-full py-2.5 text-sm font-medium rounded-md bg-sand-900 text-white hover:bg-sand-800 disabled:opacity-50 transition-colors duration-150 flex items-center justify-center gap-2"
+        disabled={disabled}
+        onClick={() => onStart("openai")}
+      >
+        {loadingProvider === "openai" ? (
+          <Spinner light />
+        ) : (
+          <>
+            <KeyIcon className="size-4" />
+            Login with OpenAI
+          </>
+        )}
+      </button>
+
+      <OrDivider />
+
+      <button
+        type="button"
+        className={secondary}
+        disabled={disabled}
+        onClick={() => onStart("anthropic")}
+      >
+        {loadingProvider === "anthropic" ? (
+          <Spinner light={false} />
+        ) : (
+          <>
+            <KeyIcon className="size-4" />
+            Login with Claude
+          </>
+        )}
+      </button>
+
+      <OrDivider />
+
+      <button type="button" className={secondary} disabled={disabled} onClick={onStartGrokDevice}>
+        {loadingProvider === "grok" ? (
+          <Spinner light={false} />
+        ) : (
+          <>
+            <KeyIcon className="size-4" />
+            Login with xAI
+          </>
+        )}
+      </button>
+    </div>
+  );
+}
 
 export function AddTokenModal() {
   const [open, setOpen] = useState(false);
@@ -71,52 +159,15 @@ export function AddTokenModal() {
                   onSubmit={(code) => void submitPastedCode(code)}
                   onRestart={oauth.reset}
                 />
+              ) : oauth.deviceFlow ? (
+                <DeviceCodeEntry flow={oauth.deviceFlow} onRestart={oauth.reset} />
               ) : (
-                <div className="space-y-2">
-                  <button
-                    type="button"
-                    className="w-full py-2.5 text-sm font-medium rounded-md bg-sand-900 text-white hover:bg-sand-800 disabled:opacity-50 transition-colors duration-150 flex items-center justify-center gap-2"
-                    disabled={!name.trim() || oauth.loadingProvider !== null}
-                    onClick={() => void oauth.start("openai", name)}
-                  >
-                    {oauth.loadingProvider === "openai" ? (
-                      <span className="flex items-center gap-1.5">
-                        <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        Waiting for login...
-                      </span>
-                    ) : (
-                      <>
-                        <KeyIcon className="size-4" />
-                        Login with OpenAI
-                      </>
-                    )}
-                  </button>
-
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1 h-px bg-sand-200" />
-                    <span className="text-[10px] text-sand-400 uppercase">or</span>
-                    <div className="flex-1 h-px bg-sand-200" />
-                  </div>
-
-                  <button
-                    type="button"
-                    className="w-full py-2.5 text-sm font-medium rounded-md border border-sand-300 text-sand-700 hover:bg-sand-100 disabled:opacity-50 transition-colors duration-150 flex items-center justify-center gap-2"
-                    disabled={!name.trim() || oauth.loadingProvider !== null}
-                    onClick={() => void oauth.start("anthropic", name)}
-                  >
-                    {oauth.loadingProvider === "anthropic" ? (
-                      <span className="flex items-center gap-1.5">
-                        <span className="w-3.5 h-3.5 border-2 border-sand-400 border-t-transparent rounded-full animate-spin" />
-                        Waiting for login...
-                      </span>
-                    ) : (
-                      <>
-                        <KeyIcon className="size-4" />
-                        Login with Claude
-                      </>
-                    )}
-                  </button>
-                </div>
+                <AddTokenProviderOptions
+                  disabled={!name.trim() || oauth.loadingProvider !== null}
+                  loadingProvider={oauth.loadingProvider}
+                  onStart={(provider) => void oauth.start(provider, name)}
+                  onStartGrokDevice={() => void oauth.startDevice(name, close)}
+                />
               )}
             </div>
 

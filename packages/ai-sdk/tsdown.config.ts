@@ -5,7 +5,7 @@ export default defineConfig({
   dts: true,
   clean: true,
   deps: {
-    neverBundle: ["ai", "@ai-sdk/provider", "@ai-sdk/provider-utils", "undici"],
+    neverBundle: ["ai", "@ai-sdk/provider", "@ai-sdk/provider-utils", "undici", "zod"],
   },
   fixedExtension: false,
   format: "esm",

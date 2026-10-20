@@ -56,6 +56,25 @@ export default {
   "qgrid.dispatcherFailed": (provider: string) => `${provider} dispatcher 초기화에 실패했습니다`,
   "qgrid.dispatcherStarting": (provider: string) =>
     `${provider} dispatcher 기동 중입니다. 잠시 후 다시 시도해주세요`,
+  "qgrid.grokCapabilityUnavailable": (detail: string) =>
+    `Grok 기능을 사용할 수 없습니다: ${detail}`,
+  "qgrid.grokCapacity": "모든 Grok 토큰이 동시 요청 한도에 도달했습니다. 잠시 후 다시 시도해주세요",
+  "qgrid.grokContentPolicy": (detail: string) =>
+    `콘텐츠 정책 위반으로 Grok 생성이 차단되었습니다: ${detail}`,
+  "qgrid.grokInvalidRequest": (detail: string) => `잘못된 Grok 요청입니다: ${detail}`,
+  "qgrid.grokLoginFailed": (detail: string) => `Grok 로그인에 실패했습니다: ${detail}`,
+  "qgrid.grokNotOAuthToken": "Grok 로그인 결과가 xAI OAuth 토큰이 아닙니다",
+  "qgrid.grokNoWorkers": (detail: string) => `사용 가능한 Grok 토큰이 없습니다: ${detail}`,
+  "qgrid.grokRateLimited": (retryAfterSec: number) =>
+    `모든 Grok 토큰이 요청 한도에 걸렸습니다. ${retryAfterSec}초 후 다시 시도해주세요`,
+  "qgrid.grokOnDemandExcluded": (tokens: string) =>
+    `xAI에서 on-demand 과금이 켜져 있어 모든 Grok 토큰이 제외되었습니다: ${tokens}. on-demand 과금을 끄거나 다른 계정을 추가해주세요`,
+  "qgrid.grokZdrVideoUnavailable": (tokens: string) =>
+    `Zero Data Retention이 켜져 있어 Grok 비디오를 사용할 수 없습니다: ${tokens}. xAI에서 data-retention opt-out을 끄거나 ZDR이 아닌 계정을 사용해주세요`,
+  "qgrid.invalidInput": (detail: string) => `qgrid: 잘못된 입력입니다: ${detail}`,
+  "qgrid.requestBodyTooLarge": (limitMiB: number) =>
+    `요청 본문이 ${limitMiB} MiB 제한을 초과했습니다`,
+  "qgrid.videoJobNotFound": "비디오 작업을 찾을 수 없습니다",
   "error.unauthorized": "인증이 필요합니다",
   "error.unknownSearchField": (field: string) => `구현되지 않은 검색 필드 ${field}`,
   notFound: (name: string, id: number) => `존재하지 않는 ${name} ID ${id}`,

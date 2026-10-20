@@ -12,6 +12,7 @@ import {
 } from "sonamu";
 
 import { SD } from "../../i18n/sd.generated";
+import { isProviderId, type ProviderId } from "../../utils/providers/common/provider-types";
 import { type TokenSubsetKey, type TokenSubsetMapping } from "../sonamu.generated";
 import { tokenLoaderQueries, tokenSubsetQueries } from "../sonamu.generated.sso";
 import { type TokenCredentials, type TokenListParams, type TokenSaveParams } from "./token.types";
@@ -28,6 +29,30 @@ export type TokenUpdateFields = {
   weight?: number;
   keepalive_enabled?: boolean;
 };
+
+// provider 별로 같은 계정을 식별하는 credentials JSONB 키. 재로그인 dedup 과 계정 조회가 함께 쓴다.
+export const TOKEN_IDENTITY_KEYS = {
+  anthropic: "accountUuid",
+  openai: "accountId",
+  grok: "userId",
+} as const satisfies Record<ProviderId, string>;
+
+export type TokenIdentityKey = (typeof TOKEN_IDENTITY_KEYS)[ProviderId];
+
+export class UnknownTokenProviderError extends Error {
+  readonly provider: string;
+
+  constructor(provider: string) {
+    super(`Unknown token provider: ${provider}`);
+    this.name = "UnknownTokenProviderError";
+    this.provider = provider;
+  }
+}
+
+export function tokenIdentityKey(provider: string): TokenIdentityKey {
+  if (!isProviderId(provider)) throw new UnknownTokenProviderError(provider);
+  return TOKEN_IDENTITY_KEYS[provider];
+}
 
 function applyCreateDefaults(sp: TokenSaveParams): TokenSaveParams {
   if (sp.id !== undefined) return sp;
@@ -119,8 +144,8 @@ class TokenModelClass extends BaseModelClass<
     accountId: string,
   ): Promise<TokenSubsetMapping[T][]> {
     const { qb } = this.getSubsetQueries(subset);
+    const jsonKey = tokenIdentityKey(provider);
     qb.where("tokens.provider", provider);
-    const jsonKey = provider === "anthropic" ? "accountUuid" : "accountId";
     qb.whereRaw(`tokens.credentials->>'${jsonKey}' = ?`, [accountId]);
     const result = await this.executeSubsetQuery({
       subset,
@@ -232,10 +257,10 @@ class TokenModelClass extends BaseModelClass<
     accountId: string | undefined,
     saveParams: TokenSaveParams,
   ): Promise<void> {
+    const jsonKey = tokenIdentityKey(provider);
     await this.getPuri("w").transaction(async (trx) => {
       let replacement = saveParams;
       if (accountId) {
-        const jsonKey = provider === "anthropic" ? "accountUuid" : "accountId";
         const oldEntries = await trx
           .from("tokens")
           .select({
