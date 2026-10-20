@@ -2119,6 +2119,26 @@ describe("QgridFrame Grok media and voice (U11)", () => {
     );
   });
 
+  it("videoStatus logs a terminal result once when polls overlap", async () => {
+    grok.startVideo!.mockResolvedValueOnce({ result: { request_id: "req-1" }, tokenId: 9, tokenName: "grok/b" });
+    let release!: () => void;
+    const upstream = new Promise<void>((resolve) => (release = resolve));
+    grok.getVideo!.mockImplementation(async () => {
+      await upstream;
+      return { result: { status: "done", video: { url: "https://x/v.mp4" } }, tokenId: 9, tokenName: "grok/b" };
+    });
+    const { jobHandle } = await QgridFrame.videoStart({ model: "grok/grok-imagine-video-1.5", prompt: "x" });
+
+    const polls = [QgridFrame.videoStatus({ jobHandle }), QgridFrame.videoStatus({ jobHandle })];
+    release();
+    const [first, second] = await Promise.all(polls);
+
+    expect(grok.getVideo).toHaveBeenCalledTimes(2);
+    expect(second).toEqual(first);
+    expect(continueToolRunMock).toHaveBeenCalledTimes(1);
+    expect(requestLogFinishRunMock).toHaveBeenCalledTimes(1);
+  });
+
   it("videoStatus reports a content-policy block as a failed job", async () => {
     grok.startVideo!.mockResolvedValueOnce({ result: { request_id: "req-2" }, tokenId: 9, tokenName: "grok/b" });
     grok.getVideo!.mockResolvedValueOnce({

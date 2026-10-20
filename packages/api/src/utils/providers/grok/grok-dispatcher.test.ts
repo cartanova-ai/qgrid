@@ -899,6 +899,28 @@ describe("GrokDispatcher media", () => {
     );
   });
 
+  it("polls a started video past the quota, cooldown and capacity gates", async () => {
+    const getVideo = vi.fn(async () => ({ status: "pending" }));
+    const media: GrokMediaPort = {
+      generateImages: vi.fn(),
+      editImages: vi.fn(),
+      startVideo: vi.fn(),
+      getVideo,
+    };
+    const h = createHarness({ media, maxInflightPerToken: 1 });
+    h.add(1, 1, 50);
+    h.billing.set(1, billingAt(75));
+    const token = h.dispatcher.tokens.get(1)!;
+    token.cooldowns.set("video", h.clock.now + 120_000);
+    token.inFlight = 1;
+
+    await expect(h.dispatcher.startVideo({ model: "v", prompt: "p" })).rejects.toBeInstanceOf(
+      Error,
+    );
+    await expect(h.dispatcher.getVideo(1, "req-1")).resolves.toMatchObject({ tokenId: 1 });
+    expect(getVideo).toHaveBeenCalledTimes(1);
+  });
+
   function imageFetch(failToken1: Error) {
     const calls: Array<{ authorization: string | null; sessionId: string | null }> = [];
     const impl: typeof fetch = async (_input, init) => {
