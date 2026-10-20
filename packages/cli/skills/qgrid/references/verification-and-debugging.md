@@ -23,7 +23,7 @@ project, use that project's configured task and tool runner.
 
 Root:
 
-- `mise run check`: qgrid docs consistency, oxlint, and oxfmt check for the repo.
+- `mise run check`: qgrid docs consistency, oxlint (including the vendored anti-slop rules in `tools/oxlint/anti-slop`, loaded by `.oxlintrc.json`), and oxfmt check for the repo. `mise run format` applies the auto-fixable rules, such as the blank-line spacing rule.
 - `mise run test`: DB-free API tests, SDK tests, and CLI packaging tests. No provider credentials are needed; the OAuth relay test opens a local loopback listener.
 - `mise run build`: recursive package build.
 - `mise run dev`: parallel package dev servers.
@@ -35,8 +35,15 @@ API package `qgrid-api`:
 - `mise exec -- pnpm --filter qgrid-api test`: both suites, unit first.
 - `mise exec -- pnpm --filter qgrid-api test:watch`: DB-free watch mode; use `test:db --watch` for DB tests.
 - `mise exec -- pnpm --filter qgrid-api test:coverage`: both suites, with separate `coverage/unit` and `coverage/db` reports.
-- `mise exec -- pnpm --filter qgrid-api build`: Sonamu build.
-- `mise exec -- pnpm --filter qgrid-api sonamu`: run Sonamu CLI.
+- `mise exec -- pnpm --filter qgrid-api build`: Sonamu build, run as `NODE_ENV=production sonamu build`. Sonamu 0.11 sets `NODE_ENV=development` when it is unset and the web `vite build` child inherits it, which produced a development-mode dashboard bundle in 2.11.0 (SON-567). Keep the explicit `NODE_ENV` until Sonamu fixes it.
+- `mise exec -- pnpm --filter qgrid-api sonamu`: run Sonamu CLI. Since Sonamu 0.11 the `sonamu` binary comes from the `@sonamu-kit/cli` devDependency, not from `sonamu` itself.
+
+Sonamu sync after changing models, types, entities, or i18n:
+
+1. Build first (`mise run build` or `sonamu build api`). `sonamu sync` reads models from `dist`, so a stale `dist` silently drops newer `@api` methods from generated services, queries, validators, and `.http` (SON-566).
+2. Run `HOT=yes mise exec -- pnpm --dir packages/api sonamu sync`. `HOT=yes` loads `src/sonamu.config.ts`; without it Sonamu needs `dist/sonamu.config.js`, which a failed build deletes. Add `--force` only when `sonamu.lock` cannot be trusted, for example right after a merge.
+3. `sync --force` always prints the "자동 생성한 파일에 대한 변경이 감지되었습니다" drift warning for generated files, even when nothing drifted (SON-565). Re-run plain `sync`; it should print `All files are synced!`.
+4. Sonamu lints generated code with type-aware autofix in a temp file at the API root, where relative imports do not resolve. That fix strips the required `as unknown as SDReturnType<K>` casts from `sd.generated.ts` (SON-564). The `.oxlintrc.json` override for `**/.sonamu-oxlint-*.ts` turns that rule off; keep it until Sonamu fixes the temp-file location.
 
 AI SDK package `@cartanova/qgrid-ai-sdk`:
 
@@ -154,7 +161,19 @@ Other scripts under `scripts/smoke-test-*` and `scripts/debug-*` are ad hoc prob
 Generated SSE handlers missing a newly added event field:
 
 - Sonamu's service generator reads runtime stream-decorator schemas. A stale API `dist` can keep the old event shape even with `sonamu sync --force`.
-- Run `mise exec -- pnpm --dir packages/api sonamu build api`, then `mise exec -- pnpm --dir packages/api sonamu sync --force`. Check the generated handler type and web typecheck; do not hand-edit generated services.
+- Run `mise exec -- pnpm --dir packages/api sonamu build api`, then `HOT=yes mise exec -- pnpm --dir packages/api sonamu sync --force`. Check the generated handler type and web typecheck; do not hand-edit generated services.
+
+Dashboard throws `Module "" has been externalized for browser compatibility. Cannot access ".custom"` on load:
+
+- The web bundle was built in development mode. `qs` → `side-channel` → `object-inspect` reads `require("./util.inspect").custom`; its `browser` field maps that file to `false`, which Vite turns into a throwing proxy outside production. Rebuild with `NODE_ENV=production` (the API `build` script sets it). A correct client bundle has no "externalized for browser compatibility" string.
+
+`Missing Sonamu dotenv file`:
+
+- Sonamu 0.11 refuses to start, including `sonamu build`, unless `packages/api/.env` or `.env.<NODE_ENV>` exists. The contents may be empty. CI creates an empty `packages/api/.env` before `mise run build`.
+
+`sd.generated.ts` fails `tsc` with `Partial<MergedDictionary>[K] & {}` not assignable to `SDReturnType<K>`:
+
+- The generated casts were stripped by Sonamu's post-generation lint (SON-564). Confirm the `.oxlintrc.json` override is present and re-run `HOT=yes ... sonamu sync --force`.
 
 `NO_OPENAI_WORKERS`:
 
@@ -204,7 +223,7 @@ Generated SSE handlers missing a newly added event field:
 
 `unsupported` warning with `feature: "image input"`:
 
-- The language adapter dropped image parts: all of them on `anthropic/` models, and assistant-message images on any model. User-message images on `openai/` models are sent as image input. Reference-image editing belongs in `generateImage`'s `prompt: { text, images }`.
+- The language adapter dropped image parts: all of them on `anthropic/` models, and assistant-message images on any model. User-message images on `openai/` and `grok/` models are sent as image input; `grok/` also drops `http:` URLs. Reference-image editing belongs in `generateImage`'s `prompt: { text, images }`.
 
 `image generation is not supported on the Anthropic route`:
 
