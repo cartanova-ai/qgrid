@@ -23,6 +23,7 @@ import {
 import {
   type RequestLogListParams,
   type RequestLogSaveParams,
+  type InputImages,
   type ToolDefinitions,
   type ToolView,
 } from "./request-log.types";
@@ -497,6 +498,7 @@ class RequestLogModelClass extends BaseModelClass<
     service_tier?: string | null;
     project_name?: string | null;
     history?: unknown;
+    input_images?: InputImages;
     tools?: ToolDefinitions;
     is_image_generation?: boolean;
     is_structured?: boolean;
@@ -526,6 +528,7 @@ class RequestLogModelClass extends BaseModelClass<
       is_structured:
         params.is_structured ?? (params.json_schema !== null && params.json_schema !== undefined),
       ...(params.history === undefined ? {} : { history: params.history as { type: string }[] }),
+      ...(params.input_images ? { input_images: params.input_images } : {}),
       ...(params.tools === undefined ? {} : { tools: params.tools }),
     });
     return wdb.transaction(async (trx) => {

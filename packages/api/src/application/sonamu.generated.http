@@ -228,6 +228,7 @@ Content-Type: application/json
       "service_tier": null,
       "effort": null,
       "history": null,
+      "input_images": null,
       "tools": null,
       "json_schema": null,
       "status": "running",

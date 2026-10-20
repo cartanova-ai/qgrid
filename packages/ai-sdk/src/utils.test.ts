@@ -31,4 +31,12 @@ describe("language-model conversation history", () => {
     expect(result.droppedImageCount).toBe(1);
     expect(result.history).toHaveLength(1);
   });
+
+  it("keeps assistant images dropped even when user images are included", () => {
+    const result = extractPromptAndHistory(structuredClone(messages) as never, {
+      includeImages: true,
+    });
+    expect(result.droppedImageCount).toBe(1);
+    expect(result.imageUrls).toEqual([]);
+  });
 });

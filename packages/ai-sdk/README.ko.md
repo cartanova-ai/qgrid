@@ -325,7 +325,9 @@ const { image } = await generateImage({
 정확한 최종 크기는 소비 앱의 명시적인 crop/resize 정책으로 처리합니다.
 
 `generateText`와 `streamText`는 이미지 생성 옵션이 없는 대화 모델 인터페이스입니다.
-일반적인 이미지 인식도 지원하지 않아 image part는 경고와 함께 무시됩니다. 이미지 생성·편집이
+`openai/` 모델은 user 메시지의 image part를 모델에 전달하므로 이미지 인식(image→text)이 됩니다.
+`anthropic/` 모델과 assistant 메시지의 이미지는 버려지고 `result.warnings`에 `unsupported` 경고가
+남습니다. 이미지 생성·편집이
 목적이면 `generateImage`의 참조 입력을 사용하세요. 대시보드 `qgrid_chat`은 내부 이미지
 도구를 기본으로 등록합니다. 채팅 모델이 생성 여부를 판단하고 완결된 프롬프트를 작성하며,
 편집 시 최근 대화 이미지 중 최대 5개를 선택합니다. 서버는 일반·투명 이미지 모두 구독

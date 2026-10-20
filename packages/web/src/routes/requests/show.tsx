@@ -622,12 +622,19 @@ function ToolInputImages({ images }: { images: ToolInputImage[] }) {
   );
 }
 
-function RequestInputImages({ stepId }: { stepId: number | null }) {
+// run.input_images가 없는 이전 이미지 생성 로그는 첫 image_generation step에서 읽는다.
+function RequestInputImages({
+  images,
+  stepId,
+}: {
+  images: ToolInputImage[] | null;
+  stepId: number | null;
+}) {
   const { data: detail } = RequestLogStepService.useRequestLogStep("I", stepId ?? 0, {
-    enabled: stepId !== null,
+    enabled: images === null && stepId !== null,
   });
   const args = detail ? safeParseJson(detail.tool_args) : null;
-  return <ToolInputImages images={getToolInputImages(args)} />;
+  return <ToolInputImages images={images ?? getToolInputImages(args)} />;
 }
 
 function ToolCallItem({ entry }: { entry: ToolCallEntry }) {
@@ -1290,7 +1297,7 @@ function RequestDetail({ id }: { id: number }) {
             <CopyButton text={data.user_prompt ?? "null"} />
             <FormattedContent text={data.user_prompt ?? "null"} markdown />
           </div>
-          <RequestInputImages stepId={firstImageGenerationStepId} />
+          <RequestInputImages images={data.input_images} stepId={firstImageGenerationStepId} />
         </div>
       </Section>
     </div>

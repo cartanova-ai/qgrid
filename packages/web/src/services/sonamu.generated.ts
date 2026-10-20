@@ -23,6 +23,17 @@ const HistoryItems = z.array(
 );
 type HistoryItems = z.infer<typeof HistoryItems>;
 
+// CustomScalar: InputImages
+const InputImages = z.array(
+  z.object({
+    mediaType: z.string().optional(),
+    data: z.string().optional(),
+    url: z.string().optional(),
+    byteSize: z.number().optional(),
+  }),
+);
+type InputImages = z.infer<typeof InputImages>;
+
 // CustomScalar: TokenCredentials
 const TokenCredentials = z.union([
   z.object({
@@ -184,6 +195,7 @@ export const RequestLogBaseSchema = z.object({
   service_tier: z.string().max(20).nullable(),
   effort: z.string().max(10).nullable(),
   history: HistoryItems.nullable(),
+  input_images: InputImages.nullable(),
   tools: ToolDefinitions.nullable(),
   json_schema: z.string().nullable(),
   status: RequestLogStatus,
@@ -219,6 +231,7 @@ export type RequestLogBaseSchema = z.infer<typeof RequestLogBaseSchema> & {
     "service_tier",
     "effort",
     "history",
+    "input_images",
     "tools",
     "json_schema",
     "status",
@@ -423,6 +436,7 @@ export const RequestLogSubsetA = z.object({
   effort: z.string().max(10).nullable(),
   service_tier: z.string().max(20).nullable(),
   history: HistoryItems.nullable(),
+  input_images: InputImages.nullable(),
   tools: ToolDefinitions.nullable(),
   status: RequestLogStatus,
   response_json_ok: z.boolean().nullable(),
