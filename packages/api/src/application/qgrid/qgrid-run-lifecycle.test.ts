@@ -112,6 +112,25 @@ describe("qgrid run lifecycle start", () => {
     });
   });
 
+  it.each([undefined, "Caller system"])(
+    "logs the Anthropic schema instructions with system=%s",
+    async (system) => {
+      const jsonSchema = '{"type":"object","properties":{"answer":{"type":"string"}}}';
+      await beforeQuery({
+        prompt: "hi",
+        model: "anthropic/claude-opus-5-5",
+        system,
+        jsonSchema,
+      });
+
+      const saved = createRunMock.mock.calls[0]![0];
+      expect(saved.system_prompt).toContain("## Output Format");
+      expect(saved.system_prompt).toContain(`<output-json-schema>\n${jsonSchema}\n</output-json-schema>`);
+      if (system) expect(saved.system_prompt).toMatch(/^Caller system\n\n/);
+      expect(saved.json_schema).toBe(jsonSchema);
+    },
+  );
+
   it.each([
     ["openai/gpt-6-sol", "fast", "fast"],
     ["openai/gpt-6-sol", "flex", "flex"],

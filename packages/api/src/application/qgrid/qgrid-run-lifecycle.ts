@@ -12,6 +12,7 @@ import {
   getImageParts,
 } from "./qgrid-response-format";
 import { type QgridRunContext, type QueryInput, type QueryOutput } from "./qgrid.types";
+import { composeSystemWithSchemaContract } from "./schema-prompt";
 
 const logger = getLogger(["qgrid", "run-lifecycle"]);
 const STALE_RUN_THRESHOLD_MS = 30 * 60 * 1000;
@@ -88,7 +89,9 @@ export async function beforeQuery(args: QueryInput): Promise<{
     const inputImages = extractInputImagesForToolArgs(args);
     requestLogId = await RequestLogModel.createRun({
       user_prompt: args.prompt,
-      system_prompt: args.system,
+      system_prompt: args.model?.startsWith("anthropic/")
+        ? composeSystemWithSchemaContract(args.system, args)
+        : args.system,
       requested_model_name: args.model,
       effort: args.thinking === false ? undefined : args.effort,
       service_tier: args.model?.startsWith("openai/") ? args.serviceTier : undefined,
