@@ -241,6 +241,7 @@ export type RequestLogBaseSchema = z.infer<typeof RequestLogBaseSchema> & {
     "is_structured",
     "id",
   ];
+  readonly __json__: readonly ["history", "input_images", "tools"];
 };
 
 // BaseSchema: RequestLogStep
@@ -341,6 +342,7 @@ export type TokenBaseSchema = z.infer<typeof TokenBaseSchema> & {
     "keepalive_enabled",
     "id",
   ];
+  readonly __json__: readonly ["credentials"];
 };
 
 // BaseListParams: RequestLog

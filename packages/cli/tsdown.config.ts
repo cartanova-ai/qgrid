@@ -6,4 +6,5 @@ export default defineConfig({
   clean: true,
   fixedExtension: false,
   target: "node20",
+  dts: false,
 });
