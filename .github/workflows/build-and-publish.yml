@@ -66,8 +66,12 @@ jobs:
       - name: Test API units, SDK, and CLI packaging contract
         run: mise run test
 
+      # Sonamu 0.11 refuses to start without packages/api/.env or .env.<NODE_ENV>, even for
+      # builds that read no values. An empty file satisfies it, as bundle:copy does for bundle/.env.
       - name: Build
-        run: mise run build
+        run: |
+          touch packages/api/.env
+          mise run build
 
       - name: Pack release artifacts
         run: |
