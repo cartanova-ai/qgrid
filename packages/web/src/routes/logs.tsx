@@ -13,6 +13,7 @@ const logsSearchSchema = z.object({
   /** 페이지 번호 */
   page: RequestLogBaseListParams.shape.page.default(1),
 });
+
 export type LogsSearch = z.infer<typeof logsSearchSchema>;
 
 export const Route = createFileRoute("/logs")({

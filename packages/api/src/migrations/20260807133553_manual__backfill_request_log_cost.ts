@@ -52,23 +52,30 @@ function backfilledCostMicroUsd(row: LegacyRow): number {
   // 이를 합치지 않아 input_tokens 가 작게 남은 row 를 복원한다.
   const splitInput =
     isAnthropicRow(row) && row.input_tokens < row.cache_read_tokens + row.cache_creation_tokens;
+
   const inputTokens = splitInput
     ? row.input_tokens + row.cache_read_tokens + row.cache_creation_tokens
     : row.input_tokens;
 
   const model = row.model_name.includes("/") ? row.model_name.split("/").pop()! : row.model_name;
-  const usd = calculateCostUsd(model, {
+
+  const usage: Parameters<typeof calculateCostUsd>[1] = {
     inputTokens,
     outputTokens: row.output_tokens,
     cachedInputTokens: row.cache_read_tokens,
     cacheCreationInputTokens: row.cache_creation_tokens,
-    ...(row.cache_creation_5m_tokens !== null
-      ? { cacheCreationInputTokens5m: row.cache_creation_5m_tokens }
-      : {}),
-    ...(row.cache_creation_1h_tokens !== null
-      ? { cacheCreationInputTokens1h: row.cache_creation_1h_tokens }
-      : {}),
-  });
+  };
+
+  if (row.cache_creation_5m_tokens !== null) {
+    usage.cacheCreationInputTokens5m = row.cache_creation_5m_tokens;
+  }
+
+  if (row.cache_creation_1h_tokens !== null) {
+    usage.cacheCreationInputTokens1h = row.cache_creation_1h_tokens;
+  }
+
+  const usd = calculateCostUsd(model, usage);
+
   return Math.max(Math.round(usd * MICRO_USD), 0);
 }
 
@@ -87,6 +94,7 @@ export async function up(knex: Knex): Promise<void> {
         LIMIT ?`,
       [lastId, CHUNK_SIZE],
     );
+
     if (rows.length === 0) break;
 
     // chunk 당 한 번의 UPDATE ... FROM (VALUES ...) 로 왕복을 줄인다.

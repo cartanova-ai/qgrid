@@ -4,6 +4,7 @@ import { RequestLogStepBaseSchema, RequestLogStepBaseListParams } from "../sonam
 
 // RequestLogStep - ListParams
 export const RequestLogStepListParams = RequestLogStepBaseListParams;
+
 export type RequestLogStepListParams = z.infer<typeof RequestLogStepListParams>;
 
 // RequestLogStep - SaveParams
@@ -34,4 +35,5 @@ export const RequestLogStepSaveParams = RequestLogStepBaseSchema.partial({
   tool_duration_ms: true,
   error: true,
 });
+
 export type RequestLogStepSaveParams = z.infer<typeof RequestLogStepSaveParams>;

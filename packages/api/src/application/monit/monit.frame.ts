@@ -1,5 +1,6 @@
-// 읽기 전용 모니터링 API. 조회 자체는 request log에 남기지 않는다.
 import { api, BaseFrameClass, DB } from "sonamu";
+// 읽기 전용 모니터링 API. 조회 자체는 request log에 남기지 않는다.
+import { z } from "zod";
 
 import { resolveOpenAITransportKind } from "../../utils/providers/openai/openai-transport-config";
 import { QgridDispatcher } from "../qgrid/qgrid.dispatcher";
@@ -36,6 +37,7 @@ class MonitFrameClass extends BaseFrameClass {
     const host = process.env.HOST ?? "localhost";
     const port = process.env.PORT ?? "44900";
     const conn = activeDbConnection();
+
     return {
       serverUrl: `http://${host}:${port}`,
       dbHost: conn.host ?? "localhost",
@@ -49,12 +51,14 @@ class MonitFrameClass extends BaseFrameClass {
   async monitStats(): Promise<MonitStats> {
     const windowMinutes = 60;
     const since = new Date(Date.now() - windowMinutes * 60_000);
+
     return { windowMinutes, providers: await RequestLogModel.providerStatsSince(since) };
   }
 }
 
 function currentVitals(): MonitVitals {
   const anthropic = QgridDispatcher.anthropicDispatcher;
+
   return {
     openaiInFlight: QgridDispatcher.openaiDispatcher?.inFlight ?? 0,
     openaiQuotaByToken: QgridDispatcher.openaiDispatcher?.getQuotaSnapshot() ?? [],
@@ -68,15 +72,28 @@ function currentVitals(): MonitVitals {
 
 // 실제 활성 knex 연결에서 읽는다 — dev 서버의 통합 테스트 러너가 process.env.SONAMU_DB_NAME 을
 // 테스트 DB 이름으로 덮어쓰므로 env 는 신뢰할 수 없다. DB 미초기화(부팅 전) 시에만 env 폴백.
-function activeDbConnection(): { host?: string; database?: string } {
+interface DbConnectionInfo {
+  host?: string;
+  database?: string;
+}
+
+// knex accepts a connection string, object, or factory; only the object form carries these fields.
+const dbConnectionInfoSchema = z.looseObject({
+  host: z.string().optional(),
+  database: z.string().optional(),
+});
+
+function activeDbConnection(): DbConnectionInfo {
   try {
-    const connection = DB.getDBConfig("w").connection;
-    if (typeof connection === "object" && connection !== null) {
-      return connection as { host?: string; database?: string };
+    const connection = dbConnectionInfoSchema.safeParse(DB.getDBConfig("w").connection);
+
+    if (connection.success) {
+      return { host: connection.data.host, database: connection.data.database };
     }
   } catch {
     // DB config 미초기화 — env 폴백으로 진행
   }
+
   return { host: process.env.SONAMU_DB_HOST, database: process.env.SONAMU_DB_NAME };
 }
 

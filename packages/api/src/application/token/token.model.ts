@@ -51,16 +51,19 @@ export class UnknownTokenProviderError extends Error {
 
 export function tokenIdentityKey(provider: string): TokenIdentityKey {
   if (!isProviderId(provider)) throw new UnknownTokenProviderError(provider);
+
   return TOKEN_IDENTITY_KEYS[provider];
 }
 
 function applyCreateDefaults(sp: TokenSaveParams): TokenSaveParams {
   if (sp.id !== undefined) return sp;
-  return {
-    ...sp,
-    ...(sp.quota_threshold === undefined ? { quota_threshold: DEFAULT_QUOTA_THRESHOLD } : {}),
-    ...(sp.weight === undefined ? { weight: DEFAULT_WEIGHT } : {}),
-  };
+  const withDefaults: TokenSaveParams = { ...sp };
+
+  if (sp.quota_threshold === undefined) withDefaults.quota_threshold = DEFAULT_QUOTA_THRESHOLD;
+
+  if (sp.weight === undefined) withDefaults.weight = DEFAULT_WEIGHT;
+
+  return withDefaults;
 }
 
 class TokenModelClass extends BaseModelClass<
@@ -76,9 +79,11 @@ class TokenModelClass extends BaseModelClass<
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"], resourceName: "Token" })
   async findById<T extends TokenSubsetKey>(subset: T, id: number): Promise<TokenSubsetMapping[T]> {
     const { rows } = await this.findMany(subset, { id, num: 1, page: 1, queryMode: "list" });
+
     if (!rows[0]) {
       throw new NotFoundException(SD("error.entityNotFound")("Token", id));
     }
+
     return rows[0];
   }
 
@@ -92,6 +97,7 @@ class TokenModelClass extends BaseModelClass<
       page: 1,
       queryMode: "list",
     });
+
     return rows[0] ?? null;
   }
 
@@ -147,11 +153,13 @@ class TokenModelClass extends BaseModelClass<
     const jsonKey = tokenIdentityKey(provider);
     qb.where("tokens.provider", provider);
     qb.whereRaw(`tokens.credentials->>'${jsonKey}' = ?`, [accountId]);
+
     const result = await this.executeSubsetQuery({
       subset,
       qb,
       params: { num: 0, page: 1, queryMode: "list" },
     });
+
     return result.rows;
   }
 
@@ -162,11 +170,13 @@ class TokenModelClass extends BaseModelClass<
     const { qb } = this.getSubsetQueries(subset);
     qb.where("tokens.active", true);
     qb.where("tokens.provider", provider);
+
     const result = await this.executeSubsetQuery({
       subset,
       qb,
       params: { num: 0, page: 1, queryMode: "list" },
     });
+
     return result.rows;
   }
 
@@ -179,11 +189,13 @@ class TokenModelClass extends BaseModelClass<
     qb.where("tokens.active", true);
     qb.where("tokens.provider", provider);
     qb.where("tokens.name", name);
+
     const result = await this.executeSubsetQuery({
       subset,
       qb,
       params: { num: 1, page: 1, queryMode: "list" },
     });
+
     return result.rows[0];
   }
 
@@ -192,22 +204,26 @@ class TokenModelClass extends BaseModelClass<
     const { qb } = this.getSubsetQueries(subset);
     qb.where("tokens.reauth_required", true);
     qb.orderBy("tokens.name", "asc");
+
     const result = await this.executeSubsetQuery({
       subset,
       qb,
       params: { num: 0, page: 1, queryMode: "list" },
     });
+
     return result.rows;
   }
 
   async findActive<T extends TokenSubsetKey>(subset: T): Promise<TokenSubsetMapping[T][]> {
     const { qb } = this.getSubsetQueries(subset);
     qb.where("tokens.active", true);
+
     const result = await this.executeSubsetQuery({
       subset,
       qb,
       params: { num: 0, page: 1, queryMode: "list" },
     });
+
     return result.rows;
   }
 
@@ -216,6 +232,7 @@ class TokenModelClass extends BaseModelClass<
     spa.forEach((sp) => {
       wdb.ubRegister("tokens", applyCreateDefaults(sp));
     });
+
     return wdb.transaction(async (trx) => {
       return trx.ubUpsert("tokens");
     });
@@ -223,11 +240,13 @@ class TokenModelClass extends BaseModelClass<
 
   async updateFields(id: number, fields: TokenUpdateFields): Promise<number> {
     const wdb = this.getPuri("w");
+
     return wdb.transaction((trx) => trx.table("tokens").where("id", id).update(fields));
   }
 
   async toggleActive(id: number): Promise<{ active: boolean; reauthRequired: boolean } | null> {
     const wdb = this.getPuri("w");
+
     return wdb.transaction(async (trx) => {
       const token = await trx
         .from("tokens")
@@ -235,13 +254,16 @@ class TokenModelClass extends BaseModelClass<
         .where("id", id)
         .forUpdate()
         .first();
+
       if (!token) return null;
+
       if (!token.active && token.reauth_required) {
         return { active: false, reauthRequired: true };
       }
 
       const active = !token.active;
       await trx.from("tokens").where("id", id).update({ active });
+
       return { active, reauthRequired: false };
     });
   }
@@ -260,6 +282,7 @@ class TokenModelClass extends BaseModelClass<
     const jsonKey = tokenIdentityKey(provider);
     await this.getPuri("w").transaction(async (trx) => {
       let replacement = saveParams;
+
       if (accountId) {
         const oldEntries = await trx
           .from("tokens")
@@ -274,7 +297,9 @@ class TokenModelClass extends BaseModelClass<
           .whereRaw(`credentials->>'${jsonKey}' = ?`, [accountId])
           .orderBy("id", "asc")
           .forUpdate();
+
         const first = oldEntries[0];
+
         if (first) {
           replacement = {
             ...saveParams,
@@ -315,6 +340,7 @@ class TokenModelClass extends BaseModelClass<
     expectedCredentials: TokenCredentials,
   ): Promise<{ marked: boolean; wasLastActive: boolean; staleCredentials: boolean }> {
     const wdb = this.getPuri("w");
+
     return wdb.transaction(async (trx) => {
       const token = await trx
         .from("tokens")
@@ -326,9 +352,11 @@ class TokenModelClass extends BaseModelClass<
         .where("id", id)
         .forUpdate()
         .first();
+
       if (!token || token.reauth_required) {
         return { marked: false, wasLastActive: false, staleCredentials: false };
       }
+
       if (!isDeepStrictEqual(token.credentials, expectedCredentials)) {
         return { marked: false, wasLastActive: false, staleCredentials: true };
       }
@@ -337,6 +365,7 @@ class TokenModelClass extends BaseModelClass<
         TOKEN_AUTH_DEATH_LOCK_CLASS_ID,
         token.provider,
       ]);
+
       const updated = await trx.knex.raw<{ rows: { was_last_active: boolean }[] }>(
         `WITH previous AS (
            SELECT active AND NOT EXISTS (
@@ -352,12 +381,15 @@ class TokenModelClass extends BaseModelClass<
          RETURNING (SELECT was_last_active FROM previous) AS was_last_active`,
         [id, id],
       );
+
       const marked = updated.rows[0];
+
       if (!marked) return { marked: false, wasLastActive: false, staleCredentials: false };
 
       if (marked.was_last_active) {
         logger.error(`deactivated expired token ${id}: no usable provider tokens remain`);
       }
+
       return { marked: true, wasLastActive: marked.was_last_active, staleCredentials: false };
     });
   }
@@ -379,6 +411,7 @@ class TokenModelClass extends BaseModelClass<
         await trx.table("tokens").where("id", ids[i]!).update({ ord: i });
       }
     });
+
     return { done: true };
   }
 
@@ -388,6 +421,7 @@ class TokenModelClass extends BaseModelClass<
     await wdb.transaction(async (trx) => {
       return trx.table("tokens").whereIn("tokens.id", ids).delete();
     });
+
     return ids.length;
   }
 }

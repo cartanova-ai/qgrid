@@ -9,10 +9,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
+import { z } from "zod";
+
 import {
   type ClaudeStreamJsonState,
   handleStreamJsonLine,
 } from "../src/utils/providers/anthropic/stream-json-adapter";
+import { jsonValueSchema, type JsonValue } from "../src/utils/providers/common/provider-types";
 
 const finalOutput = {
   title: "정상 제목",
@@ -54,7 +57,7 @@ const failedAttempts = [
   },
 ] as const;
 
-function assistantStructuredOutput(input: unknown): string {
+function assistantStructuredOutput(input: JsonValue): string {
   return JSON.stringify({
     type: "assistant",
     message: {
@@ -72,18 +75,40 @@ function structuredOutputResult(isError: boolean, content: string): string {
   });
 }
 
-function objectKeys(value: unknown): string[] {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? Object.keys(value)
-    : [];
+function objectKeys(value: JsonValue | undefined): string[] {
+  const record = z.looseObject({}).safeParse(value);
+
+  return record.success ? Object.keys(record.data) : [];
 }
 
-function reproduce(firstRejectedInput: unknown): {
-  returned: unknown;
+interface ReproducedResult {
+  returned: JsonValue;
   isError: boolean;
   subtype: string | undefined;
-} {
+}
+
+// One line of a raw Claude Code stream-json capture, reduced to the fields this replay reads.
+const captureEventSchema = z.looseObject({
+  type: z.string().optional(),
+  message: z
+    .looseObject({
+      content: z
+        .array(
+          z.looseObject({
+            type: z.string().optional(),
+            name: z.string().optional(),
+            input: jsonValueSchema.optional(),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
+  structured_output: jsonValueSchema.optional(),
+});
+
+function reproduce(firstRejectedInput: JsonValue): ReproducedResult {
   const state: ClaudeStreamJsonState = {};
+
   const lines = [
     assistantStructuredOutput(firstRejectedInput),
     structuredOutputResult(true, "Output does not match required schema"),
@@ -99,6 +124,7 @@ function reproduce(firstRejectedInput: unknown): {
   ];
 
   let result: ReturnType<typeof handleStreamJsonLine> = null;
+
   for (const line of lines) {
     result =
       handleStreamJsonLine(line, () => undefined, {
@@ -108,8 +134,9 @@ function reproduce(firstRejectedInput: unknown): {
   }
 
   assert.ok(result, "Claude result event must produce a qgrid result");
+
   return {
-    returned: JSON.parse(result.text) as unknown,
+    returned: jsonValueSchema.parse(JSON.parse(result.text)),
     isError: result.isError,
     subtype: result.subtype,
   };
@@ -118,16 +145,13 @@ function reproduce(firstRejectedInput: unknown): {
 function replayRawCapture(path: string): void {
   const lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
   const state: ClaudeStreamJsonState = {};
-  const attempts: unknown[] = [];
-  let finalStructuredOutput: unknown;
+  const attempts: Array<JsonValue | undefined> = [];
+  let finalStructuredOutput: JsonValue | undefined;
   let result: ReturnType<typeof handleStreamJsonLine> = null;
 
   for (const line of lines) {
-    const event = JSON.parse(line) as {
-      type?: string;
-      message?: { content?: Array<{ type?: string; name?: string; input?: unknown }> };
-      structured_output?: unknown;
-    };
+    const event = captureEventSchema.parse(JSON.parse(line));
+
     if (event.type === "assistant") {
       for (const part of event.message?.content ?? []) {
         if (part.type === "tool_use" && part.name === "StructuredOutput") {
@@ -135,6 +159,7 @@ function replayRawCapture(path: string): void {
         }
       }
     }
+
     if (event.type === "result") finalStructuredOutput = event.structured_output;
 
     result =
@@ -149,7 +174,7 @@ function replayRawCapture(path: string): void {
   assert.notDeepEqual(attempts[0], finalStructuredOutput, "first attempt must differ from final");
   assert.deepEqual(attempts.at(-1), finalStructuredOutput, "last attempt must equal final");
 
-  const returned = JSON.parse(result.text) as unknown;
+  const returned = jsonValueSchema.parse(JSON.parse(result.text));
   assert.notDeepEqual(returned, attempts[0], "qgrid must not return the first rejected input");
   assert.deepEqual(
     returned,
@@ -170,13 +195,16 @@ function replayRawCapture(path: string): void {
 }
 
 const capturePath = process.argv[2];
+
 if (capturePath) {
   replayRawCapture(capturePath);
   process.exit(0);
 }
 
 console.log("Claude result: second StructuredOutput accepted, subtype=success");
+
 console.log("Expected qgrid output:", JSON.stringify(finalOutput));
+
 console.log("");
 
 for (const failedAttempt of failedAttempts) {

@@ -2,6 +2,7 @@
   "name": "qgrid",
   "private": true,
   "devDependencies": {
+    "@oxlint/plugins": "1.88.0",
     "@types/node": "^25",
     "@vitest/coverage-v8": "^4.1.10",
     "oxfmt": "^0.43.0",

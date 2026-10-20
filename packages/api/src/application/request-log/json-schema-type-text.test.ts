@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  renderJsonSchemaZodShapeText,
+  renderJsonSchemaZodText,
   renderJsonSchemaTypeText,
   renderParsedJsonSchemaTypeText,
 } from "./json-schema-type-text";
@@ -133,10 +133,10 @@ describe("renderJsonSchemaTypeText", () => {
   });
 });
 
-describe("renderJsonSchemaZodShapeText", () => {
+describe("renderJsonSchemaZodText", () => {
   it("renders a compact object shape with required, optional, and default annotations", () => {
     expect(
-      renderJsonSchemaZodShapeText(
+      renderJsonSchemaZodText(
         {
           type: "object",
           properties: {
@@ -159,7 +159,7 @@ describe("renderJsonSchemaZodShapeText", () => {
 
   it("shortens long string enums with an inline remainder comment", () => {
     expect(
-      renderJsonSchemaZodShapeText(
+      renderJsonSchemaZodText(
         {
           type: "object",
           properties: {
@@ -180,7 +180,7 @@ describe("renderJsonSchemaZodShapeText", () => {
 
   it("renders nested objects, arrays, unions, literals, and unknown nodes", () => {
     expect(
-      renderJsonSchemaZodShapeText({
+      renderJsonSchemaZodText({
         type: "object",
         properties: {
           filters: {

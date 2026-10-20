@@ -14,12 +14,15 @@ import { getSetting } from "../setting/setting.store";
 /** `토큰명:SlackUserId` 목록을 파싱한다. */
 export function parseSlackUserMap(raw: string | undefined): Map<string, string> {
   const map = new Map<string, string>();
+
   if (!raw) return map;
 
   for (const entry of raw.split(",")) {
     const [name, userId] = entry.split(":").map((s) => s.trim());
+
     if (name && userId) map.set(name, userId);
   }
+
   return map;
 }
 
@@ -27,12 +30,14 @@ export function parseSlackUserMap(raw: string | undefined): Map<string, string> 
 export function ownerOf(tokenName: string | null): string {
   if (!tokenName) return "";
   const slash = tokenName.indexOf("/");
+
   return slash === -1 ? tokenName : tokenName.slice(slash + 1);
 }
 
 /** 매핑이 있으면 `<@U...>`, 없으면 빈 문자열. 호출부가 멘션 유무로 문구를 고른다. */
 export function mentionFor(tokenName: string | null, userMap: Map<string, string>): string {
   const userId = userMap.get(ownerOf(tokenName));
+
   return userId ? `<@${userId}>` : "";
 }
 

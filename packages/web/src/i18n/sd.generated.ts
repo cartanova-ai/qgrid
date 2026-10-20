@@ -333,8 +333,11 @@ const entityLabels = {
 
 // defaultLocale의 dictionary를 기준으로 키 추출
 type RCKeys = typeof rcKeysKo;
+
 type ProjectDictionary = typeof ko;
+
 type EntityLabels = typeof entityLabels;
+
 type RawMergedDictionary = RCKeys &
   Omit<EntityLabels, keyof (RCKeys & ProjectDictionary)> &
   ProjectDictionary;
@@ -345,7 +348,9 @@ export type MergedDictionary = {
     ? (...args: P) => string
     : string;
 };
+
 export type DictKey = keyof MergedDictionary;
+
 export type LocalizedString = string & { __brand: "LocalizedString" };
 
 export function defineLocale(dict: Partial<MergedDictionary>) {
@@ -365,6 +370,7 @@ type SDReturnType<K extends DictKey> = MergedDictionary[K] extends (...args: inf
 function getDictValue<K extends DictKey>(key: K, locale: string): SDReturnType<K> {
   // 1. 지정된 locale에서 조회
   const dict = dictionaries[locale];
+
   if (dict?.[key] !== undefined) {
     return dict[key] as unknown as SDReturnType<K>;
   }
@@ -397,6 +403,7 @@ function getDictValue<K extends DictKey>(key: K, locale: string): SDReturnType<K
  */
 export function SD<K extends DictKey>(key: K): SDReturnType<K> {
   const locale = getCurrentLocale();
+
   return getDictValue(key, locale);
 }
 
@@ -431,12 +438,15 @@ type LocalizedBaseColumn<T> = {
  * localizedColumn(tag, "name")
  */
 type LocalizedColumnScalarValue = string | number | boolean | bigint;
+
 type LocalizedColumnValue = string | string[];
+
 type NestedLocalizedColumnValueFrom<V> = V extends string
   ? string
   : V extends readonly string[]
     ? string[]
     : never;
+
 type LocalizedColumnValueFrom<V> = V extends string
   ? string
   : V extends readonly string[]
@@ -446,6 +456,7 @@ type LocalizedColumnValueFrom<V> = V extends string
       : V extends Partial<Record<(typeof SUPPORTED_LOCALES)[number], infer LV>>
         ? NestedLocalizedColumnValueFrom<LV>
         : never;
+
 type LocalizedColumnCandidate<T, K extends string> =
   | (K extends keyof T ? T[K] : never)
   | {
@@ -453,9 +464,11 @@ type LocalizedColumnCandidate<T, K extends string> =
         ? T[`${K}_${L}`]
         : never;
     }[(typeof SUPPORTED_LOCALES)[number]];
+
 type LocalizedColumnReturn<T, K extends string> =
   | LocalizedColumnValueFrom<LocalizedColumnCandidate<T, K>>
   | undefined;
+
 type LocaleValueMap = Partial<Record<(typeof SUPPORTED_LOCALES)[number], unknown>>;
 
 function isLocalizedColumnValue(value: unknown): value is LocalizedColumnValue {
@@ -479,6 +492,7 @@ function getNestedLocaleValue<T extends Record<string, unknown>>(
   locale: (typeof SUPPORTED_LOCALES)[number],
 ): unknown {
   const columnValue = row[column];
+
   if (columnValue === null || typeof columnValue !== "object" || Array.isArray(columnValue)) {
     return undefined;
   }
@@ -497,6 +511,7 @@ export function localizedColumn<
   );
   const localizedKey = (column: K, locale: (typeof SUPPORTED_LOCALES)[number]) =>
     `${column}_${locale}`;
+
   const values = [
     { value: row[localizedKey(column, locale)], source: "direct" },
     { value: getNestedLocaleValue(row, column, locale), source: "nested" },
@@ -513,6 +528,7 @@ export function localizedColumn<
     if (!isEmptyLocalizedColumnValue(value) && isLocalizedColumnValue(value)) {
       return value as LocalizedColumnReturn<T, K>;
     }
+
     if (
       source === "direct" &&
       !isEmptyLocalizedColumnValue(value) &&
@@ -540,6 +556,7 @@ SD.enumLabels = (enumName: string): Record<string, LocalizedString> => {
       }
 
       const dictKey = `enum.${enumName}.${key}` as DictKey;
+
       return getDictValue(dictKey, getCurrentLocale());
     },
   });

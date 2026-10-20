@@ -16,6 +16,7 @@ export function unpricedRequestCount(cost: TotalCostSummary): number {
 /** 합계 옆에 붙일 짧은 표시. 빠진 요청이 없으면 null. */
 export function unpricedRequestLabel(cost: TotalCostSummary): string | null {
   const count = unpricedRequestCount(cost);
+
   return count > 0 ? `+${count} unpriced` : null;
 }
 
@@ -23,5 +24,6 @@ export function unpricedRequestLabel(cost: TotalCostSummary): string | null {
 export function unpricedRequestTitle(cost: TotalCostSummary): string | null {
   if (unpricedRequestCount(cost) === 0) return null;
   const media = cost.unknownCostCount ?? 0;
+
   return `Total excludes requests with unknown cost: ${cost.unknownImageCostCount} image, ${media} voice/video.`;
 }

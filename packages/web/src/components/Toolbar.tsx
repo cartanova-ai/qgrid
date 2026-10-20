@@ -1,21 +1,26 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 
-const ROUTE_TITLES: Record<string, string> = {
-  "/": "Dashboard",
-  "/tokens": "Tokens",
-  "/logs": "Request Logs",
-  "/monit": "Server Logs",
-};
+const ROUTE_TITLES = new Map<string, string>(
+  Object.entries({
+    "/": "Dashboard",
+    "/tokens": "Tokens",
+    "/logs": "Request Logs",
+    "/monit": "Server Logs",
+  }),
+);
 
-function getBreadcrumb(pathname: string): {
+interface Breadcrumb {
   parent?: string;
   parentPath?: string;
   current: string;
-} {
+}
+
+function getBreadcrumb(pathname: string): Breadcrumb {
   if (pathname.startsWith("/requests/show")) {
     return { parent: "Request Logs", parentPath: "/logs", current: "Detail" };
   }
-  return { current: ROUTE_TITLES[pathname] ?? pathname };
+
+  return { current: ROUTE_TITLES.get(pathname) ?? pathname };
 }
 
 export function Toolbar() {

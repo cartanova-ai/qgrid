@@ -7,12 +7,15 @@ import react from "@vitejs/plugin-react";
 import dotenv from "dotenv";
 import Icons from "unplugin-icons/vite";
 import { defineConfig } from "vite";
+import { z } from "zod";
 
 dotenv.config({ path: ".sonamu.env" });
 
-const qgridCliPackageJson = JSON.parse(
-  readFileSync(path.resolve(__dirname, "../cli/package.json"), "utf-8"),
-) as { version: string };
+const QgridCliPackageJson = z.object({ version: z.string() });
+
+const qgridCliPackageJson = QgridCliPackageJson.parse(
+  JSON.parse(readFileSync(path.resolve(__dirname, "../cli/package.json"), "utf-8")),
+);
 
 // https://vitejs.dev/config/
 export default defineConfig(({ command, isSsrBuild }) => ({
@@ -56,9 +59,11 @@ export default defineConfig(({ command, isSsrBuild }) => ({
               if (id.includes("node_modules/react-dom") || id.includes("node_modules/react/")) {
                 return "vendor-react";
               }
+
               if (id.includes("@tanstack/react-query") || id.includes("@tanstack/react-router")) {
                 return "vendor-tanstack";
               }
+
               return undefined;
             },
           },

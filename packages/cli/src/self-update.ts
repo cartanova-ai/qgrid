@@ -45,11 +45,14 @@ export function runSelfUpdate(
   const { latestVersion, commandPath, commandVersion, spawn, log, warn, error } = dependencies;
 
   let latest: string;
+
   try {
     latest = latestVersion(packageName);
   } catch (cause) {
-    warn(`Warning: failed to check for qgrid-cli updates: ${(cause as Error).message}`);
+    const message = cause instanceof Error ? cause.message : String(cause);
+    warn(`Warning: failed to check for qgrid-cli updates: ${message}`);
     warn(`Continuing with qgrid-cli ${currentVersion}.`);
+
     return { kind: "continue" };
   }
 
@@ -67,21 +70,26 @@ export function runSelfUpdate(
       stdio: "inherit",
       timeout: SELF_UPDATE_INSTALL_TIMEOUT_MS,
     });
+
     if (updated.status !== 0) {
       warn(`Warning: failed to update qgrid-cli to ${latest}.`);
       warn(
         `Continuing with qgrid-cli ${currentVersion}; fix the global ${packageManager} install.`,
       );
+
       return { kind: "continue" };
     }
   } catch (cause) {
-    warn(`Warning: failed to update qgrid-cli to ${latest}: ${(cause as Error).message}`);
+    const message = cause instanceof Error ? cause.message : String(cause);
+    warn(`Warning: failed to update qgrid-cli to ${latest}: ${message}`);
     warn(`Continuing with qgrid-cli ${currentVersion}; fix the global ${packageManager} install.`);
+
     return { kind: "continue" };
   }
 
   const restartCommand = resolveQgridRestartCommand(packageManager, globalBinDir);
   const updatedVersion = parseVersion(commandVersion(restartCommand, updateEnv));
+
   if (updatedVersion !== latest) {
     warn(
       `Warning: updated qgrid-cli verification failed. Expected ${latest}, found ${updatedVersion ?? "unknown"}.`,
@@ -89,18 +97,23 @@ export function runSelfUpdate(
     warn(
       `Continuing with qgrid-cli ${currentVersion}; check PATH and global ${packageManager} bin configuration.`,
     );
+
     return { kind: "continue" };
   }
 
   log("Updated. Restarting...\n");
+
   const restarted = spawn(restartCommand, args.concat("--skip-update"), {
     env: updateEnv,
     stdio: "inherit",
   });
+
   if (restarted.status === null) {
     error("Failed to restart qgrid-cli after updating.");
+
     return { kind: "exit", exitCode: 1 };
   }
+
   return { kind: "exit", exitCode: restarted.status };
 }
 
@@ -124,8 +137,10 @@ export function pnpmGlobalBinDir(): string | null {
     encoding: "utf-8",
     timeout: SELF_UPDATE_CHECK_TIMEOUT_MS,
   });
+
   if (result.status === 0) {
     const value = result.stdout.trim();
+
     return value.length > 0 ? value : null;
   }
 
@@ -140,6 +155,7 @@ export function withPrependedPath(
 
   const pathValue = env.PATH ?? "";
   const parts = pathValue.split(delimiter).filter(Boolean);
+
   if (parts.includes(pathEntry)) return env;
 
   return {
@@ -154,6 +170,7 @@ export function selfUpdateInstallCommand(
   version: string,
 ): { command: string; args: string[] } {
   const exactPackage = `${packageName}@${version}`;
+
   return packageManager === "pnpm"
     ? { command: "pnpm", args: ["add", "-g", exactPackage, "--save-exact"] }
     : { command: "npm", args: ["i", "-g", exactPackage] };
@@ -167,5 +184,6 @@ export function resolveQgridRestartCommand(
 
   const executable = process.platform === "win32" ? "qgrid.cmd" : "qgrid";
   const candidate = join(globalBinDir, executable);
+
   return existsSync(candidate) ? candidate : "qgrid";
 }

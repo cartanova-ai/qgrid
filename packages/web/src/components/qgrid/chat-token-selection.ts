@@ -35,6 +35,7 @@ export function resolvedTokenName(
   tokenListLoaded: boolean,
 ): string {
   if (!tokenName || !tokenListLoaded) return tokenName;
+
   return options.some((token) => token.name === tokenName) ? tokenName : "";
 }
 

@@ -1,3 +1,4 @@
+import { type JsonValue } from "../../utils/providers/common/provider-types";
 import {
   CODEX_IMAGE_GENERATION_MODEL,
   resolveImageGenerationOptions,
@@ -26,7 +27,9 @@ export function formatResponseForLog(result: QueryOutput): string {
   return result.content
     .flatMap((item) => {
       if (item.type === "text") return [item.text];
+
       if (item.type === "image") return [formatImagePartForLog(item)];
+
       return [];
     })
     .filter((part) => part.length > 0)
@@ -39,6 +42,7 @@ export function getImageParts(result: QueryOutput): Extract<QgridContent, { type
 
 export function formatImagePartForLog(image: Extract<QgridContent, { type: "image" }>): string {
   const alt = escapeHtmlAttribute(image.revisedPrompt ?? "generated image");
+
   return `<img src="data:${image.mediaType ?? "image/png"};base64,${image.data}" alt="${alt}" />`;
 }
 
@@ -47,29 +51,38 @@ export function imageGenerationToolArgs(
   options: { includeInputImages?: boolean; generation?: ImageGenerationMetadata } = {},
 ): string {
   const resolved = resolveImageGenerationOptions(args.imageGenerationOptions);
+
   const inputImages =
     options.includeInputImages === false ? [] : extractInputImagesForToolArgs(args);
-  return JSON.stringify({
-    prompt: args.prompt,
-    ...(inputImages.length > 0 ? { inputImages } : {}),
-    driverModel: args.model ?? null,
-    tool: {
-      ...CODEX_IMAGE_GENERATION_TOOL_CONFIG,
-      ...(args.imageGenerationOptions?.outputFormat
-        ? { outputFormat: args.imageGenerationOptions.outputFormat }
-        : {}),
-    },
-    ...(args.imageGenerationOptions ? { requestedOptions: args.imageGenerationOptions } : {}),
-    ...(options.generation
-      ? { observedGeneration: options.generation }
-      : {
-          pricingAssumption: {
-            model: CODEX_IMAGE_GENERATION_MODEL,
-            quality: resolved.quality,
-            size: resolved.size,
-          },
-        }),
-  });
+
+  // Keys are assigned in their serialized order; request logs store this JSON text.
+  const toolArgs: Record<string, JsonValue> = {};
+  toolArgs.prompt = args.prompt;
+
+  if (inputImages.length > 0) toolArgs.inputImages = inputImages;
+  toolArgs.driverModel = args.model ?? null;
+  const tool: Record<string, JsonValue> = {};
+  Object.assign(tool, CODEX_IMAGE_GENERATION_TOOL_CONFIG);
+
+  if (args.imageGenerationOptions?.outputFormat) {
+    tool.outputFormat = args.imageGenerationOptions.outputFormat;
+  }
+
+  toolArgs.tool = tool;
+
+  if (args.imageGenerationOptions) toolArgs.requestedOptions = args.imageGenerationOptions;
+
+  if (options.generation) {
+    toolArgs.observedGeneration = options.generation;
+  } else {
+    toolArgs.pricingAssumption = {
+      model: CODEX_IMAGE_GENERATION_MODEL,
+      quality: resolved.quality,
+      size: resolved.size,
+    };
+  }
+
+  return JSON.stringify(toolArgs);
 }
 
 export function buildImageGenerationToolSteps(
@@ -101,16 +114,21 @@ export function buildImageGenerationToolSteps(
   }));
 }
 
-export function extractInputImagesForToolArgs(args: QueryInput): Array<{
+type LoggedInputImage = {
   mediaType?: string;
   data?: string;
   url?: string;
   byteSize?: number;
-}> {
+};
+
+export function extractInputImagesForToolArgs(args: QueryInput): LoggedInputImage[] {
   const images = args.input?.filter((item) => item.type === "image") ?? [];
+
   return images.map((image) => {
     const dataUrl = parseDataUrl(image.url);
+
     if (!dataUrl) return { url: image.url };
+
     if (dataUrl.isBase64 && dataUrl.mediaType.toLowerCase().startsWith("image/")) {
       return {
         mediaType: dataUrl.mediaType,
@@ -118,11 +136,15 @@ export function extractInputImagesForToolArgs(args: QueryInput): Array<{
         byteSize: base64ByteSize(dataUrl.data),
       };
     }
-    return {
+
+    const logged: LoggedInputImage = {
       mediaType: dataUrl.mediaType,
       url: `[data-url ${image.url.length} chars]`,
-      ...(dataUrl.isBase64 ? { byteSize: base64ByteSize(dataUrl.data) } : {}),
     };
+
+    if (dataUrl.isBase64) logged.byteSize = base64ByteSize(dataUrl.data);
+
+    return logged;
   });
 }
 
@@ -130,13 +152,16 @@ function parseDataUrl(
   value: string,
 ): { mediaType: string; data: string; isBase64: boolean } | null {
   const match = /^data:([^;,]+)((?:;[^,]*)*),(.*)$/is.exec(value);
+
   if (!match) return null;
   const params = match[2]!.toLowerCase().split(";").filter(Boolean);
+
   return { mediaType: match[1]!, data: match[3]!, isBase64: params.includes("base64") };
 }
 
 function base64ByteSize(value: string): number {
   const normalized = /\s/.test(value) ? value.replace(/\s/g, "") : value;
   const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+
   return Math.max(Math.floor((normalized.length * 3) / 4) - padding, 0);
 }

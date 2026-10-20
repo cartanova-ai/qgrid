@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
 
+import { z } from "zod";
+
+import { type JsonValue } from "../common/provider-types";
 import {
   OPENAI_AUTHORIZE_URL,
   OPENAI_CLIENT_ID,
@@ -9,6 +12,25 @@ import {
 } from "./openai-constants";
 
 const OPENAI_AUTH_CLAIM = "https://api.openai.com/auth";
+
+// Mistyped claims read as absent, matching how the callers treat missing ones.
+const openAITokenClaimsSchema = z.looseObject({
+  exp: z.number().optional().catch(undefined),
+  [OPENAI_AUTH_CLAIM]: z
+    .looseObject({
+      chatgpt_account_id: z.string().optional().catch(undefined),
+      chatgpt_plan_type: z.string().optional().catch(undefined),
+    })
+    .optional()
+    .catch(undefined),
+});
+
+const openAITokenExchangeResponseSchema = z.looseObject({
+  id_token: z.string().optional(),
+  access_token: z.string().optional(),
+  refresh_token: z.string().optional(),
+  expires_in: z.number().optional(),
+});
 
 export interface OpenAIPKCE {
   codeVerifier: string;
@@ -34,6 +56,7 @@ export interface OpenAIExchangedCredentials {
 
 export function generateOpenAIPKCE(): OpenAIPKCE {
   const codeVerifier = crypto.randomBytes(64).toString("base64url");
+
   return {
     codeVerifier,
     codeChallenge: crypto.createHash("sha256").update(codeVerifier).digest("base64url"),
@@ -59,32 +82,36 @@ export function buildOpenAIAuthUrl(
     state,
     originator: OPENAI_ORIGINATOR,
   }).toString();
+
   return url.toString();
 }
 
 export function parseOpenAITokenClaims(jwt: string): OpenAITokenClaims {
   const parts = jwt.split(".");
   const payloadPart = parts[1];
+
   if (parts.length !== 3 || parts.some((part) => !part) || !payloadPart) {
     throw new Error("invalid OpenAI JWT format");
   }
 
-  let payload: unknown;
+  let payload: JsonValue;
+
   try {
+    // JSON.parse without a reviver yields only JSON values.
     payload = JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8"));
   } catch {
     throw new Error("invalid OpenAI JWT payload");
   }
-  if (!payload || typeof payload !== "object") throw new Error("invalid OpenAI JWT payload");
 
-  const claims = payload as Record<string, unknown>;
-  const auth = claims[OPENAI_AUTH_CLAIM];
-  const nested = auth && typeof auth === "object" ? (auth as Record<string, unknown>) : {};
+  const claims = openAITokenClaimsSchema.safeParse(payload);
+
+  if (!claims.success) throw new Error("invalid OpenAI JWT payload");
+  const auth = claims.data[OPENAI_AUTH_CLAIM];
+
   return {
-    expiresAt: typeof claims.exp === "number" ? claims.exp * 1000 : undefined,
-    accountId:
-      typeof nested.chatgpt_account_id === "string" ? nested.chatgpt_account_id : undefined,
-    planType: typeof nested.chatgpt_plan_type === "string" ? nested.chatgpt_plan_type : undefined,
+    expiresAt: claims.data.exp === undefined ? undefined : claims.data.exp * 1000,
+    accountId: auth?.chatgpt_account_id,
+    planType: auth?.chatgpt_plan_type,
   };
 }
 
@@ -104,18 +131,15 @@ export async function exchangeOpenAICode(
       code_verifier: codeVerifier,
     }),
   });
+
   if (!response.ok) {
     // Token endpoint bodies can echo credentials or provider diagnostics; never expose them.
     await response.body?.cancel().catch(() => undefined);
     throw new Error(`OPENAI_TOKEN_EXCHANGE_HTTP_${response.status}`);
   }
 
-  const tokens = (await response.json()) as {
-    id_token?: string;
-    access_token?: string;
-    refresh_token?: string;
-    expires_in?: number;
-  };
+  const tokens = openAITokenExchangeResponseSchema.parse(await response.json());
+
   if (!tokens.id_token || !tokens.access_token || !tokens.refresh_token) {
     throw new Error("OpenAI token exchange returned incomplete credentials");
   }
@@ -123,19 +147,23 @@ export async function exchangeOpenAICode(
   const idClaims = parseOpenAITokenClaims(tokens.id_token);
   const accessClaims = parseOpenAITokenClaims(tokens.access_token);
   const accountId = idClaims.accountId ?? accessClaims.accountId;
+
   if (!accountId) throw new Error("OpenAI token did not include a ChatGPT account id");
 
-  return {
+  const credentials: OpenAIExchangedCredentials = {
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token,
     idToken: tokens.id_token,
     accessTokenExpiresAt:
       accessClaims.expiresAt ??
       (tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : Date.now()),
-    ...(idClaims.expiresAt ? { idTokenExpiresAt: idClaims.expiresAt } : {}),
     accountId,
-    ...((idClaims.planType ?? accessClaims.planType)
-      ? { planType: idClaims.planType ?? accessClaims.planType }
-      : {}),
   };
+
+  if (idClaims.expiresAt) credentials.idTokenExpiresAt = idClaims.expiresAt;
+  const planType = idClaims.planType ?? accessClaims.planType;
+
+  if (planType) credentials.planType = planType;
+
+  return credentials;
 }

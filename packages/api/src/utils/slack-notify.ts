@@ -6,9 +6,29 @@
  * 알림 경로가 토큰 라우팅이나 오류 전파를 지연·차단해서는 안 된다.
  */
 import { getLogger } from "@logtape/logtape";
+import { z } from "zod";
 
 import { getSetting } from "../application/setting/setting.store";
 import { isQuietHours } from "./quiet-hours";
+
+type SlackTextObject = { type: "mrkdwn"; text: string };
+
+type SlackBlock =
+  | { type: "section"; text: SlackTextObject }
+  | { type: "context"; elements: SlackTextObject[] };
+
+interface SlackAttachment {
+  fallback: string;
+  color?: string;
+  blocks: SlackBlock[];
+}
+
+// chat.postMessage answers HTTP 200 with ok:false for most configuration errors. A malformed
+// error field must not hide ok:true, so it degrades to undefined instead of failing the parse.
+const slackPostMessageResponseSchema = z.looseObject({
+  ok: z.boolean().optional(),
+  error: z.string().optional().catch(undefined),
+});
 
 const logger = getLogger(["qgrid", "slack"]);
 
@@ -49,11 +69,14 @@ export async function notifySlack(
   const botToken = readSetting("slack.botToken", "SLACK_BOT_TOKEN");
   const channel = readSetting("slack.channelId", "SLACK_CHANNEL_ID");
   const { title, subject, context, color, urgent, now } = notification;
+
   if (!botToken || !channel) {
     logger.debug(`slack not configured, skipping notification: ${title} ${subject ?? ""}`);
+
     if (notification.throwOnFailure) {
       throw new SlackNotificationError("Slack 봇 토큰과 채널 ID를 설정해 주세요");
     }
+
     return;
   }
 
@@ -61,26 +84,39 @@ export async function notifySlack(
   // 끈 상태로 provider 가 전부 죽으면 연휴 내내 서비스가 멈춘 줄 아무도 모른다.
   if (!urgent && readSetting("slack.enabled", "SLACK_ENABLED") === "false") {
     logger.debug(`slack disabled, skipping notification: ${title} ${subject ?? ""}`);
+
     return;
   }
 
   // 만료 알림은 주기적으로 반복되므로 여기서 버려도 다음 근무 시간 첫 주기에 다시 온다.
   if (!urgent && isQuietHours(now ?? new Date(), readSetting)) {
     logger.debug(`quiet hours, skipping notification: ${title} ${subject ?? ""}`);
+
     return;
   }
 
-  const blocks: unknown[] = [
+  const blocks: SlackBlock[] = [
     {
       type: "section",
       text: { type: "mrkdwn", text: subject ? `*${title}*  \`${subject}\`` : `*${title}*` },
     },
   ];
+
   if (context) {
     blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: context }] });
   }
 
   try {
+    // fallback 은 attachment 안에 둔다. 최상위 text 로 보내면 blocks 가 정상 렌더되는
+    // 화면에서도 함께 출력돼 제목이 두 번 보인다. attachment fallback 은 blocks 를
+    // 못 그리는 클라이언트와 푸시 알림에서만 쓰인다.
+    const attachment: SlackAttachment = {
+      fallback: subject ? `${title} — ${subject}` : title,
+      blocks,
+    };
+
+    if (color) attachment.color = color;
+
     const res = await fetch(SLACK_POST_MESSAGE_URL, {
       method: "POST",
       headers: {
@@ -89,28 +125,21 @@ export async function notifySlack(
       },
       body: JSON.stringify({
         channel,
-        // fallback 은 attachment 안에 둔다. 최상위 text 로 보내면 blocks 가 정상 렌더되는
-        // 화면에서도 함께 출력돼 제목이 두 번 보인다. attachment fallback 은 blocks 를
-        // 못 그리는 클라이언트와 푸시 알림에서만 쓰인다.
-        attachments: [
-          {
-            fallback: subject ? `${title} — ${subject}` : title,
-            ...(color ? { color } : {}),
-            blocks,
-          },
-        ],
+        attachments: [attachment],
       }),
       signal: AbortSignal.timeout(SLACK_TIMEOUT_MS),
     });
 
     // bot 미초대(not_in_channel)·잘못된 채널 등 가장 흔한 오설정은 HTTP 200 + ok:false 로 온다.
     // status 만 보면 조용히 성공 처리돼 알림이 통째로 사라진다.
-    const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    const body = slackPostMessageResponseSchema.safeParse(await res.json().catch(() => null)).data;
+
     if (!res.ok || body?.ok !== true) {
       const code =
-        typeof body?.error === "string" && /^[a-z_]{1,80}$/.test(body.error)
+        body?.error !== undefined && /^[a-z_]{1,80}$/.test(body.error)
           ? body.error
           : `HTTP ${res.status}`;
+
       throw new SlackNotificationError(`Slack 알림 발송 실패: ${code}`);
     }
   } catch (e) {
@@ -118,7 +147,9 @@ export async function notifySlack(
       e instanceof SlackNotificationError
         ? e
         : new SlackNotificationError("Slack 알림 발송 실패: 네트워크 오류 또는 응답 시간 초과");
+
     logger.warn(error.message);
+
     if (notification.throwOnFailure) throw error;
   }
 }

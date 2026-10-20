@@ -13,8 +13,10 @@ export function isOAuthProvider(value: string): value is Provider {
 
 const OPENAI_POLL_INTERVAL_MS = 3000;
 const OPENAI_POLL_TIMEOUT_MS = 300_000;
+
 // RFC 8628 §3.5: slow_down adds 5 s to the interval for every later request.
 const DEVICE_SLOW_DOWN_STEP_SEC = 5;
+
 // A transient API/network failure should not end a device login; a persistent one should.
 const DEVICE_MAX_CONSECUTIVE_POLL_FAILURES = 3;
 
@@ -34,13 +36,14 @@ export type GrokDeviceFlow =
   | { status: "expired" }
   | { status: "error"; message: string };
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : "Grok login failed";
-}
+type GrokDeviceWaiting = Extract<GrokDeviceFlow, { status: "waiting" }>;
+
+const GROK_LOGIN_FAILED_MESSAGE = "Grok login failed";
 
 /** Server-provided login URLs are only opened or linked when they are https. */
 export function safeHttpsUrl(value: string | undefined): string | undefined {
   if (!value) return undefined;
+
   try {
     return new URL(value).protocol === "https:" ? value : undefined;
   } catch {
@@ -50,6 +53,7 @@ export function safeHttpsUrl(value: string | undefined): string | undefined {
 
 async function getTokenIds(provider: Provider, name: string): Promise<Set<number>> {
   const { rows } = await TokenService.getTokens("A", { num: 0, queryMode: "list" });
+
   return new Set(
     rows
       .filter((token) => token.provider === provider && token.name === name)
@@ -80,12 +84,16 @@ export function useOAuthLoginFlow() {
   // 최대 5분간 계속 refetch 가 돈다.
   const pollTimers = useRef<{ interval?: number; timeout?: number }>({});
   const attemptRef = useRef(0);
+
   const stopPolling = () => {
     attemptRef.current += 1;
+
     if (pollTimers.current.interval !== undefined) clearInterval(pollTimers.current.interval);
+
     if (pollTimers.current.timeout !== undefined) clearTimeout(pollTimers.current.timeout);
     pollTimers.current = {};
   };
+
   useEffect(() => stopPolling, []);
 
   const invalidateTokens = () =>
@@ -96,6 +104,7 @@ export function useOAuthLoginFlow() {
 
   const start = async (provider: Provider, name: string) => {
     const trimmed = name.trim();
+
     if (!trimmed) return;
 
     stopPolling();
@@ -109,37 +118,50 @@ export function useOAuthLoginFlow() {
       if (provider === "grok") {
         // Grok 의 redirect 는 qgrid 가 받지 않는 127.0.0.1 임의 포트라 항상 붙여넣기 단계로 간다.
         const { authUrl } = await oauthStartGrokMutation.mutateAsync({ name: trimmed });
+
         if (attempt !== attemptRef.current) {
           popup?.close();
+
           return;
         }
+
         const loginUrl = safeHttpsUrl(authUrl);
+
         if (!loginUrl) throw new Error("Grok login URL is not https");
+
         if (popup) popup.location.href = loginUrl;
         else window.open(loginUrl, "_blank");
         setCodeEntryProvider(provider);
         setLoadingProvider(null);
+
         return;
       }
 
       if (provider === "openai") {
         // 로그인 페이지를 열기 전에 전체 대상 ID를 읽는다. 재로그인은 행 수가 같아도 ID가 바뀐다.
         const before = await getTokenIds(provider, trimmed);
+
         if (attempt !== attemptRef.current) {
           popup?.close();
+
           return;
         }
+
         const { authUrl, mode } = await oauthStartOpenAIMutation.mutateAsync({ name: trimmed });
+
         if (attempt !== attemptRef.current) {
           popup?.close();
+
           return;
         }
+
         if (popup) popup.location.href = authUrl;
         else window.open(authUrl, "_blank");
 
         if (mode === "code") {
           setCodeEntryProvider(provider);
           setLoadingProvider(null);
+
           return;
         }
 
@@ -148,6 +170,7 @@ export function useOAuthLoginFlow() {
           void getTokenIds(provider, trimmed)
             .then((ids) => {
               if (attempt !== attemptRef.current) return;
+
               if ([...ids].some((id) => !before.has(id))) {
                 stopPolling();
                 setLoadingProvider(null);
@@ -163,14 +186,18 @@ export function useOAuthLoginFlow() {
           stopPolling();
           setLoadingProvider(null);
         }, OPENAI_POLL_TIMEOUT_MS);
+
         return;
       }
 
       const { authUrl, mode } = await oauthStartMutation.mutateAsync({ name: trimmed });
+
       if (attempt !== attemptRef.current) {
         popup?.close();
+
         return;
       }
+
       if (mode === "code") {
         // 원격 접속: 새 탭에서 인증 → 표시된 코드를 붙여넣는다.
         if (popup) popup.location.href = authUrl;
@@ -183,6 +210,7 @@ export function useOAuthLoginFlow() {
       }
     } catch (e) {
       popup?.close();
+
       if (attempt !== attemptRef.current) return;
       console.error("OAuth start failed:", e);
       setLoadingProvider(null);
@@ -196,6 +224,7 @@ export function useOAuthLoginFlow() {
    */
   const startDevice = async (name: string, onAdded?: () => void) => {
     const trimmed = name.trim();
+
     if (!trimmed) return;
 
     stopPolling();
@@ -205,34 +234,46 @@ export function useOAuthLoginFlow() {
     setDeviceFlow({ status: "starting" });
 
     let device;
+
     try {
       device = await QgridService.oauthStartGrokDevice(trimmed);
     } catch (e) {
       if (attempt !== attemptRef.current) return;
       console.error("Grok device login start failed:", e);
-      setDeviceFlow({ status: "error", message: errorMessage(e) });
+      setDeviceFlow({
+        status: "error",
+        message: e instanceof Error && e.message ? e.message : GROK_LOGIN_FAILED_MESSAGE,
+      });
+
       return;
     }
+
     if (attempt !== attemptRef.current) return;
 
     const { deviceCode } = device;
     const verificationUri = safeHttpsUrl(device.verificationUri);
+
     if (!verificationUri) {
       setDeviceFlow({ status: "error", message: "Grok verification URL is not https" });
+
       return;
     }
+
     const verificationUriComplete = safeHttpsUrl(device.verificationUriComplete);
     const expiresAt = Date.now() + device.expiresIn * 1000;
     let intervalSec = Math.max(device.interval, 1);
     let failures = 0;
-    setDeviceFlow({
+
+    const waiting: GrokDeviceWaiting = {
       status: "waiting",
       userCode: device.userCode,
       verificationUri,
-      ...(verificationUriComplete ? { verificationUriComplete } : {}),
       expiresAt,
       slowDown: false,
-    });
+    };
+
+    if (verificationUriComplete) waiting.verificationUriComplete = verificationUriComplete;
+    setDeviceFlow(waiting);
 
     const schedule = () => {
       // 만료 시각을 넘겨 기다리지 않도록 남은 시간으로 자른다.
@@ -242,39 +283,55 @@ export function useOAuthLoginFlow() {
 
     const poll = async () => {
       if (attempt !== attemptRef.current) return;
+
       if (Date.now() >= expiresAt) {
         setDeviceFlow({ status: "expired" });
+
         return;
       }
+
       let result;
+
       try {
         result = await QgridService.oauthPollGrokDevice(deviceCode);
       } catch (e) {
         if (attempt !== attemptRef.current) return;
         failures += 1;
+
         if (failures >= DEVICE_MAX_CONSECUTIVE_POLL_FAILURES) {
           console.error("Grok device login poll failed:", e);
-          setDeviceFlow({ status: "error", message: errorMessage(e) });
+          setDeviceFlow({
+            status: "error",
+            message: e instanceof Error && e.message ? e.message : GROK_LOGIN_FAILED_MESSAGE,
+          });
+
           return;
         }
+
         schedule();
+
         return;
       }
+
       if (attempt !== attemptRef.current) return;
       failures = 0;
 
       if (result.status === "added") {
         setDeviceFlow({ status: "added", name: result.name ?? trimmed });
         await invalidateTokens();
+
         if (attempt === attemptRef.current) onAdded?.();
+
         return;
       }
+
       if (result.status === "slow_down") {
         intervalSec = result.intervalSec ?? intervalSec + DEVICE_SLOW_DOWN_STEP_SEC;
         setDeviceFlow((prev) => (prev?.status === "waiting" ? { ...prev, slowDown: true } : prev));
       } else if (result.intervalSec !== undefined) {
         intervalSec = result.intervalSec;
       }
+
       intervalSec = Math.max(intervalSec, 1);
       schedule();
     };
@@ -285,14 +342,19 @@ export function useOAuthLoginFlow() {
   /** @returns 교환 성공 여부. 실패 시 `completeMutation.isError` 로 안내 문구를 띄운다. */
   const submitCode = async (pastedCode: string): Promise<boolean> => {
     const trimmed = pastedCode.trim();
+
     if (!trimmed) return false;
+
     try {
       await oauthCompleteMutation.mutateAsync({ pastedCode: trimmed });
     } catch (e) {
       console.error("OAuth complete failed:", e);
+
       return false;
     }
+
     await invalidateTokens();
+
     return true;
   };
 

@@ -166,6 +166,7 @@ export function validateSettingValue(
 
   if (def.kind === "boolean") {
     if (!["true", "false"].includes(trimmed)) return { ok: false, error: "true 또는 false" };
+
     return { ok: true, value: trimmed };
   }
 
@@ -173,24 +174,31 @@ export function validateSettingValue(
     // 화면은 버튼만 주지만 API 는 아무 값이나 받을 수 있다. 목록 밖의 값이 들어오면
     // 화면에서 아무 버튼도 선택돼 보이지 않아 "왜 안 바뀌지"가 된다.
     const parsed = Number(trimmed);
+
     if (!def.presets?.includes(parsed)) {
       return { ok: false, error: `${def.presets?.join(", ") ?? ""} 중 하나여야 합니다` };
     }
+
     return { ok: true, value: String(parsed) };
   }
 
   if (def.kind === "integer" || def.kind === "number") {
     const parsed = Number(trimmed);
+
     if (!Number.isFinite(parsed)) return { ok: false, error: "숫자를 입력하세요" };
+
     if (def.kind === "integer" && !Number.isInteger(parsed)) {
       return { ok: false, error: "정수를 입력하세요" };
     }
+
     if (def.min !== undefined && parsed < def.min) {
       return { ok: false, error: `${def.min} 이상이어야 합니다` };
     }
+
     if (def.max !== undefined && parsed > def.max) {
       return { ok: false, error: `${def.max} 이하여야 합니다` };
     }
+
     return { ok: true, value: String(parsed) };
   }
 
@@ -200,5 +208,6 @@ export function validateSettingValue(
 /** 화면에 그대로 내려보내면 안 되는 값. 앞뒤만 남긴다. */
 export function maskSecret(value: string): string {
   if (value.length <= 12) return "***";
+
   return `${value.slice(0, 8)}...${value.slice(-4)}`;
 }

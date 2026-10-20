@@ -1,11 +1,14 @@
 import crypto from "node:crypto";
+import { type ClientRequest } from "node:http";
 
 import WsClient, { type ClientOptions, type RawData } from "ws";
+import { z } from "zod";
 
 import {
   buildCodexIdentityHeaders,
   buildOpenAIResponsesRequest,
   CHATGPT_CODEX_RESPONSES_URL,
+  type JsonValue,
   normalizeOpenAIEvent,
   OpenAIProtocolError,
   type OpenAINormalizedEvent,
@@ -49,7 +52,7 @@ export interface OpenAIWebSocketLike {
   on(event: "error", listener: (error: Error) => void): this;
   on(
     event: "unexpected-response",
-    listener: (request: unknown, response: { statusCode?: number }) => void,
+    listener: (request: ClientRequest, response: { statusCode?: number }) => void,
   ): this;
   off(event: string, listener: (...args: never[]) => void): this;
   send(data: string, callback?: (error?: Error) => void): void;
@@ -74,18 +77,23 @@ const MAX_BUFFERED_SOCKET_RECORDS = 1600;
 
 function websocketUrl(url: string): string {
   let parsed: URL;
+
   try {
     parsed = new URL(url);
   } catch (error) {
     throw new OpenAIProtocolError(`Invalid OpenAI Responses URL: ${String(error)}`);
   }
+
   parsed.protocol = parsed.protocol === "https:" ? "wss:" : "ws:";
+
   return parsed.toString();
 }
 
 function rawDataText(data: RawData): string {
   if (Array.isArray(data)) return Buffer.concat(data).toString();
+
   if (data instanceof ArrayBuffer) return Buffer.from(new Uint8Array(data)).toString();
+
   return Buffer.from(data).toString();
 }
 
@@ -93,15 +101,18 @@ function socketEvents(socket: OpenAIWebSocketLike, signal?: AbortSignal) {
   const records: SocketRecord[] = [];
   const waiters: Array<(record: SocketRecord) => void> = [];
   let active = true;
+
   const push = (record: SocketRecord) => {
     if (!active) return;
     const waiter = waiters.shift();
+
     if (waiter) waiter(record);
     else if (records.length < MAX_BUFFERED_SOCKET_RECORDS) records.push(record);
     else {
       active = false;
       records.length = 0;
       socket.terminate();
+
       const overflow = {
         kind: "error" as const,
         error: new OpenAIProtocolError(
@@ -109,28 +120,38 @@ function socketEvents(socket: OpenAIWebSocketLike, signal?: AbortSignal) {
           "websocket_backpressure",
         ),
       };
+
       const overflowWaiter = waiters.shift();
+
       if (overflowWaiter) overflowWaiter(overflow);
       else records.push(overflow);
     }
   };
+
   const onOpen = () => push({ kind: "open" });
   const onMessage = (data: RawData, isBinary: boolean) => push({ kind: "message", data, isBinary });
+
   const onClose = (code: number, reason: Buffer) =>
     push({ kind: "close", code, reason: reason.toString() });
+
   const onError = (error: Error) => push({ kind: "error", error });
-  const onUnexpectedResponse = (_request: unknown, response: { statusCode?: number }) =>
+
+  const onUnexpectedResponse = (_request: ClientRequest, response: { statusCode?: number }) =>
     push({ kind: "rejected", status: response.statusCode });
+
   socket.on("open", onOpen);
   socket.on("message", onMessage);
   socket.on("close", onClose);
   socket.on("error", onError);
   socket.on("unexpected-response", onUnexpectedResponse);
+
   const onAbort = () => {
     socket.terminate();
     push({ kind: "error", error: abortError(signal) });
   };
+
   signal?.addEventListener("abort", onAbort, { once: true });
+
   return {
     next: () =>
       records.length
@@ -146,10 +167,12 @@ function socketEvents(socket: OpenAIWebSocketLike, signal?: AbortSignal) {
       // 다음 tick에 error를 emit하므로, 떼어 두면 Unhandled 'error'로 프로세스가 죽는다.
       socket.off("unexpected-response", onUnexpectedResponse);
       records.length = 0;
+
       const closed = {
         kind: "error" as const,
         error: new OpenAIProtocolError("OpenAI WebSocket event stream was closed"),
       };
+
       waiters.splice(0).forEach((waiter) => waiter(closed));
     },
     detachAbort: () => signal?.removeEventListener("abort", onAbort),
@@ -168,12 +191,15 @@ async function nextPooledRecord(
   signal?: AbortSignal,
 ): Promise<SocketRecord> {
   if (!signal) return events.next();
+
   if (signal.aborted) throw abortError(signal);
+
   return new Promise<SocketRecord>((resolve, reject) => {
     const onAbort = () => {
       socket.terminate();
       reject(abortError(signal));
     };
+
     signal.addEventListener("abort", onAbort, { once: true });
     void events
       .next()
@@ -188,6 +214,7 @@ function cacheAffinityUuid(key: string): string {
   const hex = crypto.createHash("sha256").update(key).digest("hex").slice(0, 32).split("");
   hex[12] = "4";
   hex[16] = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
+
   return `${hex.slice(0, 8).join("")}-${hex.slice(8, 12).join("")}-${hex.slice(12, 16).join("")}-${hex.slice(16, 20).join("")}-${hex.slice(20).join("")}`;
 }
 
@@ -230,40 +257,52 @@ export class OpenAIWebSocketTransport implements OpenAIResponsesTransport {
       const idleKey = [...this.affinityConnections.keys()].find(
         (key) => !this.busyAffinities.has(key),
       );
+
       if (idleKey === undefined) return false;
       const idle = this.affinityConnections.get(idleKey)!;
       idle.events.cleanup();
       idle.socket.close(1000, "affinity cache evicted");
       this.affinityConnections.delete(idleKey);
     }
+
     this.affinityConnections.set(threadId, connection);
+
     // 유휴 상태에서 backend 가 끊은 소켓을 다음 요청이 집어들지 않도록 캐시에서 제거한다.
     const drop = () => {
       connection.closed = true;
+
       if (this.busyAffinities.has(threadId)) return;
+
       if (this.affinityConnections.get(threadId) !== connection) return;
       this.affinityConnections.delete(threadId);
       connection.events.cleanup();
     };
+
     connection.socket.on("close", drop);
     connection.socket.on("error", drop);
+
     return true;
   }
 
   async *stream(request: OpenAITransportRequest): AsyncGenerator<OpenAINormalizedEvent> {
     let refreshed = false;
+
     while (true) {
       if (request.signal?.aborted) throw abortError(request.signal);
       const hasAffinity = request.body.prompt_cache_key !== undefined;
       const retainConnection = hasAffinity && !this.busyAffinities.has(request.threadId);
+
       if (retainConnection) this.busyAffinities.add(request.threadId);
       const entry = retainConnection ? this.affinityConnections.get(request.threadId) : undefined;
+
       if (entry?.closed) {
         this.affinityConnections.delete(request.threadId);
         entry.events.cleanup();
       }
+
       const cached = entry?.closed ? undefined : entry;
       let retained = retainConnection;
+
       const socket =
         cached?.socket ??
         this.webSocketFactory(websocketUrl(CHATGPT_CODEX_RESPONSES_URL), {
@@ -276,11 +315,14 @@ export class OpenAIWebSocketTransport implements OpenAIResponsesTransport {
             "OpenAI-Beta": "responses_websockets=2026-02-06",
           },
         });
+
       const events = cached?.events ?? socketEvents(socket, request.signal);
       let completed = false;
+
       try {
         if (!cached) {
           const handshake = await events.next();
+
           if (
             handshake.kind === "rejected" &&
             handshake.status === 401 &&
@@ -292,6 +334,7 @@ export class OpenAIWebSocketTransport implements OpenAIResponsesTransport {
             refreshed = true;
             continue;
           }
+
           if (handshake.kind === "rejected") {
             throw new OpenAIProtocolError(
               `OpenAI WebSocket handshake rejected${handshake.status ? ` with HTTP ${handshake.status}` : ""}`,
@@ -299,10 +342,13 @@ export class OpenAIWebSocketTransport implements OpenAIResponsesTransport {
               handshake.status,
             );
           }
+
           if (handshake.kind === "error") throw handshake.error;
+
           if (handshake.kind !== "open") {
             throw new OpenAIProtocolError("OpenAI WebSocket closed before the handshake completed");
           }
+
           if (retainConnection) {
             retained = this.rememberAffinityConnection(request.threadId, { socket, events });
           }
@@ -318,26 +364,37 @@ export class OpenAIWebSocketTransport implements OpenAIResponsesTransport {
           const record = cached
             ? await nextPooledRecord(events, socket, request.signal)
             : await events.next();
+
           if (record.kind === "message") {
             if (record.isBinary) {
               throw new OpenAIProtocolError("OpenAI WebSocket sent an unexpected binary message");
             }
-            let raw: unknown;
+
+            let raw: JsonValue;
+
             try {
+              // JSON.parse without a reviver yields only JSON values.
               raw = JSON.parse(rawDataText(record.data));
             } catch {
               throw new OpenAIProtocolError("OpenAI WebSocket sent invalid JSON");
             }
+
             const event = normalizeOpenAIEvent(raw);
+
             if (!event) continue;
+
             if (event.type === "completed") {
               completed = true;
+
               if (retained) events.detachAbort();
               else socket.close(1000, "response completed");
               yield event;
+
               return;
             }
+
             yield event;
+
             if (event.type === "error") throw event.error;
           } else if (record.kind === "error") {
             throw record.error;
@@ -353,33 +410,58 @@ export class OpenAIWebSocketTransport implements OpenAIResponsesTransport {
         if (!completed || !retained) {
           if (retained) this.affinityConnections.delete(request.threadId);
           events.cleanup();
+
           if (!completed) socket.terminate();
         }
+
         if (retainConnection) this.busyAffinities.delete(request.threadId);
       }
     }
   }
 }
 
+// OpenAI error bodies carry `error` as a string or as { message, code }; mistyped fields are ignored.
+const openAIErrorBodySchema = z.looseObject({
+  error: z.unknown().optional(),
+  message: z.string().optional().catch(undefined),
+  code: z.string().optional().catch(undefined),
+});
+
+const openAIErrorDetailSchema = z.looseObject({
+  message: z.string().optional().catch(undefined),
+  code: z.string().optional().catch(undefined),
+});
+
+function requestsTransparentImage(
+  imageGeneration: OpenAIResponsesOptions["imageGeneration"],
+): boolean {
+  return (
+    imageGeneration !== undefined &&
+    imageGeneration !== true &&
+    imageGeneration !== false &&
+    imageGeneration.background === "transparent"
+  );
+}
+
 async function responseError(response: Response): Promise<OpenAIProtocolError> {
   const text = await response.text().catch(() => "");
   let message = text || response.statusText || `HTTP ${response.status}`;
   let code: string | undefined;
+
   try {
-    const parsed = JSON.parse(text) as {
-      error?: { message?: string; code?: string } | string;
-      message?: string;
-      code?: string;
-    };
-    const error = parsed.error;
-    message =
-      (typeof error === "object" ? error.message : undefined) ??
-      parsed.message ??
-      (typeof error === "string" ? error : message);
-    code = (typeof error === "object" ? error.code : undefined) ?? parsed.code;
+    const parsed = openAIErrorBodySchema.safeParse(JSON.parse(text));
+
+    if (parsed.success) {
+      const error = parsed.data.error;
+      const errorDetail = openAIErrorDetailSchema.safeParse(error).data;
+      message =
+        errorDetail?.message ?? parsed.data.message ?? z.string().safeParse(error).data ?? message;
+      code = errorDetail?.code ?? parsed.data.code;
+    }
   } catch {
     code = undefined;
   }
+
   return new OpenAIProtocolError(message, code, response.status);
 }
 
@@ -419,12 +501,15 @@ export class OpenAIHttpsTransport implements OpenAIResponsesTransport {
         refreshed = true;
         continue;
       }
+
       if (!response.ok) throw await responseError(response);
+
       if (!response.body) throw new OpenAIProtocolError("OpenAI response had no body");
 
       for await (const event of normalizeOpenAISSE(response.body)) {
         yield event;
       }
+
       return;
     }
   }
@@ -450,17 +535,16 @@ export class OpenAIDirectClient {
   }
 
   responses(options: OpenAIResponsesOptions, signal?: AbortSignal): OpenAIEventStream {
-    if (
-      options.model === "gpt-image-2" ||
-      (typeof options.imageGeneration === "object" &&
-        options.imageGeneration.background === "transparent")
-    ) {
+    if (options.model === "gpt-image-2" || requestsTransparentImage(options.imageGeneration)) {
       return this.standaloneImages(options, signal);
     }
+
     const clientRequestId = crypto.randomUUID();
+
     const affinityId = options.promptCacheKey
       ? cacheAffinityUuid(options.promptCacheKey)
       : clientRequestId;
+
     return this.transport.stream({
       body: buildOpenAIResponsesRequest(
         options.promptCacheKey ? { ...options, promptCacheKey: affinityId } : options,
@@ -479,8 +563,10 @@ export class OpenAIDirectClient {
   ): OpenAIEventStream {
     const request = buildStandaloneImageRequest(options);
     const requestId = crypto.randomUUID();
+
     for (let attempt = 0; attempt < 2; attempt++) {
       signal?.throwIfAborted();
+
       const response = await (this.options.fetch ?? fetch)(request.url, {
         method: "POST",
         headers: {
@@ -494,17 +580,20 @@ export class OpenAIDirectClient {
         body: JSON.stringify(request.body),
         signal,
       });
+
       if (response.status === 401 && attempt === 0 && this.options.refreshCredentials) {
         await response.body?.cancel();
         this.imageCredentials = await this.options.refreshCredentials();
         continue;
       }
+
       if (!response.ok) throw await responseError(response);
+
       const images = await readStandaloneImageResponse(
         response,
-        typeof options.imageGeneration === "object" &&
-          options.imageGeneration.background === "transparent",
+        requestsTransparentImage(options.imageGeneration),
       );
+
       signal?.throwIfAborted();
       yield* images;
       const firstImage = images[0];
@@ -513,6 +602,7 @@ export class OpenAIDirectClient {
         responseId: requestId,
         model: firstImage?.type === "image" ? firstImage.generation?.model : "gpt-image-2",
       };
+
       return;
     }
   }

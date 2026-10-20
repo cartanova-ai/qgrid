@@ -6,6 +6,7 @@ import { getPrettyFormatter } from "@logtape/pretty";
 import { type FastifyReply, type FastifyRequest } from "fastify";
 import { CachePresets, defineConfig } from "sonamu";
 import { drivers as cacheDrivers, store } from "sonamu/cache";
+import { z } from "zod";
 
 import { monitLogSink } from "./application/monit/log-buffer";
 import {
@@ -35,6 +36,12 @@ import { GrokMediaClient } from "./utils/providers/grok/grok-media-client";
 import { GrokVoiceClient } from "./utils/providers/grok/grok-voice-client";
 import { stopOpenAICallbackRelay } from "./utils/providers/openai/openai-callback-relay";
 import { OpenAIDispatcher } from "./utils/providers/openai/openai-dispatcher";
+
+// Repeated query keys arrive as arrays; the callback then treats the request as missing params.
+const oauthCallbackQuerySchema = z.looseObject({
+  code: z.string().optional(),
+  state: z.string().optional(),
+});
 
 const host = process.env.HOST ?? "localhost";
 const port = Number(process.env.PORT ?? 44900);
@@ -115,16 +122,19 @@ export default defineConfig({
       },
       custom: (server) => {
         const oauthCallback = async (request: FastifyRequest, reply: FastifyReply) => {
-          const { code, state } = request.query as { code?: string; state?: string };
+          const { code, state } = oauthCallbackQuerySchema.safeParse(request.query).data ?? {};
+
           if (!code || !state) {
             return reply.redirect("/?oauth=error&reason=missing_params");
           }
+
           try {
             return QgridFrame.handleOAuthCallback(code, state, reply);
           } catch {
             return reply.redirect("/?oauth=error&reason=callback_failed");
           }
         };
+
         server.get("/callback", oauthCallback);
         server.get("/auth/callback", oauthCallback);
       },
@@ -140,7 +150,9 @@ export default defineConfig({
       guardHandler: () => {},
       cacheControlHandler: (req) => {
         if (req.type === "api") return CachePresets.noCache;
+
         if (req.type === "csr") return CachePresets.shortLived;
+
         // Sonamu serves fingerprinted assets with its default immutable policy.
         return undefined;
       },
@@ -164,17 +176,19 @@ export default defineConfig({
           if (key === "slack.expiryReminderMinutes" || key === "slack.remindersEnabled") {
             rescheduleExpiredTokenReminder();
           }
+
           if (key === "qgrid.tokenWindowKeepaliveEnabled") {
             void rescheduleTokenWindowKeepalive();
           }
         });
 
         let triggerReady = true;
+
         try {
           await ensureTokensTrigger(connConfig);
         } catch (e) {
           triggerReady = false;
-          log.warn(`trigger setup failed: ${(e as Error).message}`);
+          log.warn(`trigger setup failed: ${e instanceof Error ? e.message : String(e)}`);
         }
 
         const subscriber = new TokenSubscriber(connConfig, QgridDispatcher);
@@ -191,7 +205,7 @@ export default defineConfig({
           QgridDispatcher.startupState.openai = "ready";
         } catch (e) {
           QgridDispatcher.startupState.openai = "failed";
-          log.warn(`openai dispatcher failed: ${(e as Error).message}`);
+          log.warn(`openai dispatcher failed: ${e instanceof Error ? e.message : String(e)}`);
         }
 
         try {
@@ -201,16 +215,18 @@ export default defineConfig({
           QgridDispatcher.startupState.anthropic = "ready";
         } catch (e) {
           QgridDispatcher.startupState.anthropic = "failed";
-          log.warn(`anthropic dispatcher failed: ${(e as Error).message}`);
+          log.warn(`anthropic dispatcher failed: ${e instanceof Error ? e.message : String(e)}`);
         }
 
         try {
           const grokRefresher = new GrokRefreshCoordinator({ persist: persistGrokCredentials });
+
           const grokDispatcher = new GrokDispatcher({
             refresher: grokRefresher,
             media: new GrokMediaClient(),
             voice: new GrokVoiceClient(),
           });
+
           await grokDispatcher.start();
           QgridFrame.grokRefresher = grokRefresher;
           QgridDispatcher.grokDispatcher = grokDispatcher;
@@ -219,15 +235,20 @@ export default defineConfig({
           // is retried by the periodic reconcile and does not make the runtime unusable.
           await subscriber
             .reconcile()
-            .catch((e) => log.warn(`grok initial reconcile failed: ${(e as Error).message}`));
+            .catch((e) =>
+              log.warn(
+                `grok initial reconcile failed: ${e instanceof Error ? e.message : String(e)}`,
+              ),
+            );
         } catch (e) {
           QgridDispatcher.startupState.grok = "failed";
-          log.warn(`grok dispatcher failed: ${(e as Error).message}`);
+          log.warn(`grok dispatcher failed: ${e instanceof Error ? e.message : String(e)}`);
         }
 
         subscriber.tokenChangeHandler = () => {
           void rescheduleTokenWindowKeepalive();
         };
+
         startExpiredTokenReminder();
         void startTokenWindowKeepalive();
 
@@ -247,20 +268,27 @@ export default defineConfig({
         stopTokenWindowKeepalive();
         stopOpenAICallbackRelay();
         setSettingChangeHandler(null);
+
         if (QgridDispatcher.subscriber) QgridDispatcher.subscriber.tokenChangeHandler = null;
+
         if (QgridDispatcher.openaiDispatcher) {
           await QgridDispatcher.openaiDispatcher.stop();
         }
+
         if (QgridDispatcher.anthropicDispatcher) {
           await QgridDispatcher.anthropicDispatcher.stop();
         }
+
         const grokDispatcher = QgridDispatcher.grokDispatcher;
+
         if (grokDispatcher instanceof GrokDispatcher) {
           await grokDispatcher.stop();
         }
+
         if (QgridDispatcher.subscriber) {
           await QgridDispatcher.subscriber.stop();
         }
+
         log.info("graceful shutdown");
       },
       onError: (error, _request, reply) => {

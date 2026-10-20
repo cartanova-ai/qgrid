@@ -3,6 +3,7 @@ import { z } from "zod";
 // ─── Query ───
 
 export const Effort = z.enum(["low", "medium", "high"]);
+
 export type Effort = z.infer<typeof Effort>;
 
 export const QgridTool = z.object({
@@ -10,6 +11,7 @@ export const QgridTool = z.object({
   description: z.string().optional(),
   inputSchema: z.unknown(),
 });
+
 export type QgridTool = z.infer<typeof QgridTool>;
 
 // Observed image response values, distinct from requested generation hints.
@@ -40,6 +42,7 @@ export const ImageGenerationMetadata = z.object({
     })
     .optional(),
 });
+
 export type ImageGenerationMetadata = z.infer<typeof ImageGenerationMetadata>;
 
 export const QgridContent = z.discriminatedUnion("type", [
@@ -62,21 +65,27 @@ export const QgridContent = z.discriminatedUnion("type", [
     generation: ImageGenerationMetadata.optional(),
   }),
 ]);
+
 export type QgridContent = z.infer<typeof QgridContent>;
 
 export const FinishReason = z.enum(["stop", "tool-calls"]);
+
 export type FinishReason = z.infer<typeof FinishReason>;
 
 export const Verbosity = z.enum(["low", "medium", "high"]);
+
 export type Verbosity = z.infer<typeof Verbosity>;
 
 export const ReasoningSummary = z.enum(["auto", "concise", "detailed", "none"]);
+
 export type ReasoningSummary = z.infer<typeof ReasoningSummary>;
 
 export const ServiceTier = z.enum(["fast", "flex"]);
+
 export type ServiceTier = z.infer<typeof ServiceTier>;
 
 export const ImageGenerationQuality = z.enum(["low", "medium", "high"]);
+
 export type ImageGenerationQuality = z.infer<typeof ImageGenerationQuality>;
 
 // Subscription-backend hints, not public Images API resolution guarantees.
@@ -90,6 +99,7 @@ export const ImageGenerationSize = z.union([
       "Image dimensions must be positive safe integers",
     ),
 ]);
+
 export type ImageGenerationSize = z.infer<typeof ImageGenerationSize>;
 
 export const ImageGenerationOptions = z
@@ -106,6 +116,7 @@ export const ImageGenerationOptions = z
       options.outputFormat === "png",
     { message: "Transparent image generation only supports PNG output", path: ["outputFormat"] },
   );
+
 export type ImageGenerationOptions = z.infer<typeof ImageGenerationOptions>;
 
 export const QgridInputPart = z.discriminatedUnion("type", [
@@ -119,6 +130,7 @@ export const QgridInputPart = z.discriminatedUnion("type", [
     url: z.string(),
   }),
 ]);
+
 export type QgridInputPart = z.infer<typeof QgridInputPart>;
 
 export const MAX_QUERY_TIMEOUT_MS = 30 * 60_000;
@@ -135,6 +147,7 @@ export const QgridThreadCoord = z.object({
   epoch: z.number(), // worker spawn 카운터. restart 로 thread 증발 감지
   systemHash: z.string(), // system_prompt 해시. 다른 대화 오접속 방지
 });
+
 export type QgridThreadCoord = z.infer<typeof QgridThreadCoord>;
 
 export const QgridRunContext = z.object({
@@ -142,6 +155,7 @@ export const QgridRunContext = z.object({
   requestLogId: z.number().optional(),
   threadCoord: QgridThreadCoord.optional(),
 });
+
 export type QgridRunContext = z.infer<typeof QgridRunContext>;
 
 export const QgridToolResultInput = z.object({
@@ -150,6 +164,7 @@ export const QgridToolResultInput = z.object({
   output: z.string(),
   isError: z.boolean().optional(),
 });
+
 export type QgridToolResultInput = z.infer<typeof QgridToolResultInput>;
 
 // Opaque per-provider namespaces forwarded to the dispatcher. Only grok/* models read `xai`;
@@ -158,22 +173,26 @@ export const XaiQueryProviderOptions = z.object({
   serviceTier: z.enum(["default", "priority"]).optional(),
   parallelToolCalls: z.boolean().optional(),
 });
+
 export type XaiQueryProviderOptions = z.infer<typeof XaiQueryProviderOptions>;
 
 export const QueryProviderOptions = z.object({
   xai: XaiQueryProviderOptions.optional(),
 });
+
 export type QueryProviderOptions = z.infer<typeof QueryProviderOptions>;
 
 export const XaiProviderMetadata = z.object({
   costInUsdTicks: z.number().optional(),
   contextWindow: z.number().optional(),
 });
+
 export type XaiProviderMetadata = z.infer<typeof XaiProviderMetadata>;
 
 export const QueryProviderMetadata = z.object({
   xai: XaiProviderMetadata.optional(),
 });
+
 export type QueryProviderMetadata = z.infer<typeof QueryProviderMetadata>;
 
 export const QueryInput = z.looseObject({
@@ -209,6 +228,7 @@ export const QueryInput = z.looseObject({
   imageGenerationOptions: ImageGenerationOptions.optional(),
   providerOptions: QueryProviderOptions.optional(),
 });
+
 export type QueryInput = z.infer<typeof QueryInput>;
 
 export const ModelFallback = z.object({
@@ -218,9 +238,11 @@ export const ModelFallback = z.object({
   category: z.string().optional(),
   explanation: z.string().optional(),
 });
+
 export type ModelFallback = z.infer<typeof ModelFallback>;
 
 export const CostSource = z.enum(["provider", "pricing_table", "mixed"]);
+
 export type CostSource = z.infer<typeof CostSource>;
 
 export const QueryOutput = z.object({
@@ -248,6 +270,7 @@ export const QueryOutput = z.object({
   providerMetadata: QueryProviderMetadata.optional(),
   runContext: QgridRunContext.optional(),
 });
+
 export type QueryOutput = z.infer<typeof QueryOutput>;
 
 // ─── Stream Events ───
@@ -286,13 +309,16 @@ export const StreamEvents = z.object({
   }),
   error: z.object({ message: z.string() }),
 });
+
 export type StreamEvents = z.infer<typeof StreamEvents>;
 
 // --- Grok media and voice ---
 
 const MiB = 1024 * 1024;
+
 // Fastify bodyLimit for every JSON request; sonamu.config.ts reads it from here.
 export const REQUEST_BODY_LIMIT_BYTES = 10 * MiB;
+
 // Media rides inside that JSON body as base64 (4 chars per 3 bytes), so a 10 MiB body carries at
 // most 10 MiB x 3/4 = 7.5 MiB of decoded bytes; 0.5 MiB is left for the prompt, options and JSON
 // framing. The same budget bounds the audio clip, each inline image, and the sum of a request's
@@ -306,16 +332,20 @@ const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 
 function base64DecodedBytes(data: string): number {
   const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+
   return Math.floor((data.length * 3) / 4) - padding;
 }
 
 /** Decoded bytes of the inline (data URL) images among `refs`; https URLs cost nothing here. */
 function inlineImageBytes(refs: ReadonlyArray<string | undefined>): number {
   let total = 0;
+
   for (const ref of refs) {
     const match = ref === undefined ? null : IMAGE_DATA_URL.exec(ref);
+
     if (match) total += base64DecodedBytes(match[2]!);
   }
+
   return total;
 }
 
@@ -337,6 +367,7 @@ export const MediaImageRef = z
   .superRefine((value, ctx) => {
     if (value.startsWith("data:")) {
       const match = IMAGE_DATA_URL.exec(value);
+
       if (!match || match[2]!.length % 4 !== 0) {
         ctx.addIssue({
           code: "custom",
@@ -348,8 +379,10 @@ export const MediaImageRef = z
           message: `image data URL exceeds ${MEDIA_MAX_INLINE_LABEL}`,
         });
       }
+
       return;
     }
+
     if (!isHttpsUrl(value)) {
       ctx.addIssue({ code: "custom", message: "image URLs must use https or a data URL" });
     }
@@ -382,9 +415,11 @@ export const GenerateImagesInput = z
     message: INLINE_IMAGES_TOTAL_MESSAGE,
     path: ["referenceImages"],
   });
+
 export type GenerateImagesInput = z.infer<typeof GenerateImagesInput>;
 
 export const MediaCostSource = z.enum(["provider", "pricing_table"]);
+
 export type MediaCostSource = z.infer<typeof MediaCostSource>;
 
 export const GenerateImagesOutput = z.object({
@@ -406,6 +441,7 @@ export const GenerateImagesOutput = z.object({
   costUsd: z.number().optional(),
   costSource: MediaCostSource.optional(),
 });
+
 export type GenerateImagesOutput = z.infer<typeof GenerateImagesOutput>;
 
 export const VideoStartInput = z
@@ -433,6 +469,7 @@ export const VideoStartInput = z
       MEDIA_MAX_INLINE_BYTES,
     { message: INLINE_IMAGES_TOTAL_MESSAGE, path: ["referenceImages"] },
   );
+
 export type VideoStartInput = z.infer<typeof VideoStartInput>;
 
 export const VideoStartOutput = z.object({
@@ -441,12 +478,14 @@ export const VideoStartOutput = z.object({
   model: z.string(),
   requestLogId: z.number().optional(),
 });
+
 export type VideoStartOutput = z.infer<typeof VideoStartOutput>;
 
 export const VideoStatusInput = z.object({
   jobHandle: z.string().regex(/^[A-Za-z0-9_-]{22}$/),
   projectName: z.string().optional(),
 });
+
 export type VideoStatusInput = z.infer<typeof VideoStatusInput>;
 
 export const VideoStatusOutput = z.object({
@@ -460,6 +499,7 @@ export const VideoStatusOutput = z.object({
   error: z.string().optional(),
   requestLogId: z.number().optional(),
 });
+
 export type VideoStatusOutput = z.infer<typeof VideoStatusOutput>;
 
 export const TranscribeInput = z.object({
@@ -477,6 +517,7 @@ export const TranscribeInput = z.object({
   language: z.string().min(1).max(16).optional(),
   ...MediaCallOptions,
 });
+
 export type TranscribeInput = z.infer<typeof TranscribeInput>;
 
 export const TranscribeOutput = z.object({
@@ -487,6 +528,7 @@ export const TranscribeOutput = z.object({
   tokenName: z.string(),
   requestLogId: z.number().optional(),
 });
+
 export type TranscribeOutput = z.infer<typeof TranscribeOutput>;
 
 export const SpeakInput = z.object({
@@ -497,6 +539,7 @@ export const SpeakInput = z.object({
   format: z.enum(["mp3", "wav", "pcm", "mulaw", "alaw"]).optional(),
   ...MediaCallOptions,
 });
+
 export type SpeakInput = z.infer<typeof SpeakInput>;
 
 export const SpeakOutput = z.object({
@@ -506,6 +549,7 @@ export const SpeakOutput = z.object({
   tokenName: z.string(),
   requestLogId: z.number().optional(),
 });
+
 export type SpeakOutput = z.infer<typeof SpeakOutput>;
 
 // ─── Run Lifecycle ───
@@ -520,6 +564,7 @@ export const CreateRunInput = z.object({
   isStructured: z.boolean().optional(),
   jsonSchema: z.string().nullable().optional(),
 });
+
 export type CreateRunInput = z.infer<typeof CreateRunInput>;
 
 export const AppendStepInput = z.object({
@@ -550,6 +595,7 @@ export const AppendStepInput = z.object({
   toolDurationMs: z.number().optional(),
   error: z.string().optional(),
 });
+
 export type AppendStepInput = z.infer<typeof AppendStepInput>;
 
 export const FinishRunInput = z.object({
@@ -573,6 +619,7 @@ export const FinishRunInput = z.object({
   errorMessage: z.string().optional(),
   responseJsonOk: z.boolean().optional(),
 });
+
 export type FinishRunInput = z.infer<typeof FinishRunInput>;
 
 // ─── Token Management ───
@@ -583,6 +630,7 @@ export const TokenStats = z.object({
   provider: z.string(),
   requests: z.number(),
 });
+
 export type TokenStats = z.infer<typeof TokenStats>;
 
 // ─── OAuth ───
@@ -593,6 +641,7 @@ export const OAuthStartResult = z.object({
   // OpenAI 원격 경로는 등록된 loopback callback URL 전체를 붙여넣는 code 모드를 쓴다.
   mode: z.enum(["redirect", "code"]),
 });
+
 export type OAuthStartResult = z.infer<typeof OAuthStartResult>;
 
 // Grok device-code login (RFC 8628). The web shows userCode/verificationUri and polls
@@ -605,6 +654,7 @@ export const GrokDeviceCodeStart = z.object({
   expiresIn: z.number(),
   interval: z.number(),
 });
+
 export type GrokDeviceCodeStart = z.infer<typeof GrokDeviceCodeStart>;
 
 export const GrokDevicePollResult = z.object({
@@ -613,6 +663,7 @@ export const GrokDevicePollResult = z.object({
   // Seconds to wait before the next poll; grows on slow_down.
   intervalSec: z.number().optional(),
 });
+
 export type GrokDevicePollResult = z.infer<typeof GrokDevicePollResult>;
 
 const RateWindow = z
@@ -638,6 +689,7 @@ export const UsageResponse = z.object({
   // Grok: token-window keepalive does not apply; the UI says so.
   keepaliveApplicable: z.boolean().optional(),
 });
+
 export type UsageResponse = z.infer<typeof UsageResponse>;
 
 // ─── Health ───
@@ -648,9 +700,11 @@ export const SubscriberStatus = z.object({
   lastReconcileAt: z.date().nullable(),
   attempt: z.number(),
 });
+
 export type SubscriberStatus = z.infer<typeof SubscriberStatus>;
 
 export const ProviderStartupState = z.enum(["starting", "ready", "failed"]);
+
 export type ProviderStartupState = z.infer<typeof ProviderStartupState>;
 
 export const HealthResponse = z.object({
@@ -666,6 +720,7 @@ export const HealthResponse = z.object({
     grok: ProviderStartupState.optional(),
   }),
 });
+
 export type HealthResponse = z.infer<typeof HealthResponse>;
 
 // ─── Errors ───
@@ -673,12 +728,15 @@ export type HealthResponse = z.infer<typeof HealthResponse>;
 export class QuotaError extends Error {
   readonly code = "QUOTA_EXHAUSTED" as const;
 }
+
 export class QuotaThresholdExceededError extends Error {
   readonly code = "QUOTA_THRESHOLD_EXCEEDED" as const;
 }
+
 export class TimeoutError extends Error {
   readonly code = "TIMEOUT" as const;
 }
+
 export class ProcessError extends Error {
   readonly code = "PROCESS_ERROR" as const;
 }

@@ -8,10 +8,12 @@ export function resolveOpenAITransportKind(
   env: Record<string, string | undefined> = process.env,
 ): OpenAITransportKind {
   const transport = env.QGRID_OPENAI_TRANSPORT ?? "websocket";
+
   if (transport !== "https" && transport !== "websocket") {
     throw new Error(
       `Invalid QGRID_OPENAI_TRANSPORT value: ${transport}. Expected https or websocket.`,
     );
   }
+
   return transport;
 }

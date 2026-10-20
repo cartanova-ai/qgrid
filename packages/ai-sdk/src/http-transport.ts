@@ -1,4 +1,5 @@
 import { Agent, type Dispatcher } from "undici";
+import { z } from "zod";
 
 import { type QgridSupportedModel } from "./index.types";
 
@@ -7,13 +8,16 @@ const TRANSPORT_RESPONSE_GRACE_MS = 60_000;
 
 type TransportOperation = "query";
 
-type ErrorLike = {
-  cause?: unknown;
-  code?: unknown;
-  errors?: unknown;
-  message?: unknown;
-  name?: unknown;
-};
+// Error-chain fields read from a thrown value. Node, undici, and AggregateError attach them as own
+// properties; any non-null object is a link, and each field is decoded where it is used.
+const errorChainLinkSchema = z.looseObject({
+  cause: z.unknown().optional(),
+  code: z.unknown().optional(),
+  errors: z.unknown().optional(),
+  message: z.unknown().optional(),
+});
+
+const nestedErrorsSchema = z.array(z.unknown());
 
 export type QgridRequestInit = RequestInit & {
   dispatcher?: Dispatcher;
@@ -30,14 +34,17 @@ export type QgridTransportErrorContext = {
   transportTimeoutMs?: number;
 };
 
-export function anthropicTransportOptions(timeoutMs?: number): {
+export interface AnthropicTransportOptions {
   headersTimeout: number;
   bodyTimeout: number;
-} {
+}
+
+export function anthropicTransportOptions(timeoutMs?: number): AnthropicTransportOptions {
   const providerTimeoutMs =
     Number.isFinite(timeoutMs) && timeoutMs !== undefined && timeoutMs > 0
       ? timeoutMs
       : DEFAULT_ANTHROPIC_TIMEOUT_MS;
+
   const transportTimeoutMs = providerTimeoutMs + TRANSPORT_RESPONSE_GRACE_MS;
 
   return {
@@ -53,6 +60,7 @@ export function createQgridRequestTransport(
   if (!modelId.startsWith("anthropic/")) return undefined;
 
   const options = anthropicTransportOptions(timeoutMs);
+
   return {
     dispatcher: new Agent(options),
     timeoutMs: options.headersTimeout,
@@ -78,36 +86,39 @@ export async function qgridFetch(
   }
 }
 
-export function toQgridTransportError(error: unknown, context: QgridTransportErrorContext): Error {
-  if (isAbortError(error)) return error;
+export function toQgridTransportError(cause: unknown, context: QgridTransportErrorContext): Error {
+  if (isAbortError(cause)) return cause;
 
-  const code = findErrorCode(error);
+  const code = findErrorCode(cause);
   const prefix = `qgrid ${context.operation} transport failed`;
 
   if (code === "UND_ERR_HEADERS_TIMEOUT") {
     const budget = context.transportTimeoutMs ? ` after ${context.transportTimeoutMs}ms` : "";
+
     return new Error(`${prefix}: response headers timed out${budget} (${code})`, {
-      cause: error,
+      cause,
     });
   }
 
   if (code === "UND_ERR_BODY_TIMEOUT") {
     const budget = context.transportTimeoutMs ? ` after ${context.transportTimeoutMs}ms` : "";
+
     return new Error(`${prefix}: response body timed out${budget} (${code})`, {
-      cause: error,
+      cause,
     });
   }
 
   if (code === "ECONNREFUSED") {
     return new Error(
       `${prefix}: connection refused by ${serverOrigin(context.serverUrl)} (${code})`,
-      { cause: error },
+      { cause },
     );
   }
 
-  const detail = findDeepestMessage(error) ?? "unknown network error";
+  const detail = findDeepestMessage(cause) ?? "unknown network error";
+
   return new Error(`${prefix}: ${detail}${code ? ` (${code})` : ""}`, {
-    cause: error,
+    cause,
   });
 }
 
@@ -115,18 +126,24 @@ function isAbortError(error: unknown): error is Error {
   return error instanceof Error && error.name === "AbortError";
 }
 
-function findErrorCode(error: unknown, seen = new Set<unknown>()): string | undefined {
-  if (!isErrorLike(error) || seen.has(error)) return undefined;
-  seen.add(error);
+function findErrorCode(cause: unknown, seen = new Set<unknown>()): string | undefined {
+  const link = errorChainLinkSchema.safeParse(cause);
 
-  if (typeof error.code === "string") return error.code;
+  if (!link.success || seen.has(cause)) return undefined;
+  seen.add(cause);
+  const code = z.string().safeParse(link.data.code);
 
-  const causeCode = findErrorCode(error.cause, seen);
+  if (code.success) return code.data;
+
+  const causeCode = findErrorCode(link.data.cause, seen);
+
   if (causeCode) return causeCode;
+  const nested = nestedErrorsSchema.safeParse(link.data.errors);
 
-  if (Array.isArray(error.errors)) {
-    for (const nested of error.errors) {
-      const nestedCode = findErrorCode(nested, seen);
+  if (nested.success) {
+    for (const nestedError of nested.data) {
+      const nestedCode = findErrorCode(nestedError, seen);
+
       if (nestedCode) return nestedCode;
     }
   }
@@ -134,25 +151,26 @@ function findErrorCode(error: unknown, seen = new Set<unknown>()): string | unde
   return undefined;
 }
 
-function findDeepestMessage(error: unknown, seen = new Set<unknown>()): string | undefined {
-  if (!isErrorLike(error) || seen.has(error)) return undefined;
-  seen.add(error);
+function findDeepestMessage(cause: unknown, seen = new Set<unknown>()): string | undefined {
+  const link = errorChainLinkSchema.safeParse(cause);
 
-  const causeMessage = findDeepestMessage(error.cause, seen);
+  if (!link.success || seen.has(cause)) return undefined;
+  seen.add(cause);
+
+  const causeMessage = findDeepestMessage(link.data.cause, seen);
+
   if (causeMessage) return causeMessage;
+  const nested = nestedErrorsSchema.safeParse(link.data.errors);
 
-  if (Array.isArray(error.errors)) {
-    for (const nested of error.errors) {
-      const nestedMessage = findDeepestMessage(nested, seen);
+  if (nested.success) {
+    for (const nestedError of nested.data) {
+      const nestedMessage = findDeepestMessage(nestedError, seen);
+
       if (nestedMessage) return nestedMessage;
     }
   }
 
-  return typeof error.message === "string" && error.message.length > 0 ? error.message : undefined;
-}
-
-function isErrorLike(value: unknown): value is ErrorLike & object {
-  return typeof value === "object" && value !== null;
+  return z.string().min(1).safeParse(link.data.message).data;
 }
 
 function serverOrigin(serverUrl: string): string {

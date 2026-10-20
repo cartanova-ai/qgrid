@@ -1,6 +1,7 @@
 import http from "node:http";
 
 import { getLogger } from "@logtape/logtape";
+import { z } from "zod";
 
 const logger = getLogger(["qgrid", "oauth"]);
 
@@ -30,19 +31,24 @@ let relay: Relay | null = null;
 function forward(request: http.IncomingMessage, response: http.ServerResponse): void {
   const current = relay;
   const incoming = new URL(request.url ?? "/", "http://localhost");
+
   if (!current || incoming.pathname !== OPENAI_CALLBACK_PATH) {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("not found");
+
     return;
   }
 
   // Only the two OAuth result fields cross over, onto a fixed loopback base. The request never
   // contributes scheme, authority, or path bytes to the redirect target.
   const target = new URL(OPENAI_CALLBACK_PATH, current.dashboardBase);
+
   for (const field of ["code", "state"] as const) {
     const value = incoming.searchParams.get(field);
+
     if (value) target.searchParams.set(field, value);
   }
+
   response.writeHead(302, { Location: target.toString(), "Cache-Control": "no-store" });
   response.end();
 }
@@ -52,6 +58,7 @@ function listenOn(port: number): Promise<http.Server | null> {
     const server = http.createServer(forward);
     server.once("error", (error: NodeJS.ErrnoException) => {
       server.close();
+
       if (error.code === "EADDRINUSE" || error.code === "EACCES") resolve(null);
       else reject(error);
     });
@@ -73,17 +80,20 @@ export async function startOpenAICallbackRelay(
   if (relay) {
     relay.dashboardBase = dashboardBase;
     relay.expiryTimer.refresh();
+
     return relay.redirectUri;
   }
 
   for (const port of ports) {
     const server = await listenOn(port);
+
     if (!server) continue;
 
     const expiryTimer = setTimeout(() => stopOpenAICallbackRelay(), ttlMs);
     expiryTimer.unref();
     const address = server.address();
-    const boundPort = typeof address === "object" && address ? address.port : port;
+    // server.address() is an AddressInfo for TCP listeners, a string for pipes, or null.
+    const boundPort = z.looseObject({ port: z.number() }).safeParse(address).data?.port ?? port;
     relay = {
       server,
       redirectUri: openAICallbackRedirectUri(boundPort),
@@ -91,6 +101,7 @@ export async function startOpenAICallbackRelay(
       expiryTimer,
     };
     logger.info(`openai oauth callback relay listening on 127.0.0.1:${boundPort}`);
+
     return relay.redirectUri;
   }
 

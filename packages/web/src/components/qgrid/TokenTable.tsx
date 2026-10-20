@@ -13,25 +13,35 @@ type Token = TokenSubsetMapping["A"];
 
 function getExpiresAt(token: Token): number | null {
   const c = token.credentials;
-  if ("expiresAt" in c && typeof c.expiresAt === "number") return c.expiresAt;
-  if ("accessTokenExpiresAt" in c && typeof c.accessTokenExpiresAt === "number")
-    return c.accessTokenExpiresAt;
+
+  if ("accessTokenExpiresAt" in c) return c.accessTokenExpiresAt;
+
   // Grok stores an ISO-8601 timestamp.
-  if ("expiresAt" in c && typeof c.expiresAt === "string") {
+  if ("authMode" in c) {
     const ms = Date.parse(c.expiresAt);
+
     return Number.isNaN(ms) ? null : ms;
   }
-  return null;
+
+  return c.expiresAt;
 }
 
-function formatExpiry(expiresAt: number | null): { text: string; color: string } {
+interface ExpiryLabel {
+  text: string;
+  color: string;
+}
+
+function formatExpiry(expiresAt: number | null): ExpiryLabel {
   if (!expiresAt) return { text: "", color: "" };
   const diff = expiresAt - Date.now();
+
   if (diff <= 0) return { text: "expired", color: "text-red-500" };
   const h = Math.floor(diff / 3_600_000);
   const m = Math.floor((diff % 3_600_000) / 60_000);
   const text = h > 0 ? `${h}h ${m}m` : `${m}m`;
+
   if (diff < 3_600_000) return { text, color: "text-amber-500" };
+
   return { text, color: "text-sand-400" };
 }
 
@@ -135,6 +145,7 @@ export function TokenTable({ data, isLoading }: TokenTableProps) {
             <tbody className="divide-y divide-sand-100/80">
               {tokens.map((token) => {
                 const expiry = formatExpiry(getExpiresAt(token));
+
                 return (
                   <tr
                     key={token.id}

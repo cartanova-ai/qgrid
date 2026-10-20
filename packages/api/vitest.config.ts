@@ -1,31 +1,32 @@
-import { defineConfig, type ViteUserConfig } from "vitest/config";
+import { defineConfig } from "vitest/config";
 
 import { PrioritySequencer } from "./custom-sequencer";
 import { configureTestRunDatabaseName } from "./src/testing/test-database-name";
 import { databaseTests } from "./vitest.unit.config";
 
-type VitestTestConfig = NonNullable<ViteUserConfig["test"]>;
+// Typed by the declaration files that ship beside the exact modules loaded below.
+type SonamuVitestHelpersModule =
+  typeof import("./node_modules/sonamu/dist/testing/vitest-helpers.js");
 
-type SonamuVitestHelpersModule = {
-  getSonamuTestConfig: (options: VitestTestConfig) => Promise<VitestTestConfig>;
-};
-
-type SonamuReporterModule = {
-  NaiteVitestReporter: NonNullable<VitestTestConfig["reporters"]>[number];
-};
+type SonamuReporterModule =
+  typeof import("./node_modules/sonamu/dist/testing/naite-vitest-reporter.js");
 
 async function loadSonamuTestingModules() {
   const helpersUrl = new URL(
     "./node_modules/sonamu/dist/testing/vitest-helpers.js",
     import.meta.url,
   );
+
   const reporterUrl = new URL(
     "./node_modules/sonamu/dist/testing/naite-vitest-reporter.js",
     import.meta.url,
   );
 
   const [{ getSonamuTestConfig }, { NaiteVitestReporter }] = await Promise.all([
+    // SAFETY: each URL loads the module whose own .d.ts defines the asserted type above. Loading by
+    // URL keeps Vite from bundling Sonamu's testing runtime into this config.
     import(helpersUrl.href) as Promise<SonamuVitestHelpersModule>,
+    // SAFETY: same invariant as the line above, for the reporter module.
     import(reporterUrl.href) as Promise<SonamuReporterModule>,
   ]);
 
@@ -43,7 +44,6 @@ export default defineConfig(async () => {
       exclude: ["src/**/*.test-hold.ts", "**/node_modules/**", "**/.yarn/**", "**/dist/**"],
       globals: true,
       globalSetup: ["./src/testing/global.ts"],
-      setupFiles: ["./src/testing/setup-mocks.ts"],
       sequence: {
         sequencer: PrioritySequencer,
       },

@@ -1,13 +1,18 @@
-import { type ImageModelV3, type ImageModelV3File, type SharedV3Warning } from "@ai-sdk/provider";
+import {
+  type ImageModelV3,
+  type ImageModelV3File,
+  type JSONObject,
+  type JSONValue,
+  type SharedV3Warning,
+} from "@ai-sdk/provider";
 import { z } from "zod";
 
 import { qgridFetch } from "./http-transport";
 import {
   type QgridImageModel,
   type QgridImageProviderConfig,
-  type QgridImageProviderOptions,
   type QgridInputPart,
-  type QueryOutput,
+  queryOutputSchema,
 } from "./index.types";
 import { DEFAULT_QGRID_SERVER_URL, QGRID_PROVIDER_NAME } from "./qgrid.constant";
 import { assertImageInputFitsJsonTransport, bytesToBase64 } from "./utils";
@@ -17,12 +22,16 @@ function imageInputUrl(file: ImageModelV3File): string {
     if (!/^https:\/\//i.test(file.url)) {
       throw new Error("qgrid.image: reference image URLs must use HTTPS");
     }
+
     return file.url;
   }
+
   if (!["image/png", "image/jpeg", "image/webp"].includes(file.mediaType)) {
     throw new Error("qgrid.image: reference images must be PNG, JPEG, or WebP");
   }
-  const data = typeof file.data === "string" ? file.data : bytesToBase64(file.data);
+
+  const data = file.data instanceof Uint8Array ? bytesToBase64(file.data) : file.data;
+
   return `data:${file.mediaType};base64,${data}`;
 }
 
@@ -64,6 +73,7 @@ export const QGRID_MAX_INLINE_MEDIA_BYTES = 7 * 1024 * 1024;
 
 function base64DecodedBytes(data: string): number {
   const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+
   return Math.floor((data.length * 3) / 4) - padding;
 }
 
@@ -73,11 +83,13 @@ function base64DecodedBytes(data: string): number {
  */
 export function assertInlineMediaFits(items: Array<string | undefined>, label: string): void {
   let total = 0;
+
   for (const item of items) {
     if (item === undefined || /^https:\/\//i.test(item)) continue;
     const comma = item.startsWith("data:") ? item.indexOf(",") : -1;
     total += base64DecodedBytes(comma >= 0 ? item.slice(comma + 1) : item);
   }
+
   if (total > QGRID_MAX_INLINE_MEDIA_BYTES) {
     throw new Error(
       `${label}: inline media is ${formatMiB(total)}, above the qgrid server limit of ${formatMiB(QGRID_MAX_INLINE_MEDIA_BYTES)} per request; compress it or pass an https URL where supported.`,
@@ -89,30 +101,33 @@ export function assertInlineMediaFits(items: Array<string | undefined>, label: s
  * Serializes a Sonamu `params` body and rejects it before transport when it would exceed the
  * server body limit, so callers get a clear error instead of an opaque 413.
  */
-export function serializeMediaBody(params: Record<string, unknown>, label: string): string {
+export function serializeMediaBody(params: JSONObject, label: string): string {
   const body = JSON.stringify({ params });
   const bytes = new TextEncoder().encode(body).byteLength;
+
   if (bytes > QGRID_MAX_REQUEST_BODY_BYTES) {
     throw new Error(
       `${label}: request body is ${formatMiB(bytes)}, above the qgrid server limit of ${formatMiB(QGRID_MAX_REQUEST_BODY_BYTES)}; compress inline media or pass an https URL where supported.`,
     );
   }
+
   return body;
 }
 
 const ERROR_BODY_PREVIEW_CHARS = 2_000;
 
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
+function isAbortError(cause: unknown): boolean {
+  return cause instanceof Error && (cause.name === "AbortError" || cause.name === "TimeoutError");
 }
 
 /**
- * Rethrows `error` when it is an abort. When `signal` fired, its own reason is thrown so callers
+ * Rethrows `cause` when it is an abort. When `signal` fired, its own reason is thrown so callers
  * that compare reasons (the video poll deadline) can tell which abort it was.
  */
-function rethrowAbort(error: unknown, signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw signal.reason ?? error;
-  if (isAbortError(error)) throw error;
+function rethrowAbort(cause: unknown, signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw signal.reason ?? cause;
+
+  if (isAbortError(cause)) throw cause;
 }
 
 /** Non-2xx response from a qgrid media endpoint. */
@@ -139,18 +154,19 @@ export async function postMediaEndpoint<T>(args: {
   headers?: Record<string, string | undefined>;
 }): Promise<MediaPostResult<T>> {
   const headers = new Headers();
+
   for (const [key, value] of Object.entries(args.headers ?? {})) {
     if (value !== undefined) headers.set(key, value);
   }
+
   headers.set("Content-Type", "application/json");
+  const init: RequestInit = { method: "POST", headers, body: args.body };
+
+  if (args.signal) init.signal = args.signal;
   let response: Response;
+
   try {
-    response = await fetch(`${args.serverUrl}/api/qgrid/${args.endpoint}`, {
-      method: "POST",
-      headers,
-      body: args.body,
-      ...(args.signal ? { signal: args.signal } : {}),
-    });
+    response = await fetch(`${args.serverUrl}/api/qgrid/${args.endpoint}`, init);
   } catch (error) {
     rethrowAbort(error, args.signal);
     const detail = error instanceof Error ? error.message : String(error);
@@ -158,33 +174,42 @@ export async function postMediaEndpoint<T>(args: {
       cause: error,
     });
   }
+
   if (!response.ok) {
-    const text = await response.text().catch((error: unknown) => {
-      rethrowAbort(error, args.signal);
+    const text = await response.text().catch((cause: unknown) => {
+      rethrowAbort(cause, args.signal);
+
       return "";
     });
+
     if (response.status === 413) {
       throw new QgridMediaHttpError(
         `${args.label}: the qgrid server rejected the request as too large (413); inline media is limited to ${formatMiB(QGRID_MAX_INLINE_MEDIA_BYTES)} decoded per request. ${text.slice(0, ERROR_BODY_PREVIEW_CHARS)}`,
         413,
       );
     }
+
     throw new QgridMediaHttpError(
       `qgrid ${args.endpoint} ${response.status}: ${text.slice(0, ERROR_BODY_PREVIEW_CHARS)}`,
       response.status,
     );
   }
+
   // Only a body that is not JSON becomes the schema error below; an abort mid-body propagates.
-  const json: unknown = await response.json().catch((error: unknown) => {
-    rethrowAbort(error, args.signal);
+  const json: unknown = await response.json().catch((cause: unknown) => {
+    rethrowAbort(cause, args.signal);
+
     return undefined;
   });
+
   const parsed = args.schema.safeParse(json);
+
   if (!parsed.success) {
     throw new Error(
       `${args.label}: unexpected ${args.endpoint} response; update the qgrid server and SDK together (${formatIssues(parsed.error)})`,
     );
   }
+
   return { data: parsed.data, headers: Object.fromEntries(response.headers) };
 }
 
@@ -207,24 +232,42 @@ const grokQgridOptionsSchema = z.object({
 /** `providerOptions.qgrid` accepted by every Grok media model. */
 export type QgridGrokMediaProviderOptions = z.infer<typeof grokQgridOptionsSchema>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+/** Any non-null, non-array object; field validation happens in the option schemas. */
+const providerOptionsObjectSchema = z.looseObject({});
+
+export interface GrokQgridRequestOptions {
+  tokenName?: string;
+  logger?: false;
 }
 
 export function parseGrokQgridOptions(
-  raw: unknown,
+  raw: JSONValue | undefined,
   label: string,
-): { tokenName?: string; logger?: false } {
+): GrokQgridRequestOptions {
   if (raw === undefined) return {};
-  if (!isRecord(raw)) throw new Error(`${label}: providerOptions.qgrid must be an object`);
+
+  if (!providerOptionsObjectSchema.safeParse(raw).success) {
+    throw new Error(`${label}: providerOptions.qgrid must be an object`);
+  }
+
   const parsed = grokQgridOptionsSchema.safeParse(raw);
+
   if (!parsed.success) {
     throw new Error(`${label}: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
   }
-  return {
-    ...(parsed.data.tokenName === undefined ? {} : { tokenName: parsed.data.tokenName }),
-    ...(parsed.data.logger === false ? { logger: false as const } : {}),
-  };
+
+  const request: GrokQgridRequestOptions = {};
+
+  if (parsed.data.tokenName !== undefined) request.tokenName = parsed.data.tokenName;
+
+  if (parsed.data.logger === false) request.logger = false;
+
+  return request;
+}
+
+export interface ParsedXaiMediaOptions<T> {
+  options: T | undefined;
+  warnings: SharedV3Warning[];
 }
 
 /**
@@ -232,19 +275,24 @@ export function parseGrokQgridOptions(
  * `honored`. Malformed values throw; documented-but-unsupported keys become warnings.
  */
 export function parseXaiMediaOptions<T>(
-  raw: unknown,
+  raw: JSONValue | undefined,
   schema: z.ZodType<T>,
   honored: ReadonlySet<string>,
   label: string,
-): { options: T | undefined; warnings: SharedV3Warning[] } {
+): ParsedXaiMediaOptions<T> {
   if (raw === undefined) return { options: undefined, warnings: [] };
-  if (!isRecord(raw)) throw new Error(`${label}: providerOptions.xai must be an object`);
+  const record = providerOptionsObjectSchema.safeParse(raw);
+
+  if (!record.success) throw new Error(`${label}: providerOptions.xai must be an object`);
   const parsed = schema.safeParse(raw);
+
   if (!parsed.success) {
     throw new Error(`${label}: invalid providerOptions.xai: ${formatIssues(parsed.error)}`);
   }
+
   const warnings: SharedV3Warning[] = [];
-  for (const [key, value] of Object.entries(raw)) {
+
+  for (const [key, value] of Object.entries(record.data)) {
     if (value === undefined || value === null || honored.has(key)) continue;
     warnings.push({
       type: "unsupported",
@@ -252,6 +300,7 @@ export function parseXaiMediaOptions<T>(
       details: `qgrid does not support providerOptions.xai.${key} for this model; it was ignored.`,
     });
   }
+
   return { options: parsed.data, warnings };
 }
 
@@ -265,30 +314,63 @@ type MediaFile =
 export function toImageRef(file: MediaFile, label: string): string {
   if (file.type === "url") return toImageRefUrl(file.url, label);
   const mediaType = file.mediaType.toLowerCase();
+
   if (!IMAGE_REF_MEDIA_TYPES.includes(mediaType)) {
     throw new Error(`${label}: reference images must be PNG, JPEG, or WebP`);
   }
-  const data = typeof file.data === "string" ? file.data : bytesToBase64(file.data);
+
+  const data = file.data instanceof Uint8Array ? bytesToBase64(file.data) : file.data;
+
   return `data:${mediaType};base64,${data}`;
 }
 
 /** Accepts an https URL or a base64 PNG/JPEG/WebP data URL string. */
 export function toImageRefUrl(url: string, label: string): string {
   if (/^https:\/\//i.test(url)) return url;
+
   if (/^data:image\/(png|jpeg|webp);base64,/i.test(url)) return url;
   throw new Error(`${label}: image references must be https URLs or PNG/JPEG/WebP data URLs`);
 }
 
 // --- Image models ---
 
+const OPENAI_IMAGE_TOKEN_NAME_MESSAGE =
+  "tokenName must be a non-empty OpenAI token name with the openai/ prefix";
+
+/** `providerOptions.qgrid` for `qgrid.image("openai/gpt-image-2")`; issues keep this field order. */
+const openAIImageQgridOptionsSchema = z.object({
+  tokenName: z
+    .string({ message: OPENAI_IMAGE_TOKEN_NAME_MESSAGE })
+    .refine((value) => /^openai\/.+/.test(value.trim()), {
+      message: OPENAI_IMAGE_TOKEN_NAME_MESSAGE,
+    })
+    .optional(),
+  logger: z.boolean({ message: "logger must be a boolean" }).optional(),
+  outputFormat: z
+    .literal("png", { message: "the subscription Images endpoint supports PNG output only" })
+    .optional(),
+  quality: z
+    .enum(["low", "medium", "high"], { message: "quality must be low, medium, or high" })
+    .optional(),
+  background: z
+    .enum(["auto", "opaque", "transparent"], {
+      message: "background must be auto, opaque, or transparent",
+    })
+    .optional(),
+});
+
+type ImageGenerateResult = Awaited<ReturnType<ImageModelV3["doGenerate"]>>;
+
 export function createQgridImage(
   modelId: QgridImageModel,
   config?: QgridImageProviderConfig,
 ): ImageModelV3 {
   if (modelId.startsWith("grok/")) return createGrokImage(modelId, config);
+
   if (modelId !== "openai/gpt-image-2") {
     throw new Error(`qgrid.image: unsupported image model ${modelId}`);
   }
+
   const serverUrl = config?.serverUrl ?? process.env.QGRID_URL ?? DEFAULT_QGRID_SERVER_URL;
   const projectName = config?.projectName ?? process.env.QGRID_PROJECT_NAME;
 
@@ -302,56 +384,45 @@ export function createQgridImage(
       if (options.mask !== undefined) {
         throw new Error("qgrid.image: masks are not supported by the subscription Images endpoint");
       }
+
       if (options.n !== 1) {
         throw new Error(
           "qgrid.image: only one image per call is supported; omit maxImagesPerCall so AI SDK can batch n images",
         );
       }
+
       if (!options.prompt?.trim()) {
         throw new Error("qgrid.image: a non-empty text prompt is required");
       }
+
       if ((options.files?.length ?? 0) > 5) {
         throw new Error("qgrid.image: at most five reference images are supported");
       }
-      const qgridOptions = (options.providerOptions.qgrid ?? {}) as QgridImageProviderOptions;
-      if (
-        qgridOptions.tokenName !== undefined &&
-        (typeof qgridOptions.tokenName !== "string" ||
-          !/^openai\/.+/.test(qgridOptions.tokenName.trim()))
-      ) {
-        throw new Error(
-          "qgrid.image: tokenName must be a non-empty OpenAI token name with the openai/ prefix",
-        );
+
+      const parsedQgridOptions = openAIImageQgridOptionsSchema.safeParse(
+        options.providerOptions.qgrid ?? {},
+      );
+
+      if (!parsedQgridOptions.success) {
+        throw new Error(`qgrid.image: ${parsedQgridOptions.error.issues[0]?.message}`);
       }
-      if (qgridOptions.logger !== undefined && typeof qgridOptions.logger !== "boolean") {
-        throw new Error("qgrid.image: logger must be a boolean");
-      }
-      if (qgridOptions.outputFormat !== undefined && qgridOptions.outputFormat !== "png") {
-        throw new Error("qgrid.image: the subscription Images endpoint supports PNG output only");
-      }
-      if (
-        qgridOptions.quality !== undefined &&
-        !["low", "medium", "high"].includes(qgridOptions.quality)
-      ) {
-        throw new Error("qgrid.image: quality must be low, medium, or high");
-      }
-      if (
-        qgridOptions.background !== undefined &&
-        !["auto", "opaque", "transparent"].includes(qgridOptions.background)
-      ) {
-        throw new Error("qgrid.image: background must be auto, opaque, or transparent");
-      }
+
+      const qgridOptions = parsedQgridOptions.data;
+
       if (options.size !== undefined && !/^[1-9]\d*x[1-9]\d*$/.test(options.size)) {
         throw new Error("qgrid.image: size must be positive integer WIDTHxHEIGHT");
       }
 
       const imageUrls = (options.files ?? []).map(imageInputUrl);
       assertImageInputFitsJsonTransport(imageUrls);
+
       const input: QgridInputPart[] = [
         { type: "text", text: options.prompt, text_elements: [] },
         ...imageUrls.map((url) => ({ type: "image" as const, url })),
       ];
+
       const warnings: Awaited<ReturnType<ImageModelV3["doGenerate"]>>["warnings"] = [];
+
       for (const feature of ["seed", "aspectRatio"] as const) {
         if (options[feature] !== undefined) {
           warnings.push({
@@ -362,6 +433,7 @@ export function createQgridImage(
           });
         }
       }
+
       for (const feature of [
         ...(options.size === undefined ? [] : ["size"]),
         ...(qgridOptions.quality === undefined ? [] : ["providerOptions.qgrid.quality"]),
@@ -376,85 +448,97 @@ export function createQgridImage(
 
       const timestamp = new Date();
       const headers = new Headers();
+
       for (const [key, value] of Object.entries(options.headers ?? {})) {
         if (value !== undefined) headers.set(key, value);
       }
+
       headers.set("Content-Type", "application/json");
+
+      const imageGenerationOptions: JSONObject = {};
+
+      if (options.size !== undefined) imageGenerationOptions.size = options.size;
+
+      if (qgridOptions.quality !== undefined) imageGenerationOptions.quality = qgridOptions.quality;
+
+      if (qgridOptions.background !== undefined) {
+        imageGenerationOptions.background = qgridOptions.background;
+      }
+
+      if (qgridOptions.outputFormat !== undefined) {
+        imageGenerationOptions.outputFormat = qgridOptions.outputFormat;
+      }
+
+      const args: JSONObject = {
+        prompt: options.prompt,
+        model: modelId,
+        imageGeneration: true,
+        imageGenerationOptions,
+      };
+
+      if (imageUrls.length) args.input = input;
+
+      if (projectName) args.projectName = projectName;
+
+      if (qgridOptions.tokenName !== undefined) args.tokenName = qgridOptions.tokenName;
+
+      if (qgridOptions.logger === false) args.logger = false;
+
       const response = await qgridFetch(
         `${serverUrl}/api/qgrid/query`,
         {
           method: "POST",
           headers,
           signal: options.abortSignal,
-          body: JSON.stringify({
-            args: {
-              prompt: options.prompt,
-              model: modelId,
-              imageGeneration: true,
-              imageGenerationOptions: {
-                ...(options.size === undefined ? {} : { size: options.size }),
-                ...(qgridOptions.quality === undefined ? {} : { quality: qgridOptions.quality }),
-                ...(qgridOptions.background === undefined
-                  ? {}
-                  : { background: qgridOptions.background }),
-                ...(qgridOptions.outputFormat === undefined
-                  ? {}
-                  : { outputFormat: qgridOptions.outputFormat }),
-              },
-              ...(imageUrls.length ? { input } : {}),
-              ...(projectName ? { projectName } : {}),
-              ...(qgridOptions.tokenName === undefined
-                ? {}
-                : { tokenName: qgridOptions.tokenName }),
-              ...(qgridOptions.logger === false ? { logger: false } : {}),
-            },
-          }),
+          body: JSON.stringify({ args }),
         },
         { operation: "query", serverUrl },
       );
+
       if (!response.ok) {
         throw new Error(`qgrid ${response.status}: ${await response.text().catch(() => "")}`);
       }
-      const data = (await response.json()) as QueryOutput;
+
+      const data = queryOutputSchema.parse(await response.json());
       const images = data.content?.filter((item) => item.type === "image") ?? [];
       const image = images[0];
+
       if (images.length !== 1 || !image?.data || image.generation?.route !== "codex-images") {
         throw new Error(
           "qgrid.image: expected one image from the direct subscription Images route; update the qgrid server and SDK together",
         );
       }
+
       const usage = image.generation.usage;
-      return {
+      const imageMetadata: JSONObject = {};
+
+      if (data.requestLogId !== undefined) imageMetadata.requestLogId = data.requestLogId;
+      imageMetadata.generation = image.generation;
+
+      if (image.revisedPrompt !== null && image.revisedPrompt !== undefined) {
+        imageMetadata.revisedPrompt = image.revisedPrompt;
+      }
+
+      const result: ImageGenerateResult = {
         images: [image.data],
         warnings,
         response: {
           timestamp,
-          modelId: image.generation.model ?? data.model,
+          modelId: image.generation.model ?? data.model ?? modelId,
           headers: Object.fromEntries(response.headers),
         },
-        ...(usage
-          ? {
-              usage: {
-                inputTokens: usage.input_tokens,
-                outputTokens: usage.output_tokens,
-                totalTokens: usage.total_tokens,
-              },
-            }
-          : {}),
-        providerMetadata: {
-          qgrid: {
-            images: [
-              {
-                ...(data.requestLogId === undefined ? {} : { requestLogId: data.requestLogId }),
-                generation: image.generation,
-                ...(image.revisedPrompt !== null && image.revisedPrompt !== undefined
-                  ? { revisedPrompt: image.revisedPrompt }
-                  : {}),
-              },
-            ],
-          },
-        },
+        providerMetadata: { qgrid: { images: [imageMetadata] } },
       };
+
+      if (usage) {
+        result.usage = {
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+          totalTokens: usage.total_tokens,
+        };
+      }
+
+      return result;
     },
   };
 }
@@ -480,7 +564,7 @@ const XAI_IMAGE_HONORED = new Set(["aspect_ratio", "output_format", "resolution"
 const GROK_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 
 function isGrokOutputFormat(value: string): value is (typeof GROK_OUTPUT_FORMATS)[number] {
-  return (GROK_OUTPUT_FORMATS as readonly string[]).includes(value);
+  return GROK_OUTPUT_FORMATS.some((format) => format === value);
 }
 
 const generateImagesOutputSchema = z.object({
@@ -510,28 +594,36 @@ function createGrokImage(modelId: string, config?: QgridImageProviderConfig): Im
       if (!options.prompt?.trim()) {
         throw new Error(`${label}: a non-empty text prompt is required`);
       }
+
       if (!Number.isInteger(options.n) || options.n < 1 || options.n > GROK_MAX_IMAGES_PER_CALL) {
         throw new Error(
           `${label}: Grok returns 1 to ${GROK_MAX_IMAGES_PER_CALL} images per call; omit maxImagesPerCall so AI SDK can batch`,
         );
       }
+
       const files = options.files ?? [];
+
       if (files.length > 5) {
         throw new Error(`${label}: at most five reference images are supported`);
       }
+
       const qgridOptions = parseGrokQgridOptions(options.providerOptions.qgrid, label);
+
       const xai = parseXaiMediaOptions(
         options.providerOptions.xai,
         xaiImageOptionsSchema,
         XAI_IMAGE_HONORED,
         label,
       );
+
       const outputFormat = xai.options?.output_format;
+
       if (outputFormat !== undefined && !isGrokOutputFormat(outputFormat)) {
         throw new Error(`${label}: providerOptions.xai.output_format must be png, jpeg, or webp`);
       }
 
       const warnings: SharedV3Warning[] = [];
+
       if (options.size !== undefined) {
         warnings.push({
           type: "unsupported",
@@ -539,30 +631,33 @@ function createGrokImage(modelId: string, config?: QgridImageProviderConfig): Im
           details: "This model does not support the `size` option. Use `aspectRatio` instead.",
         });
       }
+
       if (options.seed !== undefined) warnings.push({ type: "unsupported", feature: "seed" });
+
       if (options.mask !== undefined) warnings.push({ type: "unsupported", feature: "mask" });
       warnings.push(...xai.warnings);
 
       const referenceImages = files.map((file) => toImageRef(file, label));
       assertInlineMediaFits(referenceImages, label);
       const aspectRatio = options.aspectRatio ?? xai.options?.aspect_ratio;
-      const body = serializeMediaBody(
-        {
-          model: modelId,
-          prompt: options.prompt,
-          n: options.n,
-          ...(aspectRatio === undefined ? {} : { aspectRatio }),
-          ...(xai.options?.resolution === undefined ? {} : { resolution: xai.options.resolution }),
-          ...(xai.options?.quality === undefined ? {} : { quality: xai.options.quality }),
-          ...(outputFormat === undefined ? {} : { outputFormat }),
-          ...(referenceImages.length ? { referenceImages } : {}),
-          ...(projectName ? { projectName } : {}),
-          ...qgridOptions,
-        },
-        label,
-      );
+
+      const params: JSONObject = { model: modelId, prompt: options.prompt, n: options.n };
+
+      if (aspectRatio !== undefined) params.aspectRatio = aspectRatio;
+
+      if (xai.options?.resolution !== undefined) params.resolution = xai.options.resolution;
+
+      if (xai.options?.quality !== undefined) params.quality = xai.options.quality;
+
+      if (outputFormat !== undefined) params.outputFormat = outputFormat;
+
+      if (referenceImages.length) params.referenceImages = referenceImages;
+
+      if (projectName) params.projectName = projectName;
+      const body = serializeMediaBody({ ...params, ...qgridOptions }, label);
 
       const timestamp = new Date();
+
       const { data, headers } = await postMediaEndpoint({
         serverUrl,
         endpoint: "generateImages",
@@ -572,39 +667,55 @@ function createGrokImage(modelId: string, config?: QgridImageProviderConfig): Im
         signal: options.abortSignal,
         headers: options.headers,
       });
+
       if (data.images.length === 0) {
         throw new Error(`${label}: the Grok backend returned no images`);
       }
+
       const costInUsdTicks = data.usage.costInUsdTicks;
+
       // generateImage() keeps only `providerMetadata.<provider>.images` when it merges batched
       // calls, so per-call cost and log ids also ride on the image entries (first image of the call).
-      const callCost = {
-        ...(data.costUsd === undefined ? {} : { costUsd: data.costUsd }),
-        ...(data.costSource === undefined ? {} : { costSource: data.costSource }),
-      };
+      const callCost: JSONObject = {};
+
+      if (data.costUsd !== undefined) callCost.costUsd = data.costUsd;
+
+      if (data.costSource !== undefined) callCost.costSource = data.costSource;
+
+      const xaiImages = data.images.map((image, index) => {
+        const entry: JSONObject = {};
+
+        if (image.revisedPrompt) entry.revisedPrompt = image.revisedPrompt;
+
+        if (index === 0 && costInUsdTicks !== undefined) entry.costInUsdTicks = costInUsdTicks;
+
+        return entry;
+      });
+
+      const xaiCallCost: JSONObject = {};
+
+      if (costInUsdTicks !== undefined) xaiCallCost.costInUsdTicks = costInUsdTicks;
+
+      const qgridImages = data.images.map((image, index) => {
+        const entry: JSONObject = { mediaType: image.mimeType, tokenName: data.tokenName };
+
+        if (data.requestLogId !== undefined) entry.requestLogId = data.requestLogId;
+
+        return index === 0 ? { ...entry, ...callCost } : entry;
+      });
+
+      const qgridCallInfo: JSONObject = {};
+
+      if (data.requestLogId !== undefined) qgridCallInfo.requestLogId = data.requestLogId;
+      qgridCallInfo.tokenName = data.tokenName;
+
       return {
         images: data.images.map((image) => image.b64),
         warnings,
         response: { timestamp, modelId: data.model, headers },
         providerMetadata: {
-          xai: {
-            images: data.images.map((image, index) => ({
-              ...(image.revisedPrompt ? { revisedPrompt: image.revisedPrompt } : {}),
-              ...(index === 0 && costInUsdTicks !== undefined ? { costInUsdTicks } : {}),
-            })),
-            ...(costInUsdTicks === undefined ? {} : { costInUsdTicks }),
-          },
-          qgrid: {
-            images: data.images.map((image, index) => ({
-              mediaType: image.mimeType,
-              tokenName: data.tokenName,
-              ...(data.requestLogId === undefined ? {} : { requestLogId: data.requestLogId }),
-              ...(index === 0 ? callCost : {}),
-            })),
-            ...(data.requestLogId === undefined ? {} : { requestLogId: data.requestLogId }),
-            tokenName: data.tokenName,
-            ...callCost,
-          },
+          xai: { images: xaiImages, ...xaiCallCost },
+          qgrid: { images: qgridImages, ...qgridCallInfo, ...callCost },
         },
       };
     },

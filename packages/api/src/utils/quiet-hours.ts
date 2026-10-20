@@ -35,10 +35,16 @@ const SEOUL_FORMATTER = new Intl.DateTimeFormat("en-US", {
   weekday: "short",
 });
 
-function seoulParts(at: Date): { hour: number; weekday: string } {
+interface SeoulTimeParts {
+  hour: number;
+  weekday: string;
+}
+
+function seoulParts(at: Date): SeoulTimeParts {
   const parts = SEOUL_FORMATTER.formatToParts(at);
   const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
   const weekday = parts.find((p) => p.type === "weekday")?.value ?? "";
+
   // Intl 은 자정을 24 로 줄 수 있다. 0..23 으로 맞춘다.
   return { hour: hour % 24, weekday };
 }
@@ -46,7 +52,9 @@ function seoulParts(at: Date): { hour: number; weekday: string } {
 /** 0..23 범위를 벗어나거나 숫자가 아니면 기본값으로 떨어진다. */
 function boundedHour(raw: string | undefined, fallback: number): number {
   const parsed = Number(raw);
+
   if (!Number.isInteger(parsed) || parsed < 0 || parsed > 23) return fallback;
+
   return parsed;
 }
 
@@ -60,6 +68,7 @@ export function isQuietHours(at: Date, readSetting: ReadSetting): boolean {
   const { hour, weekday } = seoulParts(at);
 
   const isWeekend = weekday === "Sat" || weekday === "Sun";
+
   if (isWeekend && readSetting("slack.notifyOnWeekends", "SLACK_NOTIFY_ON_WEEKENDS") !== "true") {
     return true;
   }
@@ -68,6 +77,7 @@ export function isQuietHours(at: Date, readSetting: ReadSetting): boolean {
     readSetting("slack.quietFromHour", "SLACK_QUIET_FROM_HOUR"),
     DEFAULT_QUIET_FROM_HOUR,
   );
+
   const until = boundedHour(
     readSetting("slack.quietUntilHour", "SLACK_QUIET_UNTIL_HOUR"),
     DEFAULT_QUIET_UNTIL_HOUR,
@@ -75,5 +85,6 @@ export function isQuietHours(at: Date, readSetting: ReadSetting): boolean {
 
   // 시작과 종료가 같으면 구간이 비어 있다는 뜻으로 읽어 조용 시간을 두지 않는다.
   if (from === until) return false;
+
   return from > until ? hour >= from || hour < until : hour >= from && hour < until;
 }

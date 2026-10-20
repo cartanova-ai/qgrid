@@ -45,12 +45,16 @@ export function buildReminderContext(
   userMap: Map<string, string>,
 ): string {
   const showLabel = tokens.length > 1;
+
   const lines = tokens.map((token) => {
     const mention = mentionFor(token.name, userMap);
     const label = token.name ?? "unnamed";
+
     if (!showLabel) return mention;
+
     return mention ? `${mention} ${label}` : label;
   });
+
   return [...lines, "재로그인이 필요합니다"].filter(Boolean).join("\n");
 }
 
@@ -59,6 +63,7 @@ async function sendReminder(
   mode: "scheduled" | "manual",
 ): Promise<number> {
   const expired = await deps.findReauthRequired();
+
   if (expired.length === 0) return 0;
 
   const userMap = deps.getSlackUserMap();
@@ -72,6 +77,7 @@ async function sendReminder(
     urgent: mode === "manual",
     throwOnFailure: mode === "manual",
   });
+
   return expired.length;
 }
 
@@ -95,12 +101,14 @@ function scheduleExpiredTokenReminder(runNow: boolean, deps: ExpiredTokenReminde
   // 주기 값과 별개인 스위치다. 꺼도 주기는 남아 있어 다시 켤 때 고르던 값이 그대로다.
   if (deps.readSetting("slack.remindersEnabled", "SLACK_REMINDERS_ENABLED") === "false") {
     logger.info("expired token reminder disabled");
+
     return;
   }
 
   const minutes = Number(
     deps.readSetting("slack.expiryReminderMinutes", "SLACK_EXPIRY_REMINDER_INTERVAL_MINUTES") ?? 0,
   );
+
   if (!Number.isFinite(minutes) || minutes <= 0) return;
 
   logger.info(
@@ -109,7 +117,7 @@ function scheduleExpiredTokenReminder(runNow: boolean, deps: ExpiredTokenReminde
 
   const run = () =>
     sendReminder(deps, "scheduled").catch((e) =>
-      logger.warn(`reminder failed: ${(e as Error).message}`),
+      logger.warn(`reminder failed: ${e instanceof Error ? e.message : String(e)}`),
     );
 
   if (runNow) void run();

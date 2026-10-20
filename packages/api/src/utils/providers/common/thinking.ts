@@ -1,10 +1,10 @@
 import { BadRequestException } from "sonamu";
 
-import { type LocalizedString } from "../../../i18n/sd.generated";
+import { SD } from "../../../i18n/sd.generated";
 
 export class ThinkingValidationError extends BadRequestException {
   constructor(message: string) {
-    super(message as LocalizedString);
+    super(SD("error.detail")(message));
     this.name = "ThinkingValidationError";
   }
 }

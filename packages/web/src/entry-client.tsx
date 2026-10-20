@@ -34,6 +34,7 @@ const queryClient = new QueryClient({
 const dehydratedState = window.__SONAMU_SSR__
   ? JSON.parse(JSON.stringify(window.__SONAMU_SSR__), dateReviver)
   : undefined;
+
 if (dehydratedState) {
   hydrate(queryClient, dehydratedState);
 }
@@ -82,4 +83,5 @@ declare global {
     __TANSTACK_QUERY_CLIENT__: typeof queryClient;
   }
 }
+
 window.__TANSTACK_QUERY_CLIENT__ = queryClient;

@@ -11,10 +11,13 @@ import {
   type GenerateRequest,
   type GenerateResult,
   type GenerateStreamCallbacks,
+  type MediaDispatcher,
   type ProviderDispatcher,
   type StreamCallbacks,
+  type VoiceDispatcher,
 } from "../../utils/providers/common/provider-dispatcher";
 import {
+  isJsonObject,
   isProviderId,
   type JsonValue,
   type ProviderId,
@@ -24,11 +27,13 @@ import {
   serializeAndValidateDispatchSchema,
 } from "../../utils/providers/common/schema-validation";
 import { strictify } from "../../utils/providers/common/strictifier";
+import { type GrokTokenStateSnapshot } from "../../utils/providers/grok/grok-dispatcher";
 import {
   ImageGenerationError,
   type OpenAIDispatcher,
 } from "../../utils/providers/openai/openai-dispatcher";
 import { type TokenSubsetA } from "../sonamu.generated";
+import { type TokenCredentials } from "../token/token.types";
 import { decideConvRouting, issueConvContext } from "./conv-routing";
 import {
   maskToken,
@@ -59,7 +64,7 @@ export type StreamingProviderDispatcher = ProviderDispatcher & {
 export type GrokTokenRow = {
   id: number;
   name: string;
-  credentials: unknown;
+  credentials: TokenCredentials;
   quotaThreshold: number | null;
   weight: number;
 };
@@ -68,14 +73,14 @@ export interface GrokTokenSink {
   onTokenAdded(
     id: number,
     name: string,
-    credentials: unknown,
+    credentials: TokenCredentials,
     quotaThreshold: number | null,
     weight: number,
   ): void | Promise<void>;
   onTokenUpdated(
     id: number,
     name: string,
-    credentials: unknown,
+    credentials: TokenCredentials,
     quotaThreshold: number | null,
     weight: number,
   ): void | Promise<void>;
@@ -83,7 +88,15 @@ export interface GrokTokenSink {
   replaceTokens(rows: GrokTokenRow[]): void | Promise<void>;
 }
 
-export type GrokProviderDispatcher = StreamingProviderDispatcher & GrokTokenSink;
+/** Observability the concrete Grok dispatcher exposes beyond routing. */
+export interface GrokTokenStateSource {
+  tokenStates(): GrokTokenStateSnapshot[];
+}
+
+/** Media, voice, and token-state reporting are optional capabilities of a Grok dispatcher. */
+export type GrokProviderDispatcher = StreamingProviderDispatcher &
+  GrokTokenSink &
+  Partial<MediaDispatcher & VoiceDispatcher & GrokTokenStateSource>;
 
 export type QgridDispatcherOptions = {
   grokDispatcher?: GrokProviderDispatcher | null;
@@ -157,19 +170,19 @@ export class QgridDispatcherClass {
   // 초기화 중에는 503 + Retry-After, 초기화 실패에는 500을 반환한다.
   notReadyError(provider: ProviderId): Error {
     const label = PROVIDER_LABELS[provider];
+
     return this.startupState[provider] === "failed"
       ? new InternalServerErrorException(SD("qgrid.dispatcherFailed")(label))
       : new ServiceUnavailableException(SD("qgrid.dispatcherStarting")(label));
   }
 
   // prefix 없는/미지원 prefix 는 기존대로 ProcessError, 지원 provider 의 미등록은 not-ready.
-  resolveDispatcher(
-    input: QueryInput,
-    provider: string | undefined,
-  ): { provider: ProviderId; dispatcher: StreamingProviderDispatcher } {
+  resolveDispatcher(input: QueryInput, provider: string | undefined): ResolvedDispatcher {
     if (!isProviderId(provider)) throw directLlmApiFallbackNotImplemented(input);
     const dispatcher = this.dispatchers.get(provider);
+
     if (!dispatcher) throw this.notReadyError(provider);
+
     return { provider, dispatcher };
   }
 
@@ -199,6 +212,7 @@ export class QgridDispatcherClass {
 
     if (provider === "anthropic") {
       const decision = decideConvRouting(input);
+
       const result = await dispatcher.generate({
         model: input.model,
         systemPrompt: composeSystemWithSchemaContract(input.system, input),
@@ -212,6 +226,7 @@ export class QgridDispatcherClass {
         imageGeneration: input.imageGeneration,
         imageGenerationOptions: input.imageGenerationOptions,
       });
+
       this.recordCompleted(provider, result.tokenName);
 
       return applyToolCallEmulation(toEmulationResult(result), input.tools, {
@@ -224,6 +239,7 @@ export class QgridDispatcherClass {
       directProvider: provider,
       modelNamespace: `${provider}/${route.model}`,
     });
+
     const result = await dispatcher.generate({
       ...buildDirectRequest(input, route.model, outputSchema, answerKind, abortSignal),
       promptCacheKey: input.imageGeneration ? undefined : decision.promptCacheKey,
@@ -232,6 +248,7 @@ export class QgridDispatcherClass {
       coldInput: decision.coldInput,
       coldHistory: decision.coldHistory,
     });
+
     this.recordCompleted(provider, result.tokenName);
 
     // 이미지 요청은 cold-only(R8)라 재사용 좌표를 발급하지 않는다. 좌표를 실으면
@@ -261,9 +278,11 @@ export class QgridDispatcherClass {
       // 구조화 응답은 최종 텍스트와 델타 모두 코드펜스를 제거한다.
       const hasSchemaContract = input.jsonSchema !== undefined || Boolean(input.tools?.length);
       const fenceStrip = hasSchemaContract ? createFenceStripTransform() : undefined;
+
       const emitDelta = fenceStrip
         ? (text: string) => {
             const safe = fenceStrip.push(text);
+
             if (safe) cb.onDelta(safe);
           }
         : cb.onDelta;
@@ -290,6 +309,7 @@ export class QgridDispatcherClass {
             this.recordCompleted(provider, turnResult.tokenName);
             // 닫는 펜스 판정 때문에 보류한 텍스트를 완료 전에 방출한다.
             const rest = fenceStrip?.flush();
+
             if (rest) cb.onDelta(rest);
 
             const issuedCoord = issueConvContext(turnResult.threadCoord, decision);
@@ -303,6 +323,7 @@ export class QgridDispatcherClass {
           onError: cb.onError,
         },
       );
+
       return;
     }
 
@@ -310,6 +331,7 @@ export class QgridDispatcherClass {
       directProvider: provider,
       modelNamespace: `${provider}/${route.model}`,
     });
+
     await dispatcher.generateStream(
       {
         ...buildDirectRequest(input, route.model, outputSchema, answerKind, abortSignal),
@@ -349,7 +371,10 @@ function buildDirectRequest(
   answerKind: "json" | "text",
   abortSignal: AbortSignal | undefined,
 ): Omit<GenerateRequest, "coldInput" | "coldHistory" | "promptCacheKey" | "preferredTokenId"> {
-  return {
+  const request: Omit<
+    GenerateRequest,
+    "coldInput" | "coldHistory" | "promptCacheKey" | "preferredTokenId"
+  > = {
     model,
     systemPrompt: input.system,
     outputSchema,
@@ -366,20 +391,30 @@ function buildDirectRequest(
     abortSignal,
     imageGeneration: input.imageGeneration,
     imageGenerationOptions: input.imageGenerationOptions,
-    // Opaque namespaces; the Grok dispatcher reads `xai`, OpenAI ignores it.
-    ...(input.providerOptions?.xai
-      ? { providerOptions: { xai: { ...input.providerOptions.xai } } }
-      : {}),
   };
+
+  // Opaque namespaces; the Grok dispatcher reads `xai`, OpenAI ignores it.
+  if (input.providerOptions?.xai) {
+    request.providerOptions = { xai: { ...input.providerOptions.xai } };
+  }
+
+  return request;
 }
 
-function parseProviderRoute(model: string | undefined): { provider?: string; model: string } {
+interface ProviderRoute {
+  provider?: string;
+  model: string;
+}
+
+function parseProviderRoute(model: string | undefined): ProviderRoute {
   if (!model?.includes("/")) {
     return { model: model ?? "" };
   }
 
   const [provider, routedModel] = model.split("/", 2);
+
   if (!provider || !routedModel) throw new ProcessError("unknown model");
+
   return { provider, model: routedModel };
 }
 
@@ -395,9 +430,10 @@ export function buildStrictOutputSchema(
 ): JsonValue | undefined {
   const outputSchema = buildRawOutputSchema(input);
 
-  return outputSchema
-    ? (strictify(outputSchema as Parameters<typeof strictify>[0], { provider }) as JsonValue)
-    : undefined;
+  if (!outputSchema) return undefined;
+
+  // Boolean and other non-object schemas have nothing to tighten and pass through unchanged.
+  return isJsonObject(outputSchema) ? strictify(outputSchema, { provider }) : outputSchema;
 }
 
 export function buildAndValidateStrictOutputSchema(
@@ -408,11 +444,13 @@ export function buildAndValidateStrictOutputSchema(
   // Anthropic은 원본 스키마를 검증한 뒤 프롬프트로 전달하고, 응답 검증은 소비자에 맡긴다.
   if (provider === "anthropic") {
     parseAndValidateCallerSchemas(input);
+
     return undefined;
   }
 
   const outputSchema = buildStrictOutputSchema(input, provider);
   serializeAndValidateDispatchSchema(outputSchema, provider);
+
   return outputSchema;
 }
 
@@ -427,11 +465,12 @@ function buildRawOutputSchema(
 }
 
 export function completedDriverFromImageFailure(
-  error: unknown,
+  cause: unknown,
   serviceTier?: string,
 ): QueryOutput | undefined {
-  if (!(error instanceof ImageGenerationError) || !error.completedDriver) return undefined;
-  return applyToolCallEmulation(toEmulationResult(error.completedDriver, serviceTier), undefined, {
+  if (!(cause instanceof ImageGenerationError) || !cause.completedDriver) return undefined;
+
+  return applyToolCallEmulation(toEmulationResult(cause.completedDriver, serviceTier), undefined, {
     answerKind: "text",
   });
 }
@@ -445,7 +484,8 @@ function toEmulationResult(
   // positive provider cost (Claude Code total_cost_usd) wins over the price table.
   const hasProviderCost =
     result.costUsd !== undefined && (result.costSource === "provider" || result.costUsd > 0);
-  return {
+
+  const emulationResult: Omit<QueryOutput, "content" | "finishReason" | "runContext"> = {
     text: result.text,
     tokenName: result.tokenName,
     model: result.model,
@@ -477,10 +517,18 @@ function toEmulationResult(
           serviceTier,
         ),
     costSource: hasProviderCost ? (result.costSource ?? "provider") : "pricing_table",
-    ...(result.providerMetadata?.xai
-      ? { providerMetadata: { xai: result.providerMetadata.xai } }
-      : {}),
   };
+
+  if (result.providerMetadata?.xai) {
+    emulationResult.providerMetadata = { xai: result.providerMetadata.xai };
+  }
+
+  return emulationResult;
 }
 
 export const QgridDispatcher = new QgridDispatcherClass();
+
+interface ResolvedDispatcher {
+  provider: ProviderId;
+  dispatcher: StreamingProviderDispatcher;
+}

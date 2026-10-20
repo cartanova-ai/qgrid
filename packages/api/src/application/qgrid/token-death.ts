@@ -28,12 +28,15 @@ export async function deactivateAuthDeadToken(
     token.id,
     token.credentials,
   );
+
   if (staleCredentials) {
     logger.info(
       `skipping auth-death for ${token.name}(id=${token.id}): credentials rotated since this attempt`,
     );
+
     return false;
   }
+
   if (!marked) return false;
 
   logger.warn(`token requires re-login: ${token.name}(id=${token.id}) reason=${reasonCode}`);
@@ -55,6 +58,7 @@ export async function deactivateAuthDeadToken(
     color: SLACK_COLOR.bad,
     urgent: wasLastActive,
   });
+
   return true;
 }
 

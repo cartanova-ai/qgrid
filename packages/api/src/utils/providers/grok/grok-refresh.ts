@@ -26,6 +26,7 @@ const logger = getLogger(["qgrid", "grok-refresh"]);
 
 /** model.rs:9 DEFAULT_EARLY_INVALIDATION_SECS. */
 export const GROK_REFRESH_MARGIN_MS = 300_000;
+
 /** Upper bound of the per-account jitter added to the margin (inclusive). */
 export const GROK_REFRESH_JITTER_MAX_MS = 60_000;
 const REFRESH_TIMEOUT_MS = 15_000;
@@ -59,19 +60,24 @@ export class GrokRefreshTransientError extends Error {
 /** Stable jitter in [0, 60 s] derived from a per-account seed. */
 export function grokRefreshJitterMs(seed: string): number {
   const digest = createHash("sha256").update(`grok-refresh:${seed}`).digest();
+
   return digest.readUInt32BE(0) % (GROK_REFRESH_JITTER_MAX_MS + 1);
 }
 
 /** True once `expiresAt - 300 s - jitter(userId)` is at or before `now`. */
 export function grokNeedsRefresh(credentials: GrokCredentials, now: number = Date.now()): boolean {
   const expiresAt = Date.parse(credentials.expiresAt);
+
   if (!Number.isFinite(expiresAt)) return true;
+
   return expiresAt - GROK_REFRESH_MARGIN_MS - grokRefreshJitterMs(credentials.userId) <= now;
 }
 
 function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
   if (!signal) return promise;
+
   if (signal.aborted) return Promise.reject(signal.reason);
+
   return new Promise<T>((resolve, reject) => {
     const onAbort = (): void => reject(signal.reason);
     signal.addEventListener("abort", onAbort, { once: true });
@@ -80,9 +86,9 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Pro
         signal.removeEventListener("abort", onAbort);
         resolve(value);
       },
-      (error: unknown) => {
+      (cause: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(error);
+        reject(cause);
       },
     );
   });
@@ -126,17 +132,23 @@ export class GrokRefreshCoordinator implements GrokRefresher {
     persist: GrokPersistCredentials,
   ): Promise<GrokCredentials> {
     const existing = this.inflight.get(tokenId);
+
     if (existing) return existing;
+
     const promise = this.doRefresh(tokenId, this.newest(tokenId, credentials), persist).finally(
       () => this.inflight.delete(tokenId),
     );
+
     this.inflight.set(tokenId, promise);
+
     return promise;
   }
 
   async ensureFresh(token: GrokTokenRef, signal?: AbortSignal): Promise<GrokCredentials> {
     const current = this.newest(token.tokenId, token.credentials);
+
     if (!this.needsRefresh(current)) return current;
+
     return abortable(this.refresh(token.tokenId, current, this.portPersist(token.tokenId)), signal);
   }
 
@@ -146,6 +158,7 @@ export class GrokRefreshCoordinator implements GrokRefresher {
   ): Promise<GrokRefreshResult> {
     const inflight = this.inflight.get(token.tokenId);
     const latest = this.latest.get(token.tokenId);
+
     // Another caller already replaced the rejected access token: reuse it instead of refreshing.
     if (
       !inflight &&
@@ -154,11 +167,13 @@ export class GrokRefreshCoordinator implements GrokRefresher {
       !this.needsRefresh(latest)
     )
       return { status: "refreshed", credentials: latest };
+
     try {
       const credentials = await abortable(
         this.refresh(token.tokenId, token.credentials, this.portPersist(token.tokenId)),
         signal,
       );
+
       return { status: "refreshed", credentials };
     } catch (error) {
       if (error instanceof GrokReauthRequiredError)
@@ -169,15 +184,19 @@ export class GrokRefreshCoordinator implements GrokRefresher {
 
   private portPersist(tokenId: number): GrokPersistCredentials {
     const persist = this.persistPort;
+
     if (!persist)
       return () =>
         Promise.reject(new Error("GrokRefreshCoordinator was created without a persist port"));
+
     return (next) => persist(tokenId, next);
   }
 
   private newest(tokenId: number, credentials: GrokCredentials): GrokCredentials {
     const latest = this.latest.get(tokenId);
+
     if (!latest || latest.userId !== credentials.userId) return credentials;
+
     return Date.parse(latest.expiresAt) > Date.parse(credentials.expiresAt) ? latest : credentials;
   }
 
@@ -192,6 +211,7 @@ export class GrokRefreshCoordinator implements GrokRefresher {
     });
 
     let response: Response;
+
     try {
       response = await this.fetchImpl(tokenEndpoint, {
         method: "POST",
@@ -219,6 +239,7 @@ export class GrokRefreshCoordinator implements GrokRefresher {
       logger.warn(
         `grok refresh failed token=${tokenId} status=${response.status} code=${oauthError ?? "unknown"}`,
       );
+
       // oidc/protocol.rs:413-430: 5xx and 429 are always transient; otherwise only a terminal code
       // ends the token.
       if (
@@ -236,12 +257,15 @@ export class GrokRefreshCoordinator implements GrokRefresher {
     }
 
     let body: unknown;
+
     try {
       body = await response.json();
     } catch {
       throw new GrokRefreshTransientError("Grok refresh response is not JSON", response.status);
     }
+
     const tokens = GrokTokenResponse.safeParse(body);
+
     if (!tokens.success)
       throw new GrokRefreshTransientError(
         "Grok refresh response failed validation",
@@ -250,12 +274,16 @@ export class GrokRefreshCoordinator implements GrokRefresher {
 
     const rotated = Boolean(tokens.data.refresh_token);
     const exp = decodeGrokJwt(tokens.data.access_token)?.payload.exp;
+
+    const expiresIn = tokens.data.expires_in;
+
     const expiresAtMs =
-      typeof tokens.data.expires_in === "number"
-        ? this.now() + tokens.data.expires_in * 1000
-        : typeof exp === "number"
+      expiresIn !== undefined && expiresIn !== null
+        ? this.now() + expiresIn * 1000
+        : exp !== undefined
           ? exp * 1000
           : undefined;
+
     if (expiresAtMs === undefined || !Number.isFinite(expiresAtMs))
       throw new GrokRefreshTransientError("Grok refresh response has no expiry", response.status);
 
@@ -266,6 +294,7 @@ export class GrokRefreshCoordinator implements GrokRefresher {
       refreshToken: tokens.data.refresh_token ?? credentials.refreshToken,
       expiresAt: new Date(expiresAtMs).toISOString(),
     });
+
     if (!next.success) {
       logger.error(
         `grok refresh returned unusable credentials token=${tokenId} rotated=${rotated}`,
@@ -287,8 +316,10 @@ export class GrokRefreshCoordinator implements GrokRefresher {
       );
       throw error;
     }
+
     this.latest.set(tokenId, next.data);
     logger.info(`grok token ${tokenId} refreshed (rotated=${rotated})`);
+
     return next.data;
   }
 }

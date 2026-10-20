@@ -7,7 +7,13 @@
  * 모르는 키워드는 unknown 으로 접어 절대 던지지 않는다.
  */
 
-type SchemaNode = Record<string, unknown>;
+import { z } from "zod";
+
+import {
+  isJsonObject,
+  type JsonObject,
+  type JsonValue,
+} from "../../utils/providers/common/provider-types";
 
 /** TS/zod 표시 코드 공용 식별자 판별 — zod-code-format 의 키 unquote 도 이걸 쓴다. */
 export const IDENT_SOURCE = "[A-Za-z_$][\\w$]*";
@@ -17,90 +23,127 @@ function renderKey(key: string): string {
   return IDENT_RE.test(key) ? key : JSON.stringify(key);
 }
 
-function renderPrimitive(type: unknown): string {
+function renderPrimitive(type: JsonValue | undefined): string {
   if (type === "string") return "string";
+
   if (type === "number" || type === "integer") return "number";
+
   if (type === "boolean") return "boolean";
+
   if (type === "null") return "null";
+
   return "unknown";
 }
 
-function renderZodPrimitive(type: unknown): string {
+function renderZodPrimitive(type: JsonValue | undefined): string {
   if (type === "string") return "z.string()";
+
   if (type === "number" || type === "integer") return "z.number()";
+
   if (type === "boolean") return "z.boolean()";
+
   if (type === "null") return "z.null()";
+
   return "z.unknown()";
 }
 
-function renderZodEnum(values: unknown[], enumValueLimit?: number): string {
+function renderZodEnum(values: JsonValue[], enumValueLimit?: number): string {
   if (values.length === 0) return "z.never()";
 
   const visibleValues =
     enumValueLimit === undefined ? values : values.slice(0, Math.max(0, enumValueLimit));
+
   const omittedCount = values.length - visibleValues.length;
   const suffix = omittedCount > 0 ? ` /* +${omittedCount} */` : "";
 
-  if (values.every((value) => typeof value === "string")) {
+  if (values.every((value) => z.string().safeParse(value).success)) {
     return `z.enum([${visibleValues.map((value) => JSON.stringify(value)).join(", ")}${suffix}])`;
   }
 
   const literals = visibleValues.map((value) => `z.literal(${JSON.stringify(value)})`);
+
   if (literals.length === 1 && omittedCount === 0) return literals[0] ?? "z.never()";
+
   return `z.union([${literals.join(", ")}${suffix}])`;
 }
 
-function renderZodNode(node: unknown, depth: number, enumValueLimit?: number): string {
+function schemaProperties(schema: JsonObject): JsonObject {
+  return isJsonObject(schema.properties) ? schema.properties : {};
+}
+
+function requiredKeys(schema: JsonObject): Set<string> {
+  const required = schema.required;
+
+  return new Set(
+    Array.isArray(required) ? required.flatMap((key) => z.string().safeParse(key).data ?? []) : [],
+  );
+}
+
+function renderZodNode(
+  node: JsonValue | undefined,
+  depth: number,
+  enumValueLimit?: number,
+): string {
   if (node === true) return "z.unknown()";
-  if (!node || typeof node !== "object" || Array.isArray(node)) return "z.unknown()";
-  const schema = node as SchemaNode;
+
+  if (!isJsonObject(node)) return "z.unknown()";
+  const schema = node;
 
   if (Array.isArray(schema.enum)) return renderZodEnum(schema.enum, enumValueLimit);
+
   if (schema.const !== undefined) return `z.literal(${JSON.stringify(schema.const)})`;
 
-  const variants = (schema.anyOf ?? schema.oneOf) as unknown;
+  const variants = schema.anyOf ?? schema.oneOf;
+
   if (Array.isArray(variants) && variants.length > 0) {
     const rendered = [
       ...new Set(variants.map((variant) => renderZodNode(variant, depth, enumValueLimit))),
     ];
+
     return rendered.length === 1
       ? (rendered[0] ?? "z.unknown()")
       : `z.union([${rendered.join(", ")}])`;
   }
 
   const type = schema.type;
+
   if (Array.isArray(type)) {
     const rendered = [...new Set(type.map(renderZodPrimitive))];
+
     return rendered.length === 1
       ? (rendered[0] ?? "z.unknown()")
       : `z.union([${rendered.join(", ")}])`;
   }
 
   if (type === "object" || (type === undefined && schema.properties)) {
-    const properties = (schema.properties ?? {}) as Record<string, unknown>;
-    const required = new Set(Array.isArray(schema.required) ? (schema.required as string[]) : []);
+    const properties = schemaProperties(schema);
+    const required = requiredKeys(schema);
     const keys = Object.keys(properties);
+
     if (keys.length === 0) return "z.object({})";
+
     const orderedKeys = [
       ...keys.filter((key) => required.has(key)),
       ...keys.filter((key) => !required.has(key)),
     ];
 
     const inner = "  ".repeat(depth + 1);
+
     const lines = orderedKeys.map((key) => {
       const propertySchema = properties[key];
       const rendered = renderZodNode(propertySchema, depth + 1, enumValueLimit);
       const optional = required.has(key) ? rendered : `${rendered}.optional()`;
+
       const defaultValue =
-        propertySchema &&
-        typeof propertySchema === "object" &&
-        !Array.isArray(propertySchema) &&
-        Object.hasOwn(propertySchema, "default")
-          ? JSON.stringify((propertySchema as SchemaNode).default)
+        isJsonObject(propertySchema) && Object.hasOwn(propertySchema, "default")
+          ? JSON.stringify(propertySchema.default)
           : undefined;
+
       const defaultComment = defaultValue === undefined ? "" : ` // default=${defaultValue}`;
+
       return `${inner}${renderKey(key)}: ${optional},${defaultComment}`;
     });
+
     return `z.object({\n${lines.join("\n")}\n${"  ".repeat(depth)}})`;
   }
 
@@ -111,43 +154,52 @@ function renderZodNode(node: unknown, depth: number, enumValueLimit?: number): s
   return renderZodPrimitive(type);
 }
 
-function renderNode(node: unknown, depth: number): string {
+function renderNode(node: JsonValue | undefined, depth: number): string {
   if (node === true) return "unknown";
-  if (!node || typeof node !== "object" || Array.isArray(node)) return "unknown";
-  const schema = node as SchemaNode;
+
+  if (!isJsonObject(node)) return "unknown";
+  const schema = node;
 
   if (Array.isArray(schema.enum)) {
     return schema.enum.map((value) => JSON.stringify(value)).join(" | ");
   }
+
   if (schema.const !== undefined) return JSON.stringify(schema.const);
 
-  const variants = (schema.anyOf ?? schema.oneOf) as unknown;
+  const variants = schema.anyOf ?? schema.oneOf;
+
   if (Array.isArray(variants) && variants.length > 0) {
     return [...new Set(variants.map((variant) => renderNode(variant, depth)))].join(" | ");
   }
 
   const type = schema.type;
+
   if (Array.isArray(type)) {
     return [...new Set(type.map(renderPrimitive))].join(" | ");
   }
 
   if (type === "object" || (type === undefined && schema.properties)) {
-    const properties = (schema.properties ?? {}) as Record<string, unknown>;
-    const required = new Set(Array.isArray(schema.required) ? (schema.required as string[]) : []);
+    const properties = schemaProperties(schema);
+    const required = requiredKeys(schema);
     const keys = Object.keys(properties);
+
     if (keys.length === 0) return "Record<string, unknown>";
     const inner = "  ".repeat(depth + 1);
+
     const lines = keys.map(
       (key) =>
         `${inner}${renderKey(key)}${required.has(key) ? "" : "?"}: ${renderNode(properties[key], depth + 1)}`,
     );
+
     return `{\n${lines.join("\n")}\n${"  ".repeat(depth)}}`;
   }
 
   if (type === "array") {
     const item = renderNode(schema.items, depth);
+
     // 유니온 요소는 괄호가 없으면 `A | B[]` 로 잘못 읽힌다.
     if (item.includes(" | ")) return `(${item})[]`;
+
     return `${item}[]`;
   }
 
@@ -155,19 +207,22 @@ function renderNode(node: unknown, depth: number): string {
 }
 
 /** 이미 파싱된 스키마 값용 — 호출부가 같은 JSON 을 두 번 파싱하지 않게 한다. */
-export function renderParsedJsonSchemaTypeText(schema: unknown, name = "Response"): string {
+export function renderParsedJsonSchemaTypeText(schema: JsonValue, name = "Response"): string {
   return `type ${name} = ${renderNode(schema, 0)}`;
 }
 
-/** Tool input 계약용 표시 전용 Zod shape. 검증 제약은 의도적으로 생략한다. */
-export function renderJsonSchemaZodShapeText(schema: unknown, enumValueLimit?: number): string {
+/** Tool input 계약용 표시 전용 Zod 코드. 검증 제약은 의도적으로 생략한다. */
+export function renderJsonSchemaZodText(schema: JsonValue, enumValueLimit?: number): string {
   return renderZodNode(schema, 0, enumValueLimit);
 }
 
 /** 실패(파싱 불가 등) 시 null — 호출부가 표시 자체를 생략한다. */
 export function renderJsonSchemaTypeText(schemaJson: string, name = "Response"): string | null {
   try {
-    return renderParsedJsonSchemaTypeText(JSON.parse(schemaJson) as unknown, name);
+    // JSON.parse without a reviver yields only JSON values.
+    const schema: JsonValue = JSON.parse(schemaJson);
+
+    return renderParsedJsonSchemaTypeText(schema, name);
   } catch {
     return null;
   }

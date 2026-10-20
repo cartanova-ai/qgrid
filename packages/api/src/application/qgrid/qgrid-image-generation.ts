@@ -42,6 +42,7 @@ export function resolveImageGenerationOptions(
   options: ImageGenerationOptions | undefined,
 ): ResolvedImageGenerationOptions {
   const size = options?.size;
+
   return {
     quality: options?.quality ?? DEFAULT_IMAGE_GENERATION_QUALITY,
     // Unknown/custom sizes use the default price, without changing output hints.
@@ -61,7 +62,9 @@ export function imageGenerationCostMethod(
   ) {
     return "estimated:gpt-image-2:reported-usage:public-prices:conservative";
   }
+
   const resolved = resolveImageGenerationOptions(options);
+
   return `assumed:${CODEX_IMAGE_GENERATION_MODEL}:${resolved.quality}:${resolved.size}:png`;
 }
 
@@ -71,8 +74,10 @@ export function estimateImageGenerationCostMicroUsd(
 ): number | null {
   const images = result.content.filter((item) => item.type === "image");
   const imageCount = images.length;
+
   if (imageCount === 0) return null;
   const usage = images.find((image) => image.generation?.usage)?.generation?.usage;
+
   if (usage) {
     // Response-level image usage is carried by its first image only.
     // Do not multiply it by output count or price it as the requested text driver.
@@ -82,15 +87,19 @@ export function estimateImageGenerationCostMicroUsd(
     // Use a consistent reported split; unknown input is conservatively priced as
     // images. Cache discounts and private subscription billing remain unknown.
     const details = usage.input_tokens_details;
+
     const textTokens =
       details && details.text_tokens + details.image_tokens <= usage.input_tokens
         ? details.text_tokens
         : 0;
+
     return Math.round(
       textTokens * 5 + (usage.input_tokens - textTokens) * 8 + usage.output_tokens * 30,
     );
   }
+
   const resolved = resolveImageGenerationOptions(options);
   const unitCost = IMAGE_OUTPUT_COST_MICRO_USD[resolved.quality][resolved.size];
+
   return imageCount * unitCost;
 }

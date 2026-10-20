@@ -41,8 +41,8 @@ export type GrokQuotaUsageResult =
     }
   | { kind: "lookup_failed"; reason: string };
 
-function reasonOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function reasonOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function proxyHeaders(credentials: ProxyCredentials): Record<string, string> {
@@ -51,7 +51,9 @@ function proxyHeaders(credentials: ProxyCredentials): Record<string, string> {
 
 function numberOrNull(value: number | string | undefined): number | null {
   if (value === undefined) return null;
-  const parsed = typeof value === "number" ? value : Number(value);
+  // Number() returns a number argument unchanged and parses a numeric string.
+  const parsed = Number(value);
+
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -65,17 +67,23 @@ export async function readGrokBilling(
       headers: proxyHeaders(credentials),
       ...options,
     });
+
     const parsed = GrokBillingConfig.safeParse(json);
+
     if (!parsed.success) {
       return { kind: "lookup_failed", reason: `unexpected billing shape: ${parsed.error.message}` };
     }
+
     const config = parsed.data.config;
+
     if (!Number.isFinite(config.creditUsagePercent)) {
       return { kind: "lookup_failed", reason: "creditUsagePercent unavailable" };
     }
+
     const start = Date.parse(config.currentPeriod.start);
     const end = Date.parse(config.currentPeriod.end);
     const endMs = Number.isNaN(end) ? null : end;
+
     return {
       kind: "ok",
       utilizationPct: config.creditUsagePercent,
@@ -122,14 +130,18 @@ export async function readGrokSettings(
       headers: proxyHeaders(credentials),
       ...options,
     });
+
     const parsed = GrokSettings.safeParse(json);
+
     if (!parsed.success) {
       return {
         kind: "lookup_failed",
         reason: `unexpected settings shape: ${parsed.error.message}`,
       };
     }
+
     const settings = parsed.data;
+
     return {
       kind: "ok",
       onDemandEnabled: settings.on_demand_enabled ?? null,
@@ -166,10 +178,13 @@ export async function readGrokSubscription(
       headers: proxyHeaders(credentials),
       ...options,
     });
+
     const parsed = GrokUserSubscription.safeParse(json);
+
     if (!parsed.success) {
       return { kind: "lookup_failed", reason: `unexpected user shape: ${parsed.error.message}` };
     }
+
     return {
       kind: "ok",
       userId: parsed.data.userId,
