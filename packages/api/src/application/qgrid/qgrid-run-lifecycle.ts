@@ -177,10 +177,12 @@ export async function afterQuery(
 
   const imageParts = getImageParts(result);
 
-  const imageCostMicroUsd = estimateImageGenerationCostMicroUsd(
-    result,
-    args.imageGenerationOptions,
-  );
+  // Grok reports one provider cost for the turn that already includes its image tool calls.
+  const imageCostIncluded = args.model?.startsWith("grok/") === true && imageParts.length > 0;
+
+  const imageCostMicroUsd = imageCostIncluded
+    ? 0
+    : estimateImageGenerationCostMicroUsd(result, args.imageGenerationOptions);
 
   for (const step of buildImageGenerationToolSteps(args, imageParts, stepIndex)) {
     await RequestLogModel.appendStep(requestLogId, step);
@@ -233,8 +235,9 @@ export async function afterQuery(
     cost_usd: agg.cost_usd,
     cost_source: agg.cost_source,
     image_cost_usd: imageCostMicroUsd,
-    image_cost_method:
-      imageCostMicroUsd !== null
+    image_cost_method: imageCostIncluded
+      ? "included:grok-provider-cost"
+      : imageCostMicroUsd !== null
         ? imageGenerationCostMethod(args.imageGenerationOptions, result)
         : null,
     history: filterHistoryForStorage(args.history),

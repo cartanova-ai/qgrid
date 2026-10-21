@@ -509,6 +509,32 @@ describe("qgrid run lifecycle TTFT", () => {
     );
   });
 
+  it("records a Grok tool image without a second image cost or OpenAI pricing assumptions", async () => {
+    await afterQuery(
+      10,
+      2,
+      { prompt: "draw an apple", model: "grok/grok-4.7", imageGeneration: "auto" },
+      queryOutput({
+        content: [{ type: "image", data: "/9j/4AAQ", mediaType: "image/jpeg", revisedPrompt: "a red apple" }],
+      }),
+    );
+
+    expect(finishRunMock).toHaveBeenCalledWith(
+      10,
+      expect.objectContaining({
+        image_cost_usd: 0,
+        image_cost_method: "included:grok-provider-cost",
+        is_image_generation: true,
+      }),
+    );
+    const step = appendStepMock.mock.calls.find(([, s]) => s.tool_name === "image_generation")?.[1];
+    expect(JSON.parse(step.tool_args)).toMatchObject({
+      tool: { type: "image_generation", provider: "grok" },
+      driverModel: "grok/grok-4.7",
+    });
+    expect(step.tool_args).not.toContain("gpt-image");
+  });
+
   it.each([
     ["openai/gpt-5.5", "transparent"],
     ["openai/gpt-image-2", "opaque"],

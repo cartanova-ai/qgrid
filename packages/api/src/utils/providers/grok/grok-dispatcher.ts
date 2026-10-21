@@ -12,6 +12,7 @@ import {
   type GenerateRequest,
   type GenerateResult,
   type GenerateStreamCallbacks,
+  type GeneratedImage,
   type MediaDispatcher,
   type MediaDispatchResult,
   type MediaTokenSelection,
@@ -377,6 +378,23 @@ function historyItems(history: readonly JsonValue[] | undefined): GrokInputItem[
 
     return item;
   });
+}
+
+/** A completed `image_generation_call` item's base64 result; the proxy returns JPEG. */
+function grokGeneratedImage(
+  result: JsonValue | undefined,
+  prompt: JsonValue | undefined,
+): GeneratedImage | undefined {
+  const data = jsonString(result);
+
+  if (!data) return undefined;
+
+  let mediaType: GeneratedImage["mediaType"] = "image/jpeg";
+
+  if (data.startsWith("iVBORw0KGgo")) mediaType = "image/png";
+  else if (data.startsWith("UklGR")) mediaType = "image/webp";
+
+  return { data, mediaType, revisedPrompt: jsonString(prompt) ?? null };
 }
 
 function userMessage(req: GenerateRequest): GrokInputItem {
@@ -1636,12 +1654,8 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
   }
 
   buildChatBody(req: GenerateRequest): GrokChatBody {
-    if (req.imageGeneration !== undefined && req.imageGeneration !== false) {
-      throw new GrokInvalidRequestError(
-        "imageGeneration is not supported on grok chat models; use the Grok image endpoint",
-      );
-    }
-
+    // imageGeneration enables the server-side image tool below; OpenAI's quality/size/background
+    // options have no Grok equivalent.
     if (req.imageGenerationOptions !== undefined) {
       throw new GrokInvalidRequestError(
         "imageGenerationOptions is not supported on grok chat models",
@@ -1694,7 +1708,10 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     const turnIdx =
       history.filter((item) => item.type === "message" && item.role === "user").length + 1;
 
-    const tools = grokTools(req.tools);
+    // imageGeneration lets the model call the proxy's server-side image tool during the turn.
+    const tools = req.imageGeneration
+      ? [...(grokTools(req.tools) ?? []), { type: "image_generation" as const }]
+      : grokTools(req.tools);
 
     const body = buildGrokResponsesRequest({
       model: model.id,
@@ -1802,6 +1819,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     let servingModel = model.id;
     let outputMessageAccepted = false;
     const toolCalls: ProviderToolCall[] = [];
+    const images: GeneratedImage[] = [];
     let completed = false;
 
     for await (const event of stream.events) {
@@ -1821,7 +1839,11 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       } else if (event.type === "output-item" && event.completed) {
         const item = event.item;
 
-        if (item.type === "function_call") {
+        if (item.type === "image_generation_call") {
+          const image = grokGeneratedImage(item.result, item.prompt);
+
+          if (image) images.push(image);
+        } else if (item.type === "function_call") {
           const callId = jsonString(item.call_id);
           const name = jsonString(item.name);
           const args = jsonString(item.arguments);
@@ -1904,6 +1926,8 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     }
 
     if (toolCalls.length) result.toolCalls = toolCalls;
+
+    if (images.length) result.images = images;
 
     return result;
   }

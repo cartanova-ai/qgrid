@@ -39,7 +39,12 @@ export type GrokFunctionTool = {
   strict: boolean;
 };
 
-export type GrokTool = GrokFunctionTool | { type: "web_search" } | { type: "x_search" };
+export type GrokTool =
+  | GrokFunctionTool
+  | { type: "web_search" }
+  | { type: "x_search" }
+  // Server-side Grok Imagine tool; results arrive as `image_generation_call` output items.
+  | { type: "image_generation" };
 
 export type GrokToolChoice = "auto" | "none" | "required" | { type: "function"; name: string };
 

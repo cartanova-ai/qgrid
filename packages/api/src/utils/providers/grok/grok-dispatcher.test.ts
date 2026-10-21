@@ -540,9 +540,9 @@ describe("GrokDispatcher chat", () => {
   it("rejects fields Grok does not support", async () => {
     const h = createHarness();
     h.add(1);
-    await expect(h.dispatcher.generate(request({ imageGeneration: true }))).rejects.toBeInstanceOf(
-      GrokInvalidRequestError,
-    );
+    await expect(
+      h.dispatcher.generate(request({ imageGenerationOptions: { quality: "high" } })),
+    ).rejects.toBeInstanceOf(GrokInvalidRequestError);
     await expect(h.dispatcher.generate(request({ serviceTier: "fast" }))).rejects.toBeInstanceOf(
       GrokInvalidRequestError,
     );
@@ -839,6 +839,52 @@ describe("GrokDispatcher chat", () => {
 // ---------------------------------------------------------------------------
 // Media routing
 // ---------------------------------------------------------------------------
+
+describe("GrokDispatcher image generation tool", () => {
+  it("adds the server-side image tool and returns completed images", async () => {
+    const h = createHarness();
+    h.add(1);
+    const imageItem = {
+      type: "image_generation_call",
+      id: "ig_1",
+      status: "completed",
+      result: "/9j/4AAQSkZJRg",
+      prompt: "a small red apple",
+    };
+    h.chat.set(1, [
+      {
+        kind: "ok",
+        body: [
+          sseEvent({ type: "response.created", response: { id: "resp_1", model: "grok-4.7" } }),
+          sseEvent({ type: "response.output_item.done", item: imageItem }),
+          sseEvent({ type: "response.output_text.delta", item_id: "msg_1", delta: "Here it is." }),
+          sseEvent({
+            type: "response.completed",
+            response: { id: "resp_1", model: "grok-4.7", usage: golden.response.terminalUsage },
+          }),
+        ].join(""),
+      },
+    ]);
+
+    const result = await h.dispatcher.generate(request({ imageGeneration: "auto" }));
+
+    expect(h.requests[0]?.body).toMatchObject({ tools: [{ type: "image_generation" }] });
+    expect(result.text).toBe("Here it is.");
+    expect(result.images).toEqual([
+      { data: "/9j/4AAQSkZJRg", mediaType: "image/jpeg", revisedPrompt: "a small red apple" },
+    ]);
+  });
+
+  it("sends no image tool without imageGeneration", async () => {
+    const h = createHarness();
+    h.add(1);
+
+    const result = await h.dispatcher.generate(request());
+
+    expect(h.requests[0]?.body).not.toHaveProperty("tools");
+    expect(result.images).toBeUndefined();
+  });
+});
 
 describe("GrokDispatcher media", () => {
   it("blocks the request class on media 403 and fails over once", async () => {

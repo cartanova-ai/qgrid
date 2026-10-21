@@ -180,9 +180,8 @@ export function ChatWidget() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const provider = model.split("/")[0];
-  // 이미지 입력(image→text)은 OpenAI와 Grok 경로가 받는다. 대화 중 이미지 생성은 OpenAI 경로만 지원한다.
+  // OpenAI와 Grok 경로는 이미지 입력(image→text)과 대화 중 이미지 생성·편집(imageGeneration: "auto")을 받는다.
   const supportsImages = provider === "openai" || provider === "grok";
-  const supportsImageGeneration = provider === "openai";
 
   const { data: tokensData } = TokenService.useTokens(
     "A",
@@ -367,7 +366,7 @@ export function ChatWidget() {
 
       if (threadCoordRef.current) args.runContext = { threadCoord: threadCoordRef.current };
 
-      if (supportsImageGeneration) {
+      if (supportsImages) {
         const result: QueryOutput = await serviceFetch({
           method: "POST",
           url: "/api/qgrid/query",
