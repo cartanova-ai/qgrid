@@ -21,7 +21,6 @@ import { type TokenSubsetMapping } from "@/services/sonamu.generated";
 import { useUpdateTokenMutation } from "@/services/token/use-update-token-mutation";
 
 import { OAuthCodeEntry } from "./OAuthCodeEntry";
-import { unpricedRequestLabel, unpricedRequestTitle } from "./total-cost";
 import { isOAuthProvider, useOAuthLoginFlow } from "./use-oauth-login-flow";
 
 type Token = TokenSubsetMapping["A"];
@@ -719,14 +718,6 @@ function SortableTokenCard({ token }: { token: Token }) {
           </div>
           <span className={`text-[11px] tabular-nums font-medium shrink-0 ${theme.cost}`}>
             {formatUsd(costData?.usd ?? 0)}
-            {costData && unpricedRequestLabel(costData) ? (
-              <span
-                className="ml-1 font-normal text-sand-400"
-                title={unpricedRequestTitle(costData) ?? undefined}
-              >
-                {unpricedRequestLabel(costData)}
-              </span>
-            ) : null}
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-1 mb-2">
