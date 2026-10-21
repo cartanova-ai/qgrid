@@ -449,6 +449,17 @@ describe("GrokDispatcher selection", () => {
     expect(h.events).toEqual([]);
   });
 
+  it("refreshUsage reads billing for a token without a quota threshold", async () => {
+    const h = createHarness();
+    h.add(1);
+    h.billing.set(1, billingAt(12));
+
+    await h.dispatcher.refreshUsage(1);
+
+    expect(h.dispatcher.tokenStates()[0]?.lastBilling).toMatchObject({ utilizationPct: 12 });
+    expect(h.events.some((event) => event.startsWith("/billing"))).toBe(true);
+  });
+
   it("blocks over-threshold tokens and reports QuotaThresholdExceededError", async () => {
     const h = createHarness();
     h.add(1, 1, 50);

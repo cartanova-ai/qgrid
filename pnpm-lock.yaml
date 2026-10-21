@@ -27,6 +27,9 @@ catalogs:
     '@dnd-kit/utilities':
       specifier: ^3.2.2
       version: 3.2.2
+    '@iconify-json/lucide':
+      specifier: ^1.2.100
+      version: 1.2.100
     '@svgr/plugin-jsx':
       specifier: ^8.1.0
       version: 8.1.0
@@ -185,6 +188,9 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
+      '@iconify-json/lucide':
+        specifier: 'catalog:'
+        version: 1.2.100
       '@sonamu-kit/cli':
         specifier: ^0.1.0
         version: 0.1.0(sonamu@0.11.16(807aa2dc0b289f448839a518b62033ec))
@@ -10469,7 +10475,7 @@ snapshots:
       obug: 2.1.4
       std-env: 4.0.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@25.0.7)(@vitest/coverage-v8@4.1.10)(vite@8.0.16(@types/node@25.0.7)(esbuild@0.27.4)(jiti@2.7.0)(sass@1.98.0)(tsx@4.21.0)(yaml@2.9.0))
+      vitest: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@25.0.7)(@vitest/coverage-v8@4.1.10)(vite@8.0.3(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@25.0.7)(esbuild@0.27.4)(jiti@2.6.1)(sass@1.98.0)(tsx@4.21.0)(yaml@2.9.0))
 
   '@vitest/expect@4.1.10':
     dependencies:

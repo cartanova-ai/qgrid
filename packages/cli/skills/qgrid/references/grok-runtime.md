@@ -45,6 +45,10 @@ Refresh starts 300 seconds plus stable 0–60 second per-account jitter before e
 
 `/billing?format=credits` is camelCase: qgrid reads `config.creditUsagePercent`, `config.currentPeriod`, and `config.prepaidBalance.val`. The observed period was seven days anchored at subscription start. Results are cached for 60 seconds; lookup failure fails open (`grok-quota.ts`, `grok-dispatcher.ts`, `docs/diagnosis/2026-10-16-grok-live-probe.md`).
 
+The response is protobuf JSON, which omits zero-valued scalars: a period without measurable usage arrives without `creditUsagePercent`, so qgrid reads the missing field as 0%. Observed on a Free account on 2026-10-21, where the field stayed absent even after a small request. The period is fixed (it existed before the token's first request and did not move after one), so token-window keepalive does not apply to Grok; xAI documents one weekly pool and no short rolling window.
+
+Dashboard usage (`QgridFrame.usage`) calls the dispatcher's `refreshUsage`, which runs the same prefetch with billing included even when no quota threshold is set, and waits up to 3 seconds for it. Without this, a token that never routed a request since boot reported no usage. The 60-second lookup cache bounds the extra xAI calls.
+
 D6 excludes accounts when `/settings.on_demand_enabled` is `true`; `null`, `false`, or absence allows routing. Billing does not carry this field. D7 selects eligible accounts through the shared `SmoothWeightedRoundRobin`, using `tokens.weight`; a valid cache-affinity token remains preferred. `QGRID_GROK_MAX_INFLIGHT_PER_TOKEN` optionally excludes accounts at the cap, while omission leaves Grok uncapped (`grok-quota.ts`, `grok-dispatcher.ts`, `packages/api/src/utils/providers/common/smooth-weighted-round-robin.ts`).
 
 ## Failure and failover rules

@@ -93,7 +93,8 @@ export type GrokCredentials = z.infer<typeof GrokCredentials>;
 /** `GET /billing?format=credits` (camelCase, no on-demand field; U0 item 3). */
 export const GrokBillingConfig = z.looseObject({
   config: z.looseObject({
-    creditUsagePercent: z.number(),
+    // Protobuf JSON omits zero-valued scalars: a period with no usage arrives without this field.
+    creditUsagePercent: z.number().default(0),
     currentPeriod: z.looseObject({
       type: z.string(),
       start: z.string(),

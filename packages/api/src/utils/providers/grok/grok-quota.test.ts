@@ -56,6 +56,24 @@ describe("readGrokBilling", () => {
     });
   });
 
+  it("reads an omitted creditUsagePercent as 0% for a period without usage", async () => {
+    const result = await readGrokBilling(credentials, {
+      fetch: fetchReturning({
+        config: {
+          currentPeriod: {
+            type: "USAGE_PERIOD_TYPE_WEEKLY",
+            start: "2026-10-15T00:00:00+00:00",
+            end: "2026-10-22T00:00:00+00:00",
+          },
+          onDemandCap: { val: 0 },
+          isUnifiedBillingUser: true,
+          prepaidBalance: { val: 0 },
+        },
+      }),
+    });
+    expect(result).toMatchObject({ kind: "ok", utilizationPct: 0, periodType: "USAGE_PERIOD_TYPE_WEEKLY" });
+  });
+
   it("returns lookup_failed on HTTP errors and unexpected shapes", async () => {
     expect(await readGrokBilling(credentials, { fetch: fetchReturning("nope", 500) })).toMatchObject({
       kind: "lookup_failed",

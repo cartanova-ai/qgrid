@@ -820,11 +820,21 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
    * Refreshes the 60 s settings/subscription/billing caches. Lookup failures fail open, so an
    * expired bearer is refreshed first: a lookup with it would fail and open every gate. A failed
    * refresh therefore takes the token out of selection (`refresh_failed`) instead of failing open.
+   * Billing is read only when a threshold or quota block gates the token, unless `includeBilling`.
    */
-  async prefetch(token: GrokTokenState, signal?: AbortSignal): Promise<void> {
+  async prefetch(
+    token: GrokTokenState,
+    signal?: AbortSignal,
+    includeBilling = false,
+  ): Promise<void> {
     if (!token.credentials || token.invalidReason || token.reauthRequired) return;
     let now = this.now();
     const tasks: Promise<void>[] = [];
+
+    const wantsBilling = () =>
+      includeBilling ||
+      token.quotaThreshold !== null ||
+      [...token.quotaBlocks.values()].some((until) => until > now);
 
     const stale = (entry: Cached<unknown> | undefined) =>
       !entry ||
@@ -832,9 +842,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       now - entry.fetchedAt >= GROK_LOOKUP_CACHE_TTL_MS;
 
     const billingDue = () =>
-      (token.quotaThreshold !== null || [...token.quotaBlocks.values()].some((u) => u > now)) &&
-      stale(token.billing) &&
-      now >= token.billingNotBefore;
+      wantsBilling() && stale(token.billing) && now >= token.billingNotBefore;
 
     if (!stale(token.settings) && !stale(token.subscription) && !billingDue()) return;
 
@@ -864,13 +872,20 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     if (stale(token.settings)) tasks.push(this.loadSettings(token));
 
     if (stale(token.subscription)) tasks.push(this.loadSubscription(token));
-    const blocked = [...token.quotaBlocks.values()].some((until) => until > now);
 
-    if ((token.quotaThreshold !== null || blocked) && stale(token.billing)) {
-      if (now >= token.billingNotBefore) tasks.push(this.loadBilling(token));
-    }
+    if (billingDue()) tasks.push(this.loadBilling(token));
 
     await Promise.all(tasks);
+  }
+
+  /**
+   * Usage view: refreshes a token's stale lookups, billing included, so the dashboard shows usage
+   * before any request has routed through the token. The 60 s cache bounds the xAI calls.
+   */
+  async refreshUsage(tokenId: number): Promise<void> {
+    const token = this.tokens.get(tokenId);
+
+    if (token) await this.prefetch(token, undefined, true);
   }
 
   /** Transient refresh failure for `presented`; ignored when the token already holds newer ones. */

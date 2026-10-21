@@ -91,6 +91,8 @@ export interface GrokTokenSink {
 /** Observability the concrete Grok dispatcher exposes beyond routing. */
 export interface GrokTokenStateSource {
   tokenStates(): GrokTokenStateSnapshot[];
+  /** Refreshes stale settings, subscription, and billing lookups for the usage view. */
+  refreshUsage(tokenId: number): Promise<void>;
 }
 
 /** Media, voice, and token-state reporting are optional capabilities of a Grok dispatcher. */

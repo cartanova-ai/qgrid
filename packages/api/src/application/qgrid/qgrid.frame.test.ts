@@ -1724,18 +1724,23 @@ describe("QgridFrame Grok registration and routing", () => {
     expect(result.text).toBe("grok says hi");
   });
 
-  it("usage reports cached Grok billing without keepalive", async () => {
+  it("usage refreshes Grok lookups first and reports billing without keepalive", async () => {
     const credentials = grokCredentials();
     findManyMock.mockResolvedValueOnce({
       rows: [{ ...tokenEntry, id: 9, provider: "grok", name: "grok-a", credentials }],
     });
+    let refreshed = false;
+    const refreshUsage = vi.fn(async () => {
+      refreshed = true;
+    });
     Object.assign(QgridDispatcher, {
       grokDispatcher: {
+        refreshUsage,
         tokenStates: () => [
           {
             id: 9,
             name: "grok-a",
-            lastBilling: {
+            lastBilling: refreshed && {
               utilizationPct: 42,
               periodType: "USAGE_PERIOD_TYPE_WEEKLY",
               periodEnd: "2030-01-08T00:00:00Z",
@@ -1759,6 +1764,7 @@ describe("QgridFrame Grok registration and routing", () => {
       zdrVideoExcluded: true,
       keepaliveApplicable: false,
     });
+    expect(refreshUsage).toHaveBeenCalledWith(9);
   });
 
   it("usage falls back to the stored tier before the first billing fetch", async () => {
