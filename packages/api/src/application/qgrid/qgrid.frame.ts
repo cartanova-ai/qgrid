@@ -70,11 +70,18 @@ import {
   openAICallbackRedirectUri,
   startOpenAICallbackRelay,
 } from "../../utils/providers/openai/openai-callback-relay";
+import { type OpenAIDispatcher } from "../../utils/providers/openai/openai-dispatcher";
 import {
   buildOpenAIAuthUrl,
   exchangeOpenAICode,
   generateOpenAIPKCE,
 } from "../../utils/providers/openai/openai-oauth";
+import {
+  OPENAI_REALTIME_DEFAULT_SPEECH_MODEL,
+  OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
+  OPENAI_REALTIME_DEFAULT_VOICE,
+} from "../../utils/providers/openai/openai-realtime-protocol";
+import { OpenAIVoiceInputError } from "../../utils/providers/openai/openai-voice-client";
 import {
   type FinishRunParams,
   MICRO_USD,
@@ -542,6 +549,25 @@ function grokVoice(): VoiceDispatcher {
   return { transcribe: transcribe.bind(dispatcher), speak: speak.bind(dispatcher) };
 }
 
+function openaiVoice(): OpenAIDispatcher {
+  const dispatcher = QgridDispatcher.openaiDispatcher;
+
+  if (!dispatcher) {
+    throw QgridDispatcher.startupState.openai === "failed"
+      ? new InternalServerErrorException(SD("qgrid.dispatcherFailed")("OpenAI"))
+      : new ServiceUnavailableException(SD("qgrid.dispatcherStarting")("OpenAI"));
+  }
+
+  return dispatcher;
+}
+
+type VoiceProvider = "grok" | "openai";
+
+/** Voice endpoints route by model prefix; no model means Grok, the original provider. */
+function voiceProvider(model: string | undefined): VoiceProvider {
+  return model?.startsWith("openai/") ? "openai" : "grok";
+}
+
 class TooManyRequestsException extends SoException {
   constructor(message: LocalizedString) {
     super(429, message);
@@ -578,6 +604,10 @@ function grokRateLimited(error: GrokRateLimitedError): TooManyRequestsException 
 function throwGrokCallerError(cause: unknown): never {
   if (cause instanceof GrokInvalidRequestError) {
     throw new BadRequestException(SD("qgrid.grokInvalidRequest")(cause.message));
+  }
+
+  if (cause instanceof OpenAIVoiceInputError) {
+    throw new BadRequestException(SD("qgrid.openaiVoiceInvalidRequest")(cause.message));
   }
 
   if (cause instanceof GrokContentPolicyError) {
@@ -655,15 +685,22 @@ function parseMediaInput<S extends z.ZodType>(schema: S, value: z.input<S>): z.i
 async function resolveGrokTokenSelection(
   tokenName: string | undefined,
 ): Promise<MediaTokenSelection> {
+  return resolveMediaTokenSelection("grok", tokenName);
+}
+
+async function resolveMediaTokenSelection(
+  provider: VoiceProvider,
+  tokenName: string | undefined,
+): Promise<MediaTokenSelection> {
   if (!tokenName) return {};
 
-  if (!tokenName.startsWith("grok/")) {
+  if (!tokenName.startsWith(`${provider}/`)) {
     throw new BadRequestException(
       SD("error.detail")("Token provider does not match model provider"),
     );
   }
 
-  const token = await TokenModel.findActiveByProviderAndName("A", "grok", tokenName);
+  const token = await TokenModel.findActiveByProviderAndName("A", provider, tokenName);
 
   if (!token) {
     throw new BadRequestException(SD("error.detail")(`Active token not found: ${tokenName}`));
@@ -678,9 +715,18 @@ interface RoutedModelId {
 }
 
 function routeModelId(model: string | undefined, fallback: string): RoutedModelId {
-  const id = model ? model.slice("grok/".length) : fallback;
+  return routeProviderModelId("grok", model, fallback);
+}
 
-  return { id, route: `grok/${id}` };
+function routeProviderModelId(
+  provider: VoiceProvider,
+  model: string | undefined,
+  fallback: string,
+): RoutedModelId {
+  const prefix = `${provider}/`;
+  const id = model ? model.slice(prefix.length) : fallback;
+
+  return { id, route: `${prefix}${id}` };
 }
 
 type GeneratedImage = GenerateImagesOutput["images"][number];
@@ -1011,6 +1057,159 @@ async function finishVideoRun(
 }
 
 const GROK_TTS_LOG_MODEL = "grok/tts";
+
+/**
+ * OpenAI realtime transcription (openai/<id>): /realtime/calls + sideband, the Codex shape. The
+ * server reports no language; `durationSec` is computed from the PCM qgrid sent.
+ */
+async function transcribeOpenAI(input: TranscribeInput): Promise<TranscribeOutput> {
+  const dispatcher = openaiVoice();
+  const selection = await resolveMediaTokenSelection("openai", input.tokenName);
+
+  const { id, route } = routeProviderModelId(
+    "openai",
+    input.model,
+    OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
+  );
+
+  const audio = new Uint8Array(Buffer.from(input.audio, "base64"));
+
+  const start = {
+    kind: "stt",
+    model: route,
+    prompt: `[audio ${input.mediaType} ${audio.byteLength} bytes]`,
+    projectName: input.projectName,
+    logger: input.logger,
+  } as const;
+
+  return runMediaEndpoint(start, async (signal, requestLogId) => {
+    const dispatched = await dispatcher.transcribe({
+      audio,
+      mediaType: input.mediaType,
+      model: id,
+      language: input.language,
+      prompt: input.prompt,
+      signal,
+      ...selection,
+    });
+
+    const { text, durationSec, callId, transport, fallbackReason } = dispatched.result;
+
+    const output: TranscribeOutput = {
+      text,
+      durationSec,
+      model: route,
+      tokenName: dispatched.tokenName,
+    };
+
+    if (input.language) output.language = input.language;
+
+    if (requestLogId !== undefined) output.requestLogId = requestLogId;
+
+    const log: MediaRunLog = {
+      tokenName: output.tokenName,
+      response: output.text,
+      steps: [
+        {
+          toolCallId: "transcription:0",
+          args: {
+            kind: "stt",
+            model: route,
+            transport,
+            fallbackReason,
+            mediaType: input.mediaType,
+            audioBytes: audio.byteLength,
+            language: input.language,
+            prompt: input.prompt,
+            durationSec,
+          },
+          result: JSON.stringify({ text, durationSec, callId }),
+        },
+      ],
+    };
+
+    return { output, log };
+  });
+}
+
+/**
+ * OpenAI realtime speech (openai/<id>): a conversational realtime model repeating the text over
+ * the direct realtime socket. Output is PCM16 24 kHz, wrapped as WAV unless `format` is pcm.
+ */
+async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
+  const dispatcher = openaiVoice();
+  const selection = await resolveMediaTokenSelection("openai", input.tokenName);
+
+  const { id, route } = routeProviderModelId(
+    "openai",
+    input.model,
+    OPENAI_REALTIME_DEFAULT_SPEECH_MODEL,
+  );
+
+  if (input.format !== undefined && input.format !== "wav" && input.format !== "pcm") {
+    throw new BadRequestException(
+      SD("qgrid.openaiVoiceInvalidRequest")(
+        `format ${input.format} is not available; realtime speech returns wav or pcm`,
+      ),
+    );
+  }
+
+  const request = {
+    text: input.text,
+    model: id,
+    voice: input.voice ?? OPENAI_REALTIME_DEFAULT_VOICE,
+    instructions: input.instructions,
+    format: input.format,
+  };
+
+  const start = {
+    kind: "tts",
+    model: route,
+    prompt: input.text,
+    projectName: input.projectName,
+    logger: input.logger,
+  } as const;
+
+  return runMediaEndpoint(start, async (signal, requestLogId) => {
+    const dispatched = await dispatcher.speak({ ...request, signal, ...selection });
+    const { audio, mediaType, transcript, usage } = dispatched.result;
+
+    const output: SpeakOutput = {
+      audio: Buffer.from(audio).toString("base64"),
+      mimeType: mediaType,
+      tokenName: dispatched.tokenName,
+    };
+
+    if (requestLogId !== undefined) output.requestLogId = requestLogId;
+
+    const log: MediaRunLog = {
+      tokenName: output.tokenName,
+      response: `[audio ${mediaType} ${audio.byteLength} bytes]`,
+      steps: [
+        {
+          toolCallId: "speech:0",
+          args: {
+            kind: "tts",
+            model: route,
+            transport: "realtime-ws",
+            voice: request.voice,
+            format: request.format ?? "wav",
+            instructions: input.instructions,
+            characters: input.text.length,
+          },
+          result: JSON.stringify({
+            mimeType: mediaType,
+            audioBytes: audio.byteLength,
+            transcript,
+            usage,
+          }),
+        },
+      ],
+    };
+
+    return { output, log };
+  });
+}
 
 class QgridFrameClass extends BaseFrameClass {
   constructor() {
@@ -1957,6 +2156,9 @@ class QgridFrameClass extends BaseFrameClass {
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async transcribe(params: TranscribeInput): Promise<TranscribeOutput> {
     const input = parseMediaInput(TranscribeInput, params);
+    const provider = voiceProvider(input.model);
+
+    if (provider === "openai") return transcribeOpenAI(input);
     const voice = grokVoice();
     const selection = await resolveGrokTokenSelection(input.tokenName);
     const { id, route } = routeModelId(input.model, GROK_STT_DEFAULT_MODEL);
@@ -2021,6 +2223,8 @@ class QgridFrameClass extends BaseFrameClass {
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async speak(params: SpeakInput): Promise<SpeakOutput> {
     const input = parseMediaInput(SpeakInput, params);
+
+    if (voiceProvider(input.model) === "openai") return speakOpenAI(input);
     const voice = grokVoice();
     const selection = await resolveGrokTokenSelection(input.tokenName);
     const route = input.model ?? GROK_TTS_LOG_MODEL;

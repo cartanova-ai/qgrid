@@ -502,8 +502,13 @@ export const VideoStatusOutput = z.object({
 
 export type VideoStatusOutput = z.infer<typeof VideoStatusOutput>;
 
+// Voice endpoints accept Grok and OpenAI ids; the frame routes by prefix.
+const VoiceModelId = z
+  .string()
+  .regex(/^(grok|openai)\/[A-Za-z0-9._-]+$/, "model must be grok/<id> or openai/<id>");
+
 export const TranscribeInput = z.object({
-  model: GrokModelId.optional(),
+  model: VoiceModelId.optional(),
   // Base64 audio bytes (no data: prefix), at most MEDIA_MAX_INLINE_BYTES decoded.
   audio: z
     .string()
@@ -515,6 +520,11 @@ export const TranscribeInput = z.object({
     ),
   mediaType: z.string().regex(/^audio\/[A-Za-z0-9.+-]+$/, "mediaType must be audio/*"),
   language: z.string().min(1).max(16).optional(),
+  // OpenAI realtime transcription only: domain vocabulary or style hint for the model.
+  // Honored by gpt-4o-mini-transcribe, gpt-4o-transcribe, gpt-transcribe, gpt-live-transcribe.
+  // gpt-realtime-whisper rejects it (400 before the upstream call); whisper-1 accepts it but the
+  // upstream ignores it, so spelling is not steered.
+  prompt: z.string().min(1).max(2_000).optional(),
   ...MediaCallOptions,
 });
 
@@ -532,11 +542,13 @@ export const TranscribeOutput = z.object({
 export type TranscribeOutput = z.infer<typeof TranscribeOutput>;
 
 export const SpeakInput = z.object({
-  model: GrokModelId.optional(),
+  model: VoiceModelId.optional(),
   text: z.string().min(1).max(15_000),
   voice: z.string().min(1).max(64).optional(),
   language: z.string().min(1).max(16).optional(),
   format: z.enum(["mp3", "wav", "pcm", "mulaw", "alaw"]).optional(),
+  // OpenAI realtime speech only: style guidance appended to the verbatim-repeat instruction.
+  instructions: z.string().min(1).max(2_000).optional(),
   ...MediaCallOptions,
 });
 

@@ -26,10 +26,22 @@ import {
   type OpenAIResponseItem,
   type OpenAIResponsesOptions,
 } from "./openai-backend-protocol";
-import { OpenAIDirectClient, type OpenAIDirectClientOptions } from "./openai-direct-client";
+import {
+  OpenAIDirectClient,
+  type OpenAIDirectClientOptions,
+  type OpenAIDirectCredentials,
+} from "./openai-direct-client";
 import { readOpenAIQuotaUsage, type OpenAIRateLimitsWithMeta } from "./openai-quota";
 import { handleChatgptAuthTokensRefresh } from "./openai-refresh";
 import { type OpenAITransportKind, resolveOpenAITransportKind } from "./openai-transport-config";
+import {
+  isUnauthorizedRealtimeError,
+  type OpenAISpeakRequest,
+  type OpenAISpeechResult,
+  type OpenAITranscribeRequest,
+  type OpenAITranscription,
+  OpenAIVoiceClient,
+} from "./openai-voice-client";
 
 const logger = getLogger(["qgrid", "openai-dispatcher"]);
 
@@ -114,6 +126,19 @@ type ClientEntry = {
 export interface OpenAIDispatcherDependencies {
   clientFactory?: OpenAIDirectClientFactory;
   fetch?: typeof fetch;
+  voiceClient?: OpenAIVoiceClient;
+}
+
+/** Realtime voice call with the media-endpoint token selection contract. */
+export type OpenAIVoiceSelection = {
+  preferredTokenId?: number;
+  requirePreferredToken?: boolean;
+};
+
+export interface OpenAIVoiceDispatchResult<T> {
+  result: T;
+  tokenId: number;
+  tokenName: string;
 }
 
 function abortError(signal: AbortSignal): Error {
@@ -291,6 +316,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
   readonly selector = new SmoothWeightedRoundRobin();
   readonly clientFactory: OpenAIDirectClientFactory;
   readonly fetchImpl: typeof fetch;
+  readonly voiceClient: OpenAIVoiceClient;
   readonly quotaBlocked = new Set<number>();
   inFlight = 0;
 
@@ -302,6 +328,75 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     this.clientFactory =
       dependencies.clientFactory ?? ((options) => new OpenAIDirectClient(options));
     this.fetchImpl = dependencies.fetch ?? fetch;
+    this.voiceClient = dependencies.voiceClient ?? new OpenAIVoiceClient({ fetch: this.fetchImpl });
+  }
+
+  // ---- Realtime voice (speech-to-text, text-to-speech) ----------------------
+
+  async transcribe(
+    request: OpenAITranscribeRequest & OpenAIVoiceSelection,
+  ): Promise<OpenAIVoiceDispatchResult<OpenAITranscription>> {
+    const { preferredTokenId, requirePreferredToken, ...voiceRequest } = request;
+
+    return this.runVoice(
+      { preferredTokenId, requirePreferredToken },
+      request.signal,
+      (credentials) => this.voiceClient.transcribe(credentials, voiceRequest),
+    );
+  }
+
+  async speak(
+    request: OpenAISpeakRequest & OpenAIVoiceSelection,
+  ): Promise<OpenAIVoiceDispatchResult<OpenAISpeechResult>> {
+    const { preferredTokenId, requirePreferredToken, ...voiceRequest } = request;
+
+    return this.runVoice(
+      { preferredTokenId, requirePreferredToken },
+      request.signal,
+      (credentials) => this.voiceClient.speak(credentials, voiceRequest),
+    );
+  }
+
+  /**
+   * Selects a token, runs the realtime call, and on one 401 refreshes that token's credentials and
+   * retries once (as the Responses transports do). Any other failure propagates: a realtime
+   * session that failed may already have consumed audio tokens.
+   */
+  async runVoice<T>(
+    selection: OpenAIVoiceSelection,
+    signal: AbortSignal | undefined,
+    call: (credentials: OpenAIDirectCredentials) => Promise<T>,
+  ): Promise<OpenAIVoiceDispatchResult<T>> {
+    const active = signal ?? new AbortController().signal;
+
+    const selected = await this.selectToken(
+      selection.preferredTokenId,
+      selection.requirePreferredToken ?? false,
+      active,
+    );
+
+    const { tokenId, metadata } = selected;
+
+    let credentials: OpenAIDirectCredentials = {
+      accessToken: metadata.credentials.accessToken,
+      accountId: metadata.credentials.accountId,
+    };
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const result = await call(credentials);
+        this.invalidateRateLimitsCache(tokenId);
+
+        return { result, tokenId, tokenName: metadata.name };
+      } catch (error) {
+        if (attempt === 0 && error instanceof Error && isUnauthorizedRealtimeError(error)) {
+          credentials = await this.refreshCredentials(tokenId);
+          continue;
+        }
+
+        throw error;
+      }
+    }
   }
 
   async start(): Promise<void> {
