@@ -143,26 +143,19 @@ function formatPeriodType(periodType: string | null | undefined): string | null 
   return label && label !== "unspecified" ? label : null;
 }
 
-/** Grok 등 provider별 상태 표시(on-demand 제외, ZDR 비디오 제외, keepalive 미적용, 과금 주기). */
+/** Grok 등 provider별 상태 표시(on-demand 제외, 과금 주기, 티어). */
 export function UsageStateNotes({
   usage,
 }: {
   usage: {
     onDemandExcluded?: boolean;
-    zdrVideoExcluded?: boolean;
-    keepaliveApplicable?: boolean;
     periodType?: string | null;
     tier?: string | null;
   };
 }) {
   const period = formatPeriodType(usage.periodType);
 
-  const hasNotes =
-    usage.onDemandExcluded === true ||
-    usage.zdrVideoExcluded === true ||
-    usage.keepaliveApplicable === false ||
-    period !== null ||
-    !!usage.tier;
+  const hasNotes = usage.onDemandExcluded === true || period !== null || !!usage.tier;
 
   if (!hasNotes) return null;
 
@@ -176,27 +169,11 @@ export function UsageStateNotes({
           excluded: on-demand billing enabled
         </span>
       )}
-      {usage.zdrVideoExcluded === true && (
-        <span
-          className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700"
-          title="xAI에서 data-retention opt-out(Zero Data Retention)을 끄면 비디오가 다시 라우팅됩니다"
-        >
-          video unavailable: zero data retention
-        </span>
-      )}
       {period !== null && (
         <span className="px-1.5 py-0.5 rounded-full bg-sand-100 text-sand-600">{period}</span>
       )}
       {usage.tier && (
         <span className="px-1.5 py-0.5 rounded-full bg-sand-100 text-sand-600">{usage.tier}</span>
-      )}
-      {usage.keepaliveApplicable === false && (
-        <span
-          className="px-1.5 py-0.5 rounded-full bg-sand-100 text-sand-400"
-          title="이 provider는 토큰 윈도 keepalive 대상이 아닙니다"
-        >
-          keepalive n/a
-        </span>
       )}
     </div>
   );

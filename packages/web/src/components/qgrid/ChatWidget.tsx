@@ -78,6 +78,11 @@ const MODEL_PRESET_GROUPS: { label: string; models: string[] }[] = [
       "anthropic/claude-haiku-4-5",
     ],
   },
+  {
+    label: "Grok",
+    // ai-sdk QgridGrokModel 의 구독 카탈로그 id(grok-4.7 이 기본). Grok 4.6/4.7 은 Build 모델로 라우팅된다.
+    models: ["grok/grok-4.7", "grok/grok-4.7-build-fast", "grok/grok-4.6", "grok/grok-4.5"],
+  },
 ];
 
 const EFFORT_PRESETS = ["low", "medium", "high"];
@@ -105,6 +110,7 @@ type ChatMessage =
 const PROVIDER_LABELS = new Map([
   ["openai", "OpenAI"],
   ["anthropic", "Anthropic"],
+  ["grok", "Grok"],
 ]);
 
 // dispatcher 원문 에러(NO_OPENAI_WORKERS 등)와, 토큰 0개라 부팅이 끝나지 않는 환경의
