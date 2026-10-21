@@ -360,7 +360,7 @@ function HeaderBar({ data }: { data: RequestLog }) {
           fallback ×{data.fallback_count}
         </span>
       )}
-      {!isRunning && data.status !== "succeeded" && (
+      {data.status !== "succeeded" && (
         <span
           className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium uppercase ${STATUS_STYLE.get(data.status) ?? "bg-sand-100 text-sand-500"}`}
         >
@@ -1324,7 +1324,16 @@ function ResponseTypePanel({ id }: { id: number }) {
 }
 
 function RequestDetail({ id }: { id: number }) {
-  const { data, isLoading, error, isError } = RequestLogService.useRequestLog("A", id);
+  const { data, isLoading, error, isError, refresh } = RequestLogService.useRequestLog("A", id);
+  const isRunning = data?.status === "running";
+
+  // Token, serving model, and TTFT are recorded while the request runs; poll until it finishes.
+  useEffect(() => {
+    if (!isRunning) return;
+    const timer = setInterval(() => void refresh(), 3_000);
+
+    return () => clearInterval(timer);
+  }, [isRunning, refresh]);
 
   const {
     data: stepsData,

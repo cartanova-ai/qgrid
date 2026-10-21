@@ -456,6 +456,14 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     const startedAt = Date.now();
     let firstDeltaAt: number | undefined;
     let text = "";
+    req.onProgress?.({ tokenName: selection.metadata.name });
+
+    const markFirstDelta = () => {
+      if (firstDeltaAt !== undefined) return;
+      firstDeltaAt = Date.now();
+      req.onProgress?.({ ttftMs: firstDeltaAt - startedAt });
+    };
+
     let outputMessageAccepted = false;
     const messagePhases = new Map<string, string>();
     const streamedMessageIds = new Set<string>();
@@ -528,7 +536,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             streamedMessageIds.add(event.itemId);
           }
 
-          firstDeltaAt ??= Date.now();
+          markFirstDelta();
           text += event.text;
           onDelta?.(event.text);
         } else if (
@@ -562,7 +570,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             (phase !== "commentary" || outputMessageAccepted) &&
             messageText
           ) {
-            firstDeltaAt ??= Date.now();
+            markFirstDelta();
             text += messageText;
             onDelta?.(messageText);
             streamedMessageIds.add(itemId);

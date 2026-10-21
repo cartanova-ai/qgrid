@@ -276,6 +276,7 @@ export class AnthropicDispatcher implements ProviderDispatcher {
       const token = await this.selectToken(model, req.preferredTokenId);
 
       if (!token) throw new Error("No anthropic tokens available");
+      req.onProgress?.({ tokenName: token.name, model });
 
       // 만료 직전에 갱신하되 실패하면 기존 토큰으로 진행한다.
       let accessToken = token.credentials.accessToken;
@@ -318,6 +319,7 @@ export class AnthropicDispatcher implements ProviderDispatcher {
           input: req.coldInput,
           abortSignal: req.abortSignal,
           includePartialMessages: opts?.includePartialMessages,
+          onTtft: req.onProgress ? (ttftMs) => req.onProgress?.({ ttftMs }) : undefined,
         },
         onDelta,
       );

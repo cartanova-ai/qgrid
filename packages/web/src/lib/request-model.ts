@@ -15,7 +15,15 @@ export function requestModelDisplay({
   servedModel,
   imageCostMethod,
 }: RequestModelFields): RequestModelDisplay {
-  if (status === "running") return { label: "실행 중" };
+  // A running row already carries the token and serving model recorded as progress.
+  if (status === "running") {
+    return {
+      label:
+        requestedModel && servedModel && requestedModel !== servedModel
+          ? `${requestedModel} → ${servedModel}`
+          : (servedModel ?? requestedModel ?? "—"),
+    };
+  }
 
   const loggedImageModel = /^(?:assumed|estimated):(gpt-image-[^:]+):/.exec(
     imageCostMethod ?? "",

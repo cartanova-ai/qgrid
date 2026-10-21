@@ -1,7 +1,8 @@
 import { getLogger } from "@logtape/logtape";
 import { z } from "zod";
 
-import { RequestLogModel } from "../request-log/request-log.model";
+import { type GenerateProgress } from "../../utils/providers/common/provider-dispatcher";
+import { RequestLogModel, type RunProgressUpdate } from "../request-log/request-log.model";
 import {
   estimateImageGenerationCostMicroUsd,
   imageGenerationCostMethod,
@@ -123,6 +124,44 @@ export async function beforeQuery(args: QueryInput): Promise<{
   }
 
   return { requestLogId, stepIndex };
+}
+
+/**
+ * Returns a dispatcher progress callback that writes the token, serving model, and TTFT onto the
+ * running parent row as they become known. Writes run in order, and a failure only logs: progress
+ * must never fail the request. afterQuery's final values replace these.
+ */
+export function runProgressRecorder(
+  requestLogId: number,
+  stepIndex: number,
+  args: QueryInput,
+): (progress: GenerateProgress) => void {
+  let pending = Promise.resolve();
+
+  return (progress) => {
+    const update: RunProgressUpdate = {};
+
+    if (progress.tokenName) update.token_name = progress.tokenName;
+
+    const modelName = withProviderPrefix(args.model, progress.model);
+
+    if (modelName) update.model_name = modelName;
+
+    // The run's TTFT is its first generate step's; a continued tool run keeps the stored value.
+    if (progress.ttftMs !== undefined && stepIndex === 0) update.ttft_ms = progress.ttftMs;
+
+    if (Object.keys(update).length === 0) return;
+
+    pending = pending.then(async () => {
+      try {
+        await RequestLogModel.recordRunProgress(requestLogId, update);
+      } catch (e) {
+        logger.warn(
+          `run progress update failed for ${requestLogId}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    });
+  };
 }
 
 async function appendGenerateStep(

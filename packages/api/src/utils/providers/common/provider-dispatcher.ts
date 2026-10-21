@@ -127,6 +127,16 @@ export interface GenerateRequest {
   providerOptions?: { [key: string]: JsonValue | undefined };
   // Native tools for providers that accept them on the wire (Grok).
   tools?: ToolDefinition[];
+  // Reports run facts as soon as they are known, before the turn completes. Each call carries only
+  // the fields that just became known; a failover reports the next token again.
+  onProgress?: (progress: GenerateProgress) => void;
+}
+
+export interface GenerateProgress {
+  tokenName?: string;
+  /** Serving model without the provider prefix. */
+  model?: string;
+  ttftMs?: number;
 }
 
 export interface GenerateResult {

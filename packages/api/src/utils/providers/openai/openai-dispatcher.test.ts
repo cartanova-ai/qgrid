@@ -385,6 +385,24 @@ describe("OpenAIDispatcher direct runtime", () => {
     expect(complete).toHaveBeenCalledWith(expect.objectContaining({ text: "ab" }));
   });
 
+  it("reports the selected token and the first-delta TTFT as progress before completing", async () => {
+    const d = dispatcher(() =>
+      events(
+        { type: "text-delta", text: "a" },
+        { type: "text-delta", text: "b" },
+        { type: "completed", responseId: "r" },
+      ),
+    );
+    await d.onTokenAdded(1, "one", credentials);
+    const progress = vi.fn();
+
+    await d.generate(request({ onProgress: progress }));
+
+    expect(progress).toHaveBeenNthCalledWith(1, { tokenName: "one" });
+    expect(progress).toHaveBeenNthCalledWith(2, { ttftMs: expect.any(Number) });
+    expect(progress).toHaveBeenCalledTimes(2);
+  });
+
   it("still rejects an upstream failure after accepting a completed output message", async () => {
     const failure = new Error("upstream failed after tool request");
     const d = dispatcher(() => events(

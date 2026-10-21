@@ -166,6 +166,7 @@ vi.mock("./qgrid-run-lifecycle", () => ({
   afterQuery: afterQueryMock,
   finishRunWithError: finishRunWithErrorMock,
   finishRunAborted: finishRunAbortedMock,
+  runProgressRecorder: () => () => {},
 }));
 
 const tokenEntry = {

@@ -1773,6 +1773,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
   ): Promise<GenerateResult> {
     const { req, model } = context;
     const startedAt = this.now();
+    req.onProgress?.({ tokenName: token.name });
 
     const headers = buildGrokChatHeaders({
       bearer: credentials.accessToken,
@@ -1826,10 +1827,18 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       state.upstreamStarted = true;
 
       if (event.type === "created") {
-        if (event.model) servingModel = event.model;
+        if (event.model) {
+          servingModel = event.model;
+          req.onProgress?.({ model: event.model });
+        }
       } else if (event.type === "text-delta") {
         if (outputMessageAccepted) continue;
-        firstDeltaAt ??= this.now();
+
+        if (firstDeltaAt === undefined) {
+          firstDeltaAt = this.now();
+          req.onProgress?.({ ttftMs: firstDeltaAt - startedAt });
+        }
+
         text += event.text;
 
         if (context.onDelta) {

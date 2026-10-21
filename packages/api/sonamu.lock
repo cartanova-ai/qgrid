@@ -9,7 +9,7 @@
   },
   {
     "path": "api/src/application/qgrid/qgrid.frame.ts",
-    "checksum": "e2a42acf2aecea60dd1be479b8248faccf8a0eb2"
+    "checksum": "b21e1a972417d8d15dabd3edf756951df1199918"
   },
   {
     "path": "api/src/application/qgrid/qgrid.types.ts",
@@ -37,7 +37,7 @@
   },
   {
     "path": "api/src/application/request-log/request-log.model.ts",
-    "checksum": "554574423635d03a1d1585739e80bd38a6ec9e4e"
+    "checksum": "1f4b525274b7ee135ab010c4e9327192def1265e"
   },
   {
     "path": "api/src/application/request-log/request-log.types.ts",

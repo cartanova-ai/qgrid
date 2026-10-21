@@ -1,4 +1,5 @@
 import { Link, useNavigate } from "@tanstack/react-router";
+import { useEffect } from "react";
 import ChevronLeftIcon from "~icons/lucide/chevron-left";
 import ChevronRightIcon from "~icons/lucide/chevron-right";
 import RefreshIcon from "~icons/lucide/refresh-cw";
@@ -36,6 +37,8 @@ function formatDuration(ms: number): string {
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
+const RUNNING_REFRESH_MS = 3_000;
+
 function RequestModel({
   status,
   requestedModel,
@@ -50,10 +53,15 @@ function RequestModel({
   fallbackCount: number | null;
 }) {
   if (status === "running") {
+    const running = requestModelDisplay({ status, requestedModel, servedModel, imageCostMethod });
+
     return (
-      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 font-medium whitespace-nowrap">
-        실행 중
-      </span>
+      <>
+        <span className="text-xs text-sand-500">{running.label}</span>
+        <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 font-medium whitespace-nowrap">
+          실행 중
+        </span>
+      </>
     );
   }
 
@@ -177,6 +185,19 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
 
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
+  const hasRunning = rows.some((row) => row.status === "running");
+
+  // Running rows gain their token, serving model, and TTFT mid-run; poll until they finish.
+  useEffect(() => {
+    if (!hasRunning) return;
+
+    const timer = setInterval(() => {
+      void refresh();
+      void refreshCost();
+    }, RUNNING_REFRESH_MS);
+
+    return () => clearInterval(timer);
+  }, [hasRunning, refresh, refreshCost]);
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
   const updateFilter = (patch: Partial<LogsSearch>) => {

@@ -51,6 +51,7 @@ import { buildToolCallSchema } from "./tool-emulation-schema";
 export type InternalQueryInput = QueryInput & {
   preferredTokenId?: number;
   requirePreferredToken?: boolean;
+  onProgress?: GenerateRequest["onProgress"];
 };
 
 // qgrid 상위가 provider 에 요구하는 실행 계약. 스트리밍은 공통 ProviderDispatcher 에 아직 없어서
@@ -227,6 +228,7 @@ export class QgridDispatcherClass {
         preferredTokenId: input.preferredTokenId,
         imageGeneration: input.imageGeneration,
         imageGenerationOptions: input.imageGenerationOptions,
+        onProgress: input.onProgress,
       });
 
       this.recordCompleted(provider, result.tokenName);
@@ -303,6 +305,7 @@ export class QgridDispatcherClass {
           abortSignal,
           imageGeneration: input.imageGeneration,
           imageGenerationOptions: input.imageGenerationOptions,
+          onProgress: input.onProgress,
         },
         {
           onDelta: emitDelta,
@@ -393,6 +396,7 @@ function buildDirectRequest(
     abortSignal,
     imageGeneration: input.imageGeneration,
     imageGenerationOptions: input.imageGenerationOptions,
+    onProgress: input.onProgress,
   };
 
   // Opaque namespaces; the Grok dispatcher reads `xai`, OpenAI ignores it.

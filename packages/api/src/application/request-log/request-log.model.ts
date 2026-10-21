@@ -109,6 +109,8 @@ export interface FinishRunParams {
 
 type FinishRunUpdate = Partial<FinishRunParams> & { id: number; ttft_ms?: number };
 
+export type RunProgressUpdate = { token_name?: string; model_name?: string; ttft_ms?: number };
+
 /** Copies `key` only when the caller supplied it, so omitted columns stay untouched. */
 function copyDefined<T, K extends keyof T>(target: Partial<T>, source: T, key: K): void {
   if (source[key] !== undefined) target[key] = source[key];
@@ -652,6 +654,15 @@ class RequestLogModelClass extends BaseModelClass<
 
       return ids[0]!;
     });
+  }
+
+  /** Writes facts known mid-run onto a parent that is still running; finished runs stay as is. */
+  async recordRunProgress(requestLogId: number, progress: RunProgressUpdate): Promise<void> {
+    await this.getPuri("w")
+      .from("request_logs")
+      .where("id", requestLogId)
+      .where("status", "running")
+      .update(progress);
   }
 
   async finishRun(requestLogId: number, params: FinishRunParams): Promise<void> {

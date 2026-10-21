@@ -31,6 +31,8 @@ A tool-result follow-up carries the returned `runContext` and tool results. The 
 
 Errors and client aborts finish the same parent as `error` or `aborted` and roll up usage, cost, fallback count, and cost provenance from every generate step that completed before termination. SSE client closure is authoritative regardless of the provider's abort error text; if a provider result arrives after closure, record its step usage and then leave the parent `aborted` without publishing `done`.
 
+While the provider runs, dispatchers report facts as soon as they are known through `GenerateRequest.onProgress`, and `runProgressRecorder` writes them onto the parent only while it is still `running` (`RequestLogModel.recordRunProgress`): `token_name` after token selection (again on failover), `model_name` when the provider names the serving model (Grok `response.created`; Anthropic records the requested model at selection; OpenAI reports its model only at completion), and `ttft_ms` at the first delta of the run's first step. Writes are ordered and best-effort: a failure only logs. Usage, tokens, cost, and duration arrive with the final usage and stay at their defaults until then. The dashboard shows running rows with the requested → serving model and a running badge, and the list and detail pages poll every 3 seconds while a run is in progress.
+
 Creating the initial `running` row is a precondition for a logger-enabled provider call. Once the provider has succeeded, however, a failure while appending or finalizing logs is best-effort: report the logging error and preserve the generated text/stream result instead of making logging failure replace a successful model result.
 
 Stale cleanup must target old runs that still have unresolved tool-call steps; a long provider request with no pending tool call is not stale merely because its parent row is still running. Cleanup and arriving tool follow-ups share a PostgreSQL transaction advisory lock per request-log id and recheck the unresolved step after acquiring it, so cleanup cannot overwrite an in-flight follow-up across server processes.
@@ -128,6 +130,9 @@ TTFT is tracked by wrapping the first provider delta:
 
 - OpenAI: first `response.output_text.delta` from the direct Responses stream.
 - Anthropic: first text or structured partial JSON delta.
+- Grok: first text delta of the chat attempt.
+
+The same first-delta value is reported as run progress, so a running row shows TTFT before the response completes; the final value replaces it.
 
 If missing, qgrid maps TTFT to `0` in `QueryOutput` and nullable/optional places as appropriate.
 

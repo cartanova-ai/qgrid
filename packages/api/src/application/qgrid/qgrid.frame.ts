@@ -105,6 +105,7 @@ import {
   beforeQuery,
   finishRunAborted,
   finishRunWithError,
+  runProgressRecorder,
 } from "./qgrid-run-lifecycle";
 import {
   buildAndValidateStrictOutputSchema,
@@ -1036,7 +1037,13 @@ class QgridFrameClass extends BaseFrameClass {
       let result: QueryOutput;
 
       try {
-        result = await QgridDispatcher.query(resolvedArgs, disconnect.signal);
+        result = await QgridDispatcher.query(
+          {
+            ...resolvedArgs,
+            onProgress: runProgressRecorder(requestLogId, stepIndex, resolvedArgs),
+          },
+          disconnect.signal,
+        );
       } catch (e) {
         const completedDriver = completedDriverFromImageFailure(e, resolvedArgs.serviceTier);
 
@@ -1142,7 +1149,12 @@ class QgridFrameClass extends BaseFrameClass {
 
     try {
       await QgridDispatcher.queryStream(
-        args,
+        runInfo
+          ? {
+              ...args,
+              onProgress: runProgressRecorder(runInfo.requestLogId, runInfo.stepIndex, args),
+            }
+          : args,
         {
           onDelta: (text) => {
             if (!clientClosed && !sse.closed) sse.publish("delta", { text });

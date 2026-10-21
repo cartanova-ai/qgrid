@@ -33,7 +33,7 @@ describe("requestModelDisplay", () => {
     });
   });
 
-  it("preserves ordinary requests and running state", () => {
+  it("preserves ordinary requests and shows the recorded models of a running request", () => {
     expect(requestModelDisplay(base)).toEqual({
       label: "openai/gpt-5.6-luna",
     });
@@ -41,9 +41,13 @@ describe("requestModelDisplay", () => {
       requestModelDisplay({
         ...base,
         status: "running",
-        imageCostMethod: "assumed:gpt-image-2:medium:1536x1024:png",
+        requestedModel: "grok/grok-4.7",
+        servedModel: "grok/grok-4.7-build",
       }),
-    ).toEqual({ label: "실행 중" });
+    ).toEqual({ label: "grok/grok-4.7 → grok/grok-4.7-build" });
+    expect(
+      requestModelDisplay({ ...base, status: "running", servedModel: null }),
+    ).toEqual({ label: "openai/gpt-5.6-luna" });
   });
 
   it("does not repeat the model when an image request has no separate requested model", () => {

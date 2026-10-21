@@ -875,6 +875,20 @@ describe("GrokDispatcher image generation tool", () => {
     ]);
   });
 
+  it("reports the token, serving model, and TTFT as progress", async () => {
+    const h = createHarness();
+    h.add(1);
+    const progress = vi.fn();
+
+    await h.dispatcher.generate(request({ onProgress: progress }));
+
+    expect(progress.mock.calls.map(([update]) => update)).toEqual([
+      { tokenName: "t1" },
+      { model: "grok-4.7" },
+      { ttftMs: expect.any(Number) },
+    ]);
+  });
+
   it("sends no image tool without imageGeneration", async () => {
     const h = createHarness();
     h.add(1);
