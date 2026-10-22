@@ -3,7 +3,7 @@
   "private": true,
   "devDependencies": {
     "@oxlint/plugins": "1.88.0",
-    "@types/node": "^25",
+    "@types/node": "^26",
     "@vitest/coverage-v8": "^4.1.10",
     "oxfmt": "^0.43.0",
     "oxlint": "^1.88.0",

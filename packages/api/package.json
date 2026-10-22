@@ -39,7 +39,7 @@
   "devDependencies": {
     "@iconify-json/lucide": "catalog:",
     "@sonamu-kit/cli": "^0.1.0",
-    "@types/node": "25.0.7",
+    "@types/node": "26.6.5",
     "@types/pg": "catalog:",
     "@types/pngjs": "^6.0.5",
     "@types/ws": "8.18.1",
