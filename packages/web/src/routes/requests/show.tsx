@@ -179,7 +179,10 @@ function ImageAwareContent({ text, markdown }: { text: string; markdown?: boolea
       {viewerSrc && (
         <div
           className="fixed inset-0 z-50 bg-black/70 p-4 flex items-center justify-center"
-          onClick={() => setViewerSrc(null)}
+          onClick={(e) => {
+            // Only a click on the backdrop closes; clicks on the image keep the viewer open.
+            if (e.target === e.currentTarget) setViewerSrc(null);
+          }}
         >
           <button
             type="button"
@@ -193,7 +196,6 @@ function ImageAwareContent({ text, markdown }: { text: string; markdown?: boolea
             src={viewerSrc}
             alt="generated preview"
             className="max-h-full max-w-full object-contain rounded-md bg-white"
-            onClick={(e) => e.stopPropagation()}
           />
         </div>
       )}
@@ -1329,8 +1331,7 @@ function RequestDetail({ id }: { id: number }) {
 
   // Token, serving model, and TTFT are recorded while the request runs; poll until it finishes.
   useEffect(() => {
-    if (!isRunning) return;
-    const timer = setInterval(() => void refresh(), 3_000);
+    const timer = isRunning ? setInterval(() => void refresh(), 3_000) : undefined;
 
     return () => clearInterval(timer);
   }, [isRunning, refresh]);

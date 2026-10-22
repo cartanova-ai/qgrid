@@ -249,14 +249,16 @@ export function usdFromGrokTicks(ticks: number): number {
   return ticks / GROK_TICKS_PER_USD;
 }
 
-function grokTokenCosts(input: number, cached: number, output: number): ModelCosts {
-  // ticks per token -> USD per 1M tokens.
-  const perMillion = (ticks: number) => (ticks * 1_000_000) / GROK_TICKS_PER_USD;
+// ticks per token -> USD per 1M tokens.
+function usdPerMillionFromGrokTicks(ticks: number): number {
+  return (ticks * 1_000_000) / GROK_TICKS_PER_USD;
+}
 
+function grokTokenCosts(input: number, cached: number, output: number): ModelCosts {
   return {
-    inputTokens: perMillion(input),
-    cachedInputTokens: perMillion(cached),
-    outputTokens: perMillion(output),
+    inputTokens: usdPerMillionFromGrokTicks(input),
+    cachedInputTokens: usdPerMillionFromGrokTicks(cached),
+    outputTokens: usdPerMillionFromGrokTicks(output),
   };
 }
 

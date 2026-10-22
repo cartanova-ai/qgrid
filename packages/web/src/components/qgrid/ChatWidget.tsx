@@ -778,6 +778,7 @@ export function ChatWidget() {
           type="button"
           onClick={() => setOpen(true)}
           title="채팅 열기"
+          aria-label="채팅 열기"
           className="block size-15 rounded-[35%] overflow-hidden shadow-[0_6px_20px_rgba(44,36,24,0.25)] hover:scale-105 active:scale-[0.96] transition-transform duration-150"
         >
           <img src={chatIcon} alt="" className="size-full object-cover" />

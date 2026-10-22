@@ -112,7 +112,7 @@ type FinishRunUpdate = Partial<FinishRunParams> & { id: number; ttft_ms?: number
 export type RunProgressUpdate = { token_name?: string; model_name?: string; ttft_ms?: number };
 
 /** Copies `key` only when the caller supplied it, so omitted columns stay untouched. */
-function copyDefined<T, K extends keyof T>(target: Partial<T>, source: T, key: K): void {
+function copyDefined<T>(target: Partial<T>, source: T, key: keyof T): void {
   if (source[key] !== undefined) target[key] = source[key];
 }
 

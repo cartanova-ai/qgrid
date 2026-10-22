@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { QgridService, TokenService } from "@/services/services.generated";
 
@@ -85,16 +85,16 @@ export function useOAuthLoginFlow() {
   const pollTimers = useRef<{ interval?: number; timeout?: number }>({});
   const attemptRef = useRef(0);
 
-  const stopPolling = () => {
+  const stopPolling = useCallback(() => {
     attemptRef.current += 1;
 
     if (pollTimers.current.interval !== undefined) clearInterval(pollTimers.current.interval);
 
     if (pollTimers.current.timeout !== undefined) clearTimeout(pollTimers.current.timeout);
     pollTimers.current = {};
-  };
+  }, []);
 
-  useEffect(() => stopPolling, []);
+  useEffect(() => stopPolling, [stopPolling]);
 
   const invalidateTokens = () =>
     Promise.all([

@@ -43,6 +43,20 @@ const oauthCallbackQuerySchema = z.looseObject({
   state: z.string().optional(),
 });
 
+async function oauthCallback(request: FastifyRequest, reply: FastifyReply) {
+  const { code, state } = oauthCallbackQuerySchema.safeParse(request.query).data ?? {};
+
+  if (!code || !state) {
+    return reply.redirect("/?oauth=error&reason=missing_params");
+  }
+
+  try {
+    return QgridFrame.handleOAuthCallback(code, state, reply);
+  } catch {
+    return reply.redirect("/?oauth=error&reason=callback_failed");
+  }
+}
+
 const host = process.env.HOST ?? "localhost";
 const port = Number(process.env.PORT ?? 44900);
 
@@ -121,20 +135,6 @@ export default defineConfig({
         prefix: "/api/public",
       },
       custom: (server) => {
-        const oauthCallback = async (request: FastifyRequest, reply: FastifyReply) => {
-          const { code, state } = oauthCallbackQuerySchema.safeParse(request.query).data ?? {};
-
-          if (!code || !state) {
-            return reply.redirect("/?oauth=error&reason=missing_params");
-          }
-
-          try {
-            return QgridFrame.handleOAuthCallback(code, state, reply);
-          } catch {
-            return reply.redirect("/?oauth=error&reason=callback_failed");
-          }
-        };
-
         server.get("/callback", oauthCallback);
         server.get("/auth/callback", oauthCallback);
       },

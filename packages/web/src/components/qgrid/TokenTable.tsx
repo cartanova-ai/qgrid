@@ -139,7 +139,9 @@ export function TokenTable({ data, isLoading }: TokenTableProps) {
                 <th className="text-left px-5 py-2.5 text-[10px] uppercase tracking-wider text-sand-400 font-medium">
                   Expires
                 </th>
-                <th className="w-20 px-3 py-2.5" />
+                <th className="w-20 px-3 py-2.5">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-sand-100/80">
@@ -171,6 +173,9 @@ export function TokenTable({ data, isLoading }: TokenTableProps) {
                     <td className="px-5 py-3">
                       <button
                         type="button"
+                        role="switch"
+                        aria-checked={token.active}
+                        aria-label={`${token.name || token.provider} active`}
                         className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 ${token.active ? "bg-sage-400" : "bg-sand-300"}`}
                         onClick={() => handleToggle(token)}
                         disabled={
@@ -196,6 +201,7 @@ export function TokenTable({ data, isLoading }: TokenTableProps) {
                       <div className="flex items-center gap-1">
                         <button
                           type="button"
+                          aria-label="Edit token"
                           className="p-1 rounded text-sand-400 hover:text-sienna-500 transition-colors duration-150"
                           onClick={() => openEdit(token)}
                         >
@@ -203,6 +209,7 @@ export function TokenTable({ data, isLoading }: TokenTableProps) {
                         </button>
                         <button
                           type="button"
+                          aria-label="Delete token"
                           className="p-1 rounded text-sand-400 hover:text-red-500 transition-colors duration-150"
                           onClick={() => setDeleteTarget(token)}
                         >

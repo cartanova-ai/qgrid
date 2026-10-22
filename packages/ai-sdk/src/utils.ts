@@ -140,6 +140,15 @@ export function extractToolResultsFromHistory(
 // SSE parser
 export type SSEEvent = { type: string; data: JSONValue };
 
+// A data line that is not JSON is not a qgrid event; the parser skips it.
+function parseSseData(raw: string): JSONValue | undefined {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function* parseSSE(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
@@ -172,10 +181,9 @@ export async function* parseSSE(
           eventType = line.slice(7).trim();
         } else if (line.startsWith("data: ")) {
           const raw = line.slice(6);
+          const data = parseSseData(raw);
 
-          try {
-            yield { type: eventType || "message", data: JSON.parse(raw) };
-          } catch {}
+          if (data !== undefined) yield { type: eventType || "message", data };
 
           eventType = "";
         }

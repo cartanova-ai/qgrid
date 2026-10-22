@@ -189,12 +189,12 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
 
   // Running rows gain their token, serving model, and TTFT mid-run; poll until they finish.
   useEffect(() => {
-    if (!hasRunning) return;
-
-    const timer = setInterval(() => {
-      void refresh();
-      void refreshCost();
-    }, RUNNING_REFRESH_MS);
+    const timer = hasRunning
+      ? setInterval(() => {
+          void refresh();
+          void refreshCost();
+        }, RUNNING_REFRESH_MS)
+      : undefined;
 
     return () => clearInterval(timer);
   }, [hasRunning, refresh, refreshCost]);
@@ -334,7 +334,9 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                       </th>
                     );
                   })}
-                  <th className="w-8" />
+                  <th className="w-8">
+                    <span className="sr-only">Details</span>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-sand-100/60">

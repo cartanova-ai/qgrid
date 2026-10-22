@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { clsx } from "clsx";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import RefreshIcon from "~icons/lucide/refresh-cw";
 
 import { cacheHitRate } from "@/lib/cost";
@@ -15,10 +14,87 @@ const STALE_AFTER_MS = 5_000;
 // 재시작이 누적돼도 클라이언트 메모리가 무한히 자라지 않도록 미러를 캡한다.
 const MIRROR_CAP = 4_000;
 
+// 바닥에서 이 거리 안이면 라이브 출력을 따라가는 중으로 본다.
+const SCROLL_END_THRESHOLD_PX = 80;
+
 type LineItem =
   | { kind: "log"; key: number; entry: MonitLogEntry }
   | { kind: "restart"; key: number; processStartedAt: number }
   | { kind: "dropped"; key: number; count: number };
+
+const NO_ITEMS: readonly LineItem[] = [];
+
+type MonitSnapshot = {
+  items: readonly LineItem[];
+  processStartedAt: number;
+  vitals: MonitLogChunk["vitals"];
+  inFlightSamples: readonly number[];
+};
+
+// 폴링한 청크를 React 상태 밖에서 누적한다. query 함수가 청크를 합치고 불변 스냅샷을 돌려주므로
+// 렌더링은 query 데이터만 읽는다.
+class MonitLogMirror {
+  private cursor: number | undefined;
+  private epoch: number | undefined;
+  private lastKey = 0;
+  private items: readonly LineItem[] = NO_ITEMS;
+  private inFlightSamples: readonly number[] = [];
+
+  async poll(): Promise<MonitSnapshot> {
+    const chunk = await MonitService.monitLogs(this.cursor);
+
+    this.merge(chunk);
+    // 폴(1초)마다 한 샘플.
+    this.inFlightSamples = appendSample(this.inFlightSamples, chunk.vitals.openaiInFlight);
+
+    return {
+      items: this.items,
+      processStartedAt: chunk.processStartedAt,
+      vitals: chunk.vitals,
+      inFlightSamples: this.inFlightSamples,
+    };
+  }
+
+  private nextKey(): number {
+    this.lastKey += 1;
+
+    return this.lastKey;
+  }
+
+  private merge(chunk: MonitLogChunk): void {
+    let base = this.items;
+    const appended: LineItem[] = [];
+
+    if (this.epoch !== undefined && chunk.processStartedAt !== this.epoch) {
+      // 서버 재시작 — seq 공간이 리셋됐으므로 미러도 리셋한다 (AE1).
+      base = NO_ITEMS;
+      appended.push({
+        kind: "restart",
+        key: this.nextKey(),
+        processStartedAt: chunk.processStartedAt,
+      });
+    } else if (chunk.dropped > 0) {
+      appended.push({ kind: "dropped", key: this.nextKey(), count: chunk.dropped });
+    }
+
+    this.epoch = chunk.processStartedAt;
+    this.cursor = chunk.nextCursor;
+
+    const lastSeq = base.findLast((item): item is LineItem & { kind: "log" } => item.kind === "log")
+      ?.entry.seq;
+
+    for (const entry of chunk.entries) {
+      // 커서가 중복을 막지만, 경계 중복은 방어적으로 한 번 더 거른다 (AE4).
+      if (lastSeq !== undefined && entry.seq <= lastSeq) continue;
+      appended.push({ kind: "log", key: this.nextKey(), entry });
+    }
+
+    if (appended.length === 0) return;
+    const next = [...base, ...appended];
+
+    this.items = next.length > MIRROR_CAP ? next.slice(-MIRROR_CAP) : next;
+  }
+}
 
 const LEVEL_RANK = new Map<string, number>(
   Object.entries({
@@ -60,10 +136,8 @@ function categoryLabel(category: string[]): string {
 // 폴링(1초)마다 한 샘플 — 2분 창이면 추세를 읽기에 충분하고 메모리는 상수다.
 const SPARK_CAP = 120;
 
-function pushSample(buffer: number[], value: number): void {
-  buffer.push(value);
-
-  if (buffer.length > SPARK_CAP) buffer.shift();
+function appendSample(samples: readonly number[], value: number): number[] {
+  return [...samples, value].slice(-SPARK_CAP);
 }
 
 // 인라인 스파크라인 — 값의 절대 눈금은 옆의 숫자가 맡고, 여기는 추세만 그린다.
@@ -71,7 +145,7 @@ function pushSample(buffer: number[], value: number): void {
 const SPARK_WIDTH = 56;
 const SPARK_HEIGHT = 14;
 
-function Sparkline({ values }: { values: number[] }) {
+function Sparkline({ values }: { values: readonly number[] }) {
   if (values.length < 2) return null;
   const width = SPARK_WIDTH;
   const height = SPARK_HEIGHT;
@@ -161,25 +235,27 @@ export function MonitConsole({
   search: MonitSearch;
   onSearchChange: (next: MonitSearch) => void;
 }) {
-  const [items, setItems] = useState<LineItem[]>([]);
-  const cursorRef = useRef<number | undefined>(undefined);
-  const epochRef = useRef<number | undefined>(undefined);
-  const keyRef = useRef(0);
+  const [mirror] = useState(() => new MonitLogMirror());
   const [clock, setClock] = useState(() => Date.now());
 
   const query = useQuery({
     // 안정된 queryKey — 커서를 key 에 실으면 커서가 바뀔 때마다 즉시 refetch 되어
-    // 1초 간격이 붕괴한다. 커서는 ref 로만 전달한다.
+    // 1초 간격이 붕괴한다. 커서는 미러가 들고 있다.
     queryKey: ["Monit", "monitLogs"],
-    queryFn: () => MonitService.monitLogs(cursorRef.current),
+    queryFn: () => mirror.poll(),
     refetchInterval: POLL_INTERVAL_MS,
     retry: false,
+    // 스냅샷은 미러가 새로 만들므로 4,000줄을 매 폴마다 깊게 비교할 필요가 없다.
+    structuralSharing: false,
   });
 
   // 프로세스 정적 정보 — 폴링 없이 1회. 라이브 카운트는 로그 폴링에 편승해 도착한다.
   const infoQuery = useQuery({ ...MonitService.monitInfoQueryOptions(), staleTime: Infinity });
   const info = infoQuery.data;
-  const vitals = query.data?.vitals;
+  const snapshot = query.data;
+  const items = snapshot?.items ?? NO_ITEMS;
+  const vitals = snapshot?.vitals;
+  const processStartedAt = snapshot?.processStartedAt;
 
   // 최근 1시간 집계 — request_logs 를 타므로 로그 폴링(1초)과 분리해 30초 주기.
   const statsQuery = useQuery({
@@ -189,59 +265,6 @@ export function MonitConsole({
   });
 
   const stats = statsQuery.data;
-
-  // 스파크라인 표본 — 렌더는 매 폴마다 query.data 변경으로 일어나므로 ref 로 충분하다.
-  const inFlightSparkRef = useRef<number[]>([]);
-  useEffect(() => {
-    if (!vitals) return;
-    pushSample(inFlightSparkRef.current, vitals.openaiInFlight);
-  }, [vitals]);
-
-  useEffect(() => {
-    const chunk = query.data;
-
-    if (!chunk) return;
-    applyChunk(chunk);
-    // eslint 없이도 의도가 분명하도록: 새 응답 객체마다 정확히 한 번 반영한다.
-  }, [query.data]);
-
-  function applyChunk(chunk: MonitLogChunk): void {
-    const nextKey = () => ++keyRef.current;
-    setItems((prev) => {
-      let base = prev;
-      const appended: LineItem[] = [];
-
-      if (epochRef.current !== undefined && chunk.processStartedAt !== epochRef.current) {
-        // 서버 재시작 — seq 공간이 리셋됐으므로 미러도 리셋한다 (AE1).
-        base = [];
-        appended.push({
-          kind: "restart",
-          key: nextKey(),
-          processStartedAt: chunk.processStartedAt,
-        });
-      } else if (chunk.dropped > 0) {
-        appended.push({ kind: "dropped", key: nextKey(), count: chunk.dropped });
-      }
-
-      epochRef.current = chunk.processStartedAt;
-      cursorRef.current = chunk.nextCursor;
-
-      const lastSeq = base.findLast(
-        (item): item is LineItem & { kind: "log" } => item.kind === "log",
-      )?.entry.seq;
-
-      for (const entry of chunk.entries) {
-        // 커서가 중복을 막지만, 경계 중복은 방어적으로 한 번 더 거른다 (AE4).
-        if (lastSeq !== undefined && entry.seq <= lastSeq) continue;
-        appended.push({ kind: "log", key: nextKey(), entry });
-      }
-
-      if (appended.length === 0) return prev;
-      const next = [...base, ...appended];
-
-      return next.length > MIRROR_CAP ? next.slice(-MIRROR_CAP) : next;
-    });
-  }
 
   // stale 판정용 저해상도 시계 — 1초 폴링이라 2초 tick 이면 충분하다.
   useEffect(() => {
@@ -271,19 +294,36 @@ export function MonitConsole({
   }, [items, search.level]);
 
   const parentRef = useRef<HTMLDivElement>(null);
+  const [atEnd, setAtEnd] = useState(true);
+  // 스크롤 이벤트마다 아래 layout effect 를 다시 돌리지 않도록 추적 여부를 ref 로도 둔다.
+  const followRef = useRef(true);
 
-  const virtualizer = useVirtualizer({
-    count: visible.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 20,
-    getItemKey: (index) => visible[index].key,
-    anchorTo: "end",
-    followOnAppend: true,
-    scrollEndThreshold: 80,
-    overscan: 12,
-  });
+  const handleScroll = () => {
+    const element = parentRef.current;
 
-  const atEnd = virtualizer.isAtEnd();
+    if (!element) return;
+
+    const following =
+      element.scrollHeight - element.scrollTop - element.clientHeight <= SCROLL_END_THRESHOLD_PX;
+
+    followRef.current = following;
+    setAtEnd(following);
+  };
+
+  const scrollToEnd = () => {
+    const element = parentRef.current;
+
+    if (element) element.scrollTop = element.scrollHeight;
+  };
+
+  // 라이브 출력을 따라가는 중이면 새 줄이 그려진 직후 바닥에 고정한다.
+  useLayoutEffect(() => {
+    const element = parentRef.current;
+
+    if (element && followRef.current && visible.length > 0) {
+      element.scrollTop = element.scrollHeight;
+    }
+  }, [visible]);
 
   const hasFirstData = query.dataUpdatedAt > 0;
   const firstLoadFailed = !hasFirstData && query.isError;
@@ -303,9 +343,9 @@ export function MonitConsole({
           />
           {firstLoadFailed ? "Disconnected" : isStale ? "Stale" : hasFirstData ? "Live" : "…"}
         </span>
-        {epochRef.current !== undefined && (
+        {processStartedAt !== undefined && (
           <span className="text-[11px] text-sand-500">
-            ephemeral · resets on restart · since {formatTime(epochRef.current)}
+            ephemeral · resets on restart · since {formatTime(processStartedAt)}
           </span>
         )}
 
@@ -352,7 +392,7 @@ export function MonitConsole({
               <span className="inline-flex items-center gap-1.5">
                 openai in-flight{" "}
                 <span className="font-mono text-sand-800">{vitals.openaiInFlight}</span>
-                <Sparkline values={inFlightSparkRef.current} />
+                <Sparkline values={snapshot?.inFlightSamples ?? []} />
               </span>
               {vitals.anthropicTokenCount > 0 && (
                 <span>
@@ -446,6 +486,7 @@ export function MonitConsole({
       <div className="relative">
         <div
           ref={parentRef}
+          onScroll={handleScroll}
           role="log"
           aria-label="Server process logs"
           tabIndex={0}
@@ -478,27 +519,21 @@ export function MonitConsole({
             <div className="flex h-full items-center justify-center text-[12px] text-sand-500">
               {items.length === 0
                 ? `No log lines yet — waiting for activity since ${
-                    epochRef.current !== undefined ? formatTime(epochRef.current) : "startup"
+                    processStartedAt !== undefined ? formatTime(processStartedAt) : "startup"
                   }.`
                 : "No lines match the current filters."}
             </div>
           ) : (
-            <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
-              {virtualizer.getVirtualItems().map((virtualRow) => {
-                const item = visible[virtualRow.index];
-
-                return (
-                  <div
-                    key={virtualRow.key}
-                    ref={virtualizer.measureElement}
-                    data-index={virtualRow.index}
-                    className="absolute left-0 top-0 w-full"
-                    style={{ transform: `translateY(${virtualRow.start}px)` }}
-                  >
-                    <LogLine item={item} />
-                  </div>
-                );
-              })}
+            // 미러는 MIRROR_CAP 줄로 제한된다. 화면 밖 줄은 content-visibility 로 렌더링을 건너뛴다.
+            <div className="w-full">
+              {visible.map((item) => (
+                <div
+                  key={item.key}
+                  className="[content-visibility:auto] [contain-intrinsic-size:auto_20px]"
+                >
+                  <LogLine item={item} />
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -506,7 +541,7 @@ export function MonitConsole({
         {hasFirstData && !firstLoadFailed && !atEnd && (
           <button
             type="button"
-            onClick={() => virtualizer.scrollToEnd()}
+            onClick={scrollToEnd}
             className="absolute bottom-4 right-5 inline-flex items-center gap-1.5 rounded-full border border-sand-600 bg-sand-800/90 px-3 py-1.5 text-[11px] font-medium text-sand-200 shadow-lg backdrop-blur transition-colors hover:bg-sand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sienna-400"
           >
             ↓ Jump to live
@@ -517,7 +552,8 @@ export function MonitConsole({
   );
 }
 
-function LogLine({ item }: { item: LineItem }) {
+// 폴링마다 목록 전체가 다시 렌더링되므로 바뀌지 않은 줄은 건너뛴다.
+const LogLine = memo(function LogLine({ item }: { item: LineItem }) {
   if (item.kind === "restart") {
     return (
       <div className="py-1 text-center text-[11px] text-caution-400">
@@ -555,4 +591,4 @@ function LogLine({ item }: { item: LineItem }) {
       <span>{entry.text}</span>
     </div>
   );
-}
+});

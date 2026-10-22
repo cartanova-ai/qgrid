@@ -233,9 +233,11 @@ function TokenUsage({ token, theme }: { token: Token; theme: ProviderTheme }) {
   const { data, isLoading, dataUpdatedAt } = QgridService.useUsage(token.id);
   // A usage refresh can confirm expiry after the parent loaded its token list.
   // Re-read persisted state once per failed lookup, without interpreting error text.
+  const failedLookupAt = data?.error ? dataUpdatedAt : undefined;
+
   useEffect(() => {
-    if (data?.error) void queryClient.invalidateQueries({ queryKey: ["Token"] });
-  }, [data?.error, dataUpdatedAt, queryClient]);
+    if (failedLookupAt !== undefined) void queryClient.invalidateQueries({ queryKey: ["Token"] });
+  }, [failedLookupAt, queryClient]);
 
   if (token.reauth_required) {
     return (
@@ -768,12 +770,15 @@ export function UsageCard() {
   const queryClient = useQueryClient();
   const reorderMutation = TokenService.useReorderMutation();
 
-  const [localTokens, setLocalTokens] = useState<Token[]>([]);
+  // A drag shows its new order at once; the optimistic cache write below lands a tick later.
+  // The override applies only while the cached rows are the ones it was made from.
+  const [reorder, setReorder] = useState<{ from: Token[]; tokens: Token[] } | null>(null);
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>("all");
 
-  useEffect(() => {
-    if (data?.rows) setLocalTokens(data.rows);
-  }, [data?.rows]);
+  const serverTokens = data?.rows ?? [];
+
+  const localTokens =
+    reorder !== null && reorder.from === data?.rows ? reorder.tokens : serverTokens;
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -790,7 +795,7 @@ export function UsageCard() {
     if (oldIndex === -1 || newIndex === -1) return;
 
     const reordered = arrayMove(localTokens, oldIndex, newIndex);
-    setLocalTokens(reordered);
+    setReorder({ from: serverTokens, tokens: reordered });
 
     const queryKey = TokenService.getTokensQueryOptions("A", {
       orderBy: "ord-asc" as const,
@@ -807,8 +812,7 @@ export function UsageCard() {
       {
         onError: () => {
           queryClient.setQueryData(queryKey, prev);
-
-          if (data?.rows) setLocalTokens(data.rows);
+          setReorder(null);
         },
         onSettled: () => {
           Promise.all([

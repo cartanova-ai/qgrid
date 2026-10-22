@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 import { Command } from "commander";
+import { z } from "zod";
 
 import { applyQgridDatabaseEnv } from "./database-env";
 import {
@@ -15,8 +15,19 @@ import {
   SELF_UPDATE_INSTALL_TIMEOUT_MS,
 } from "./self-update";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
+const cliPackageSchema = z.object({ version: z.string() });
+
+function readCliPackage(): z.infer<typeof cliPackageSchema> {
+  const packageJsonPath = join(import.meta.dirname, "..", "package.json");
+
+  try {
+    return cliPackageSchema.parse(JSON.parse(readFileSync(packageJsonPath, "utf-8")));
+  } catch (error) {
+    throw new Error(`qgrid CLI cannot read its version from ${packageJsonPath}`, { cause: error });
+  }
+}
+
+const pkg = readCliPackage();
 
 export const RUNTIME_CLI_DEPENDENCIES = [
   {
@@ -81,16 +92,16 @@ export function ensureLatestRuntimeCliDependencies(): void {
     try {
       const installed = parseVersion(installedOutput);
 
-      if (!installed) {
-        console.log(`Updating ${dep.label}: installing latest`);
-        installRuntimeCliDependency(dep);
-        installedOutput = commandVersion(dep.command);
-      } else {
+      if (installed) {
         const latest = packageLatestVersion(dep.packageName);
 
         if (installed === latest) continue;
 
         console.log(`Updating ${dep.label}: ${installed} → ${latest}`);
+        installRuntimeCliDependency(dep);
+        installedOutput = commandVersion(dep.command);
+      } else {
+        console.log(`Updating ${dep.label}: installing latest`);
         installRuntimeCliDependency(dep);
         installedOutput = commandVersion(dep.command);
       }
@@ -197,7 +208,7 @@ program
       process.exit(1);
     }
 
-    const bundlePath = join(__dirname, "..", "bundle");
+    const bundlePath = join(import.meta.dirname, "..", "bundle");
     const serverEntry = join(bundlePath, "dist", "index.js");
 
     if (!existsSync(serverEntry)) {
