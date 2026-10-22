@@ -1,4 +1,9 @@
-import { Agent, type Dispatcher } from "undici";
+import {
+  Agent,
+  type Dispatcher,
+  type Response as UndiciResponse,
+  fetch as undiciFetch,
+} from "undici";
 import { z } from "zod";
 
 import { type QgridSupportedModel } from "./index.types";
@@ -19,9 +24,18 @@ const errorChainLinkSchema = z.looseObject({
 
 const nestedErrorsSchema = z.array(z.unknown());
 
-export type QgridRequestInit = RequestInit & {
-  dispatcher?: Dispatcher;
-};
+// The JSON POST that qgridFetch sends. A dispatched request goes through undici's fetch, so it
+// keeps to fields both fetch implementations accept unchanged.
+export type QgridRequestInit = {
+  method: "POST";
+  body: string;
+  signal?: AbortSignal;
+} & (
+  | { headers: Headers | Record<string, string>; dispatcher?: undefined }
+  | { headers: Record<string, string>; dispatcher: Dispatcher }
+);
+
+export type QgridResponse = Response | UndiciResponse;
 
 export type QgridRequestTransport = {
   dispatcher: Dispatcher;
@@ -75,12 +89,29 @@ export async function closeQgridRequestTransport(
 }
 
 export async function qgridFetch(
-  input: string | URL,
+  target: string | URL,
   init: QgridRequestInit,
   context: QgridTransportErrorContext,
-): Promise<Response> {
+): Promise<QgridResponse> {
   try {
-    return await fetch(input, init);
+    // qgrid query requests go only to the configured qgrid server, over HTTP or HTTPS.
+    const url = new URL(target);
+
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new TypeError(`qgrid server URL must use http or https, not ${url.protocol}`);
+    }
+
+    const href = url.href;
+
+    // A dispatcher must run under the fetch from its own undici package. The built-in fetch
+    // uses the undici bundled with Node, and Node 26 (undici 8) rejects undici 6 and 7
+    // dispatchers with UND_ERR_INVALID_ARG ("invalid onError method"), while undici 8
+    // dispatchers fail the same way under Node 22 and 24.
+    if (init.dispatcher) return await undiciFetch(href, init);
+
+    const { method, body, signal, headers } = init;
+
+    return await fetch(href, { method, body, signal, headers });
   } catch (error) {
     throw toQgridTransportError(error, context);
   }

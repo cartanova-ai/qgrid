@@ -81,7 +81,7 @@ Language-model `providerOptions.qgrid` supports:
 - `verbosity`: OpenAI/Codex route only.
 - `reasoningSummary`: OpenAI/Codex route only.
 - `serviceTier`: OpenAI/Codex route only.
-- `timeoutMs`: Anthropic server-side Claude Code process timeout in milliseconds. It must be a positive integer no greater than 30 minutes and defaults to 240 seconds. For non-stream `generateText`, the SDK derives request-scoped Undici `headersTimeout` and `bodyTimeout` values as `timeoutMs + 60_000` without changing the process-global dispatcher.
+- `timeoutMs`: Anthropic server-side Claude Code process timeout in milliseconds. It must be a positive integer no greater than 30 minutes and defaults to 240 seconds. For non-stream `generateText`, the SDK derives request-scoped Undici `headersTimeout` and `bodyTimeout` values as `timeoutMs + 60_000` without changing the process-global dispatcher. That request goes through undici's own `fetch`, from the same package as its `Agent`; see `references/decision-rationale.md`.
 - `fallbackModels`: deprecated, ignored compatibility field. The provider emits a standard unsupported-option warning when supplied; remove it from callers. It is not Claude Code's upstream Fable safety-refusal fallback.
 
 `imageGeneration` and `imageGenerationOptions` are not public SDK options. Language-model generation and streaming reject either key before transport, directing callers to `generateImage` with `qgrid.image()`. Use flat `QgridImageProviderOptions`; do not add deprecated language-model shims for the removed fields.

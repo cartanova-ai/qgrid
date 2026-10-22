@@ -697,14 +697,16 @@ export function qgrid(
 
       if (toolResultsPayload) args.toolResults = toolResultsPayload;
 
-      const init: QgridRequestInit = {
-        method: "POST",
+      const request = {
+        method: "POST" as const,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ args }),
         signal: options.abortSignal,
       };
 
-      if (transport) init.dispatcher = transport.dispatcher;
+      const init: QgridRequestInit = transport
+        ? { ...request, dispatcher: transport.dispatcher }
+        : request;
 
       const data = await qgridFetch(`${serverUrl}/api/qgrid/query`, init, {
         operation: "query",
