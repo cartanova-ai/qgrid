@@ -76,7 +76,10 @@ const TEXT_OPERATIONS = new Set(["ai.generateText", "ai.streamText"]);
 
 // AI SDK types the onError event as unknown; text generations report { callId, error }.
 const errorEventSchema = z.object({ callId: z.string(), error: z.unknown() });
-const abortErrorSchema = z.object({ name: z.literal("AbortError") });
+
+// abort() without a reason rejects with AbortError, and the generateText `timeout` with TimeoutError.
+// Telemetry events carry no abortSignal, so abort(customReason) surfaces as that reason and stays an error.
+const abortErrorSchema = z.object({ name: z.enum(["AbortError", "TimeoutError"]) });
 
 function isTextStart(event: OperationStartEvent): event is TextStartEvent {
   return TEXT_OPERATIONS.has(event.operationId);

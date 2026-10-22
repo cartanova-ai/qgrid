@@ -472,6 +472,26 @@ describe("createQgridLogger", () => {
     ]);
   });
 
+  it("finishes the run as aborted when generateText times out", async () => {
+    const server = mockQgridServer();
+
+    await expect(
+      generateText({
+        model: hangingModel(),
+        prompt: "test",
+        timeout: 20,
+        telemetry: createQgridLogger({ serverUrl: SERVER }),
+      }),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+
+    expect(server.finishes()).toEqual([
+      expect.objectContaining({
+        status: "aborted",
+        errorMessage: expect.stringContaining("TimeoutError"),
+      }),
+    ]);
+  });
+
   it("logs a consumed streamText generation", async () => {
     const server = mockQgridServer();
     const model = new MockLanguageModelV3({
