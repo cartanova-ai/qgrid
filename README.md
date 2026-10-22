@@ -100,7 +100,7 @@ If you're already using the google/openai provider directly, **add one line** to
  const { text } = await generateText({
    model: google("gemini-3-flash"),
    prompt: "A complex question",
-+  experimental_telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
++  telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
  });
 ```
 
@@ -128,7 +128,7 @@ For detailed usage, see the [`@cartanova/qgrid-ai-sdk` README](./packages/ai-sdk
 ```typescript
 const { text } = await generateText({
   model: qgrid("openai/gpt-6-luna"),
-  system: "You are an academic paper summarizer.",
+  instructions: "You are an academic paper summarizer.",
   prompt: paperText,
 });
 ```
@@ -175,7 +175,7 @@ const { text } = await generateText({
       execute: async ({ city }) => ({ temperature: 22, condition: "sunny" }),
     }),
   },
-  stopWhen: stepCountIs(3),
+  stopWhen: isStepCount(3),
 });
 ```
 
@@ -274,7 +274,7 @@ QGRID_PROJECT_NAME=my-service   # labels request logs per project
 
 In the dashboard you can filter the whole team's request logs by project — set `QGRID_PROJECT_NAME` in each project so workloads stay distinguishable as traffic grows.
 
-With server and AI SDK 2.10.0+, `generateText` returns the request-log ID at `result.providerMetadata?.qgrid?.requestLogId`. For `streamText`, consume the stream and read `(await result.providerMetadata)?.qgrid?.requestLogId`. Raw query responses and stream `done` events expose top-level `requestLogId`. Logging-disabled requests omit the field.
+With server and AI SDK 2.10.0+, `generateText` returns the request-log ID at `result.finalStep.providerMetadata?.qgrid?.requestLogId`. For `streamText`, consume the stream and read `(await result.finalStep).providerMetadata?.qgrid?.requestLogId`. Raw query responses and stream `done` events expose top-level `requestLogId`. Logging-disabled requests omit the field.
 
 ---
 
@@ -342,7 +342,7 @@ Qgrid uses [Standard API pricing](https://developers.openai.com/api/docs/pricing
 
 ```
 packages/
-├── ai-sdk/  ← @cartanova/qgrid-ai-sdk (AI SDK v6 provider + logger)
+├── ai-sdk/  ← @cartanova/qgrid-ai-sdk (AI SDK 7 provider + logger)
 ├── api/     ← Sonamu server (QgridDispatcher, Request Log, OAuth)
 ├── web/     ← Dashboard React app (TanStack Router + Query)
 └── cli/     ← @cartanova/qgrid-cli (bundles the server)

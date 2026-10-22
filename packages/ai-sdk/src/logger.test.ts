@@ -1,4 +1,4 @@
-import { generateText, Output, type TelemetryIntegration } from "ai";
+import { generateText, isStepCount, Output, streamText, tool } from "ai";
 import { MockLanguageModelV3 } from "ai/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -7,381 +7,336 @@ import { createQgridLogger } from "./logger";
 
 const SERVER = "http://localhost:44900";
 
-function getIntegration(config: Parameters<typeof createQgridLogger>[0]): TelemetryIntegration {
-  const settings = createQgridLogger(config);
-  const integrations = Array.isArray(settings.integrations)
-    ? settings.integrations
-    : settings.integrations
-      ? [settings.integrations]
-      : [];
-  return integrations[0];
+type Logged = Record<string, unknown>;
+
+function json(body: unknown) {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
 }
 
-type FetchCall = { url: string; body: { input: Record<string, unknown> } };
-
-function mockFetch() {
-  const calls: FetchCall[] = [];
+// Stubs the qgrid logging endpoints. Each createRun gets the next request-log ID.
+function mockQgridServer() {
+  const calls: Array<{ path: string; input: Logged }> = [];
+  let nextRequestLogId = 1;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as FetchCall["body"];
-      calls.push({ url, body });
-
-      if (url.includes("/createRun")) {
-        return new Response(JSON.stringify({ requestLogId: 1 }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }
-      return new Response(JSON.stringify({ stepId: 1, ok: true }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      const path = new URL(url).pathname.replace("/api/qgrid/", "");
+      calls.push({ path, input: JSON.parse(String(init?.body)).input });
+      if (path === "createRun") return json({ requestLogId: nextRequestLogId++ });
+      return json({ stepId: 1, ok: true });
     }),
   );
-  return calls;
+  const inputs = (path: string) => calls.filter((c) => c.path === path).map((c) => c.input);
+  return {
+    calls,
+    createRuns: () => inputs("createRun"),
+    steps: () => inputs("appendStep"),
+    finishes: () => inputs("finishRun"),
+  };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
+function usage(input: number, output: number, reasoning = 0) {
+  return {
+    inputTokens: { total: input, noCache: input, cacheRead: 0, cacheWrite: 0 },
+    outputTokens: { total: output, text: output - reasoning, reasoning },
+  };
+}
+
+const stop = { unified: "stop", raw: "stop" } as const;
+const toolCalls = { unified: "tool-calls", raw: "tool_calls" } as const;
+
+function textModel(text = "Hi there", provider = "google.generative-ai", modelId = "gemini-3-flash") {
+  return new MockLanguageModelV3({
+    provider,
+    modelId,
+    doGenerate: async () => ({
+      content: [{ type: "text", text }],
+      finishReason: stop,
+      usage: usage(100, 50),
+      response: { modelId: `${modelId}-001` },
+      warnings: [],
+    }),
   });
-  return { promise, resolve, reject };
+}
+
+// Step 0 calls getWeather; step 1 answers.
+function weatherModel() {
+  let step = 0;
+  return new MockLanguageModelV3({
+    provider: "google.generative-ai",
+    modelId: "gemini-3-flash",
+    doGenerate: async () =>
+      step++ === 0
+        ? {
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "call_1",
+                toolName: "getWeather",
+                input: JSON.stringify({ city: "Seoul" }),
+              },
+            ],
+            finishReason: toolCalls,
+            usage: usage(200, 30),
+            response: { modelId: "gemini-3-flash-001" },
+            warnings: [],
+          }
+        : {
+            content: [{ type: "text", text: "Seoul is 22°C" }],
+            finishReason: stop,
+            usage: usage(400, 80),
+            response: { modelId: "gemini-3-flash-001" },
+            warnings: [],
+          },
+  });
+}
+
+// Never answers until aborted.
+function hangingModel() {
+  return new MockLanguageModelV3({
+    doGenerate: ({ abortSignal }) =>
+      new Promise((_, reject) => {
+        abortSignal?.addEventListener("abort", () => reject(abortSignal.reason));
+      }),
+  });
 }
 
 afterEach(() => {
-  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("createQgridLogger", () => {
-  it("logs simple text generation (no tools)", async () => {
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER, projectName: "test" });
+  it("logs a text generation as one run", async () => {
+    const server = mockQgridServer();
 
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
+    const result = await generateText({
+      model: textModel(),
+      instructions: "You are helpful",
       prompt: "Hello",
-      system: "You are helpful",
-    } as never);
-
-    await logger.onStepFinish!({
-      stepNumber: 0,
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      response: { modelId: "gemini-3-flash-001" },
-      finishReason: "stop",
-      usage: { inputTokens: 100, outputTokens: 50, inputTokenDetails: {} },
-      content: [],
-      text: "Hi there",
-    } as never);
-
-    await logger.onFinish!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      response: { modelId: "gemini-3-flash-001" },
-      finishReason: "stop",
-      text: "Hi there",
-      totalUsage: { inputTokens: 100, outputTokens: 50, inputTokenDetails: {} },
-    } as never);
-
-    const createRunCall = calls.find((c) => c.url.includes("/createRun"));
-    expect(createRunCall?.body.input).toMatchObject({
-      userPrompt: "Hello",
-      systemPrompt: "You are helpful",
-      modelName: "google/gemini-3-flash",
-      projectName: "test",
-      isStructured: false,
-      jsonSchema: null,
+      telemetry: createQgridLogger({ serverUrl: SERVER, projectName: "test" }),
     });
 
-    const appendCalls = calls.filter((c) => c.url.includes("/appendStep"));
-    expect(appendCalls).toHaveLength(1);
-    expect(appendCalls[0].body.input).toMatchObject({
-      stepIndex: 0,
-      type: "generate",
-      finishReason: "stop",
-      modelName: "google/gemini-3-flash-001",
-      requestedModelName: "google/gemini-3-flash",
-    });
-
-    const finishCall = calls.find((c) => c.url.includes("/finishRun"));
-    expect(finishCall?.body.input).toMatchObject({
-      requestLogId: 1,
-      status: "succeeded",
-      response: "Hi there",
-      tokenName: "external",
-      modelName: "google/gemini-3-flash-001",
-      requestedModelName: "google/gemini-3-flash",
-    });
-    expect(finishCall?.body.input).not.toHaveProperty("responseJsonOk");
+    expect(result.text).toBe("Hi there");
+    expect(server.createRuns()).toEqual([
+      expect.objectContaining({
+        userPrompt: "Hello",
+        systemPrompt: "You are helpful",
+        modelName: "google/gemini-3-flash",
+        projectName: "test",
+        isStructured: false,
+        jsonSchema: null,
+      }),
+    ]);
+    expect(server.createRuns()[0]).not.toHaveProperty("history");
+    expect(server.steps()).toEqual([
+      expect.objectContaining({
+        requestLogId: 1,
+        stepIndex: 0,
+        type: "generate",
+        finishReason: "stop",
+        modelName: "google/gemini-3-flash-001",
+        requestedModelName: "google/gemini-3-flash",
+        inputTokens: 100,
+        outputTokens: 50,
+      }),
+    ]);
+    expect(server.finishes()).toEqual([
+      expect.objectContaining({
+        requestLogId: 1,
+        status: "succeeded",
+        response: "Hi there",
+        tokenName: "external",
+        modelName: "google/gemini-3-flash-001",
+        requestedModelName: "google/gemini-3-flash",
+        totalInputTokens: 100,
+        totalOutputTokens: 50,
+      }),
+    ]);
+    expect(server.finishes()[0]).not.toHaveProperty("responseJsonOk");
   });
 
-  it.each([
-    ["valid JSON", '{"answer":"ok"}', true],
-    ["invalid JSON", "not-json", false],
-  ])("logs Output.object schema and %s response validity", async (_label, response, expectedOk) => {
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER, projectName: "structured-test" });
+  it("logs the Output.object schema and response validity", async () => {
+    const server = mockQgridServer();
 
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3.5-flash-lite" },
+    await generateText({
+      model: textModel('{"answer":"integrated"}', "google", "gemini-3.5-flash-lite"),
       prompt: "Return an answer object",
       output: Output.object({ schema: z.object({ answer: z.string() }) }),
-    } as never);
-
-    await logger.onFinish!({
-      model: { provider: "google", modelId: "gemini-3.5-flash-lite" },
-      response: { modelId: "gemini-3.5-flash-lite" },
-      finishReason: "stop",
-      text: response,
-      totalUsage: { inputTokens: 10, outputTokens: 5, inputTokenDetails: {} },
-    } as never);
-
-    const createInput = calls.find((call) => call.url.includes("/createRun"))?.body.input;
-    expect(createInput).toMatchObject({
-      isStructured: true,
-      projectName: "structured-test",
+      telemetry: createQgridLogger({ serverUrl: SERVER, projectName: "structured" }),
     });
+
+    const [createInput] = server.createRuns();
+    expect(createInput).toMatchObject({ isStructured: true, projectName: "structured" });
     expect(JSON.parse(String(createInput?.jsonSchema))).toMatchObject({
       type: "object",
       properties: { answer: { type: "string" } },
       required: ["answer"],
     });
-
-    const finishInput = calls.find((call) => call.url.includes("/finishRun"))?.body.input;
-    expect(finishInput?.responseJsonOk).toBe(expectedOk);
+    expect(server.finishes()).toEqual([
+      expect.objectContaining({
+        status: "succeeded",
+        response: '{"answer":"integrated"}',
+        responseJsonOk: true,
+      }),
+    ]);
   });
 
-  it("detects Output.object through the real AI SDK generateText telemetry chain", async () => {
-    const calls = mockFetch();
-    const model = new MockLanguageModelV3({
-      provider: "google",
-      modelId: "gemini-3.5-flash-lite",
-      doGenerate: {
-        content: [{ type: "text", text: '{"answer":"integrated"}' }],
-        finishReason: { unified: "stop", raw: "stop" },
-        usage: {
-          inputTokens: { total: 4, noCache: 4, cacheRead: 0, cacheWrite: 0 },
-          outputTokens: { total: 3, text: 3, reasoning: 0 },
-        },
-        response: { modelId: "gemini-3.5-flash-lite" },
-        warnings: [],
+  it("logs a multi-step tool run with tool result and duration", async () => {
+    const server = mockQgridServer();
+
+    await generateText({
+      model: weatherModel(),
+      prompt: "Weather in Seoul",
+      tools: {
+        getWeather: tool({
+          inputSchema: z.object({ city: z.string() }),
+          execute: async () => ({ temperature: 22 }),
+        }),
       },
+      stopWhen: isStepCount(3),
+      telemetry: createQgridLogger({ serverUrl: SERVER }),
+    });
+
+    expect(server.steps().map((s) => [s.type, s.stepIndex])).toEqual([
+      ["generate", 0],
+      ["tool_call", 0],
+      ["generate", 1],
+    ]);
+    expect(server.steps()[1]).toMatchObject({
+      toolCallIndex: 0,
+      toolCallId: "call_1",
+      toolName: "getWeather",
+      toolArgs: '{"city":"Seoul"}',
+      toolResult: '{"temperature":22}',
+      toolDurationMs: expect.any(Number),
+      modelName: "google/gemini-3-flash-001",
+      requestedModelName: "google/gemini-3-flash",
+    });
+    expect(server.finishes()).toEqual([
+      expect.objectContaining({
+        status: "succeeded",
+        response: "Seoul is 22°C",
+        totalInputTokens: 600,
+        totalOutputTokens: 110,
+      }),
+    ]);
+  });
+
+  it("logs a failed tool execution as a tool_call step with its error", async () => {
+    const server = mockQgridServer();
+
+    await generateText({
+      model: weatherModel(),
+      prompt: "Weather in Seoul",
+      tools: {
+        getWeather: tool({
+          inputSchema: z.object({ city: z.string() }),
+          execute: async (): Promise<{ temperature: number }> => {
+            throw new Error("weather service down");
+          },
+        }),
+      },
+      stopWhen: isStepCount(3),
+      telemetry: createQgridLogger({ serverUrl: SERVER }),
+    });
+
+    const toolStep = server.steps().find((s) => s.type === "tool_call");
+    expect(toolStep).toMatchObject({ toolName: "getWeather" });
+    expect(String(toolStep?.error)).toContain("weather service down");
+    expect(toolStep).not.toHaveProperty("toolResult");
+    expect(server.finishes()).toEqual([expect.objectContaining({ status: "succeeded" })]);
+  });
+
+  it("logs an unresolved client-side tool call when the run finishes", async () => {
+    const server = mockQgridServer();
+
+    await generateText({
+      model: weatherModel(),
+      prompt: "Weather in Seoul",
+      tools: { getWeather: tool({ inputSchema: z.object({ city: z.string() }) }) },
+      telemetry: createQgridLogger({ serverUrl: SERVER }),
+    });
+
+    expect(server.steps().map((s) => s.type)).toEqual(["generate", "tool_call"]);
+    expect(server.steps()[1]).toMatchObject({
+      stepIndex: 0,
+      toolName: "getWeather",
+      toolArgs: '{"city":"Seoul"}',
+    });
+    expect(server.steps()[1]).not.toHaveProperty("toolResult");
+    expect(server.finishes()).toEqual([expect.objectContaining({ status: "succeeded" })]);
+  });
+
+  it("logs step reasoning text and reasoning tokens", async () => {
+    const server = mockQgridServer();
+    const model = new MockLanguageModelV3({
+      provider: "openai.responses",
+      modelId: "gpt-5.4",
+      doGenerate: async () => ({
+        content: [
+          { type: "reasoning", text: "Need a concise answer." },
+          { type: "text", text: "ok" },
+        ],
+        finishReason: stop,
+        usage: usage(10, 20, 7),
+        warnings: [],
+      }),
     });
 
     await generateText({
       model,
-      prompt: "Return an answer object",
-      output: Output.object({ schema: z.object({ answer: z.string() }) }),
-      experimental_telemetry: createQgridLogger({
-        serverUrl: SERVER,
-        projectName: "telemetry-integration",
-      }),
-    });
-
-    const createInput = calls.find((call) => call.url.includes("/createRun"))?.body.input;
-    const finishInput = calls.find((call) => call.url.includes("/finishRun"))?.body.input;
-    expect(createInput).toMatchObject({
-      modelName: "google/gemini-3.5-flash-lite",
-      projectName: "telemetry-integration",
-      isStructured: true,
-    });
-    expect(JSON.parse(String(createInput?.jsonSchema))).toMatchObject({
-      properties: { answer: { type: "string" } },
-    });
-    expect(finishInput).toMatchObject({
-      status: "succeeded",
-      response: '{"answer":"integrated"}',
-      responseJsonOk: true,
-    });
-  });
-
-  it("logs tool calling multi-step", async () => {
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER });
-
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      prompt: "Weather in Seoul",
-    } as never);
-
-    // tool call finish — durationMs 캐시
-    await logger.onToolCallFinish!({
-      toolCall: { toolCallId: "call_1", toolName: "getWeather" },
-      durationMs: 150,
-    } as never);
-
-    // step 0: tool-calls (tool-call만 있고 tool-result는 다음 step에)
-    await logger.onStepFinish!({
-      stepNumber: 0,
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      response: { modelId: "gemini-3-flash-001" },
-      finishReason: "tool-calls",
-      usage: { inputTokens: 200, outputTokens: 30, inputTokenDetails: {} },
-      content: [
-        {
-          type: "tool-call",
-          toolCallId: "call_1",
-          toolName: "getWeather",
-          input: { city: "Seoul" },
-        },
-      ],
-    } as never);
-
-    // step 1: stop (이전 step의 tool-result가 여기 content에)
-    await logger.onStepFinish!({
-      stepNumber: 1,
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      response: { modelId: "gemini-3-flash-001" },
-      finishReason: "stop",
-      usage: { inputTokens: 400, outputTokens: 80, inputTokenDetails: {} },
-      content: [{ type: "tool-result", toolCallId: "call_1", output: { temperature: 22 } }],
-    } as never);
-
-    await logger.onFinish!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      response: { modelId: "gemini-3-flash-001" },
-      finishReason: "stop",
-      text: "Seoul is 22°C",
-      totalUsage: { inputTokens: 600, outputTokens: 110, inputTokenDetails: {} },
-    } as never);
-
-    const appendCalls = calls.filter((c) => c.url.includes("/appendStep"));
-    expect(appendCalls).toHaveLength(3); // generate + tool_call + generate
-
-    const toolCallStep = appendCalls.find((c) => c.body.input.type === "tool_call");
-    expect(toolCallStep?.body.input).toMatchObject({
-      toolName: "getWeather",
-      toolArgs: '{"city":"Seoul"}',
-      toolResult: '{"temperature":22}',
-      toolDurationMs: 150,
-      modelName: "google/gemini-3-flash-001",
-      requestedModelName: "google/gemini-3-flash",
-    });
-
-    const finishCall = calls.find((c) => c.url.includes("/finishRun"));
-    expect(finishCall?.body.input).toMatchObject({
-      status: "succeeded",
-      totalInputTokens: 600,
-      totalOutputTokens: 110,
-    });
-  });
-
-  it("logs step reasoning text and token usage when provided", async () => {
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER });
-
-    await logger.onStart!({
-      model: { provider: "openai", modelId: "gpt-5.4" },
       prompt: "Think briefly",
-    } as never);
+      telemetry: createQgridLogger({ serverUrl: SERVER }),
+    });
 
-    await logger.onStepFinish!({
-      stepNumber: 0,
-      finishReason: "stop",
-      usage: {
-        inputTokens: 10,
-        outputTokens: 20,
-        inputTokenDetails: {},
-        outputTokenDetails: { reasoningTokens: 7 },
-      },
-      reasoningText: "Need a concise answer.",
-      content: [],
-    } as never);
-
-    await logger.onFinish!({
-      finishReason: "stop",
-      text: "ok",
-      totalUsage: { inputTokens: 10, outputTokens: 20, inputTokenDetails: {} },
-    } as never);
-
-    const generateStep = calls.find(
-      (c) => c.url.includes("/appendStep") && c.body.input.type === "generate",
-    );
-    expect(generateStep?.body.input).toMatchObject({
+    expect(server.steps()[0]).toMatchObject({
+      type: "generate",
       reasoningText: "Need a concise answer.",
       reasoningTokens: 7,
     });
   });
 
-  it("handles error — finishRun with status error", async () => {
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER });
+  it("logs the last user message as the prompt and earlier user/assistant text as history", async () => {
+    const server = mockQgridServer();
 
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      prompt: "test",
-    } as never);
-
-    await logger.onFinish!({
-      finishReason: "error",
-      text: "",
-      error: new Error("LLM failed"),
-      totalUsage: { inputTokens: 50, outputTokens: 0, inputTokenDetails: {} },
-    } as never);
-
-    const finishCall = calls.find((c) => c.url.includes("/finishRun"));
-    expect(finishCall?.body.input).toMatchObject({
-      status: "error",
-      errorMessage: "Error: LLM failed",
+    await generateText({
+      model: textModel(),
+      allowSystemInMessages: true,
+      messages: [
+        { role: "system", content: "you are helpful" },
+        { role: "user", content: [{ type: "text", text: "hi" }] },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "answer" },
+            { type: "tool-call", toolCallId: "call_1", toolName: "getX", input: { id: 1 } },
+          ],
+        },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: "call_1",
+              toolName: "getX",
+              output: { type: "text", value: "x" },
+            },
+          ],
+        },
+        { role: "user", content: [{ type: "text", text: "follow-up" }] },
+      ],
+      telemetry: createQgridLogger({ serverUrl: SERVER }),
     });
-  });
 
-  it("skips when model.provider is qgrid", async () => {
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER });
-
-    await logger.onStart!({
-      model: { provider: "qgrid", modelId: "openai/gpt-5.4" },
-      prompt: "test",
-    } as never);
-
-    await logger.onStepFinish!({
-      stepNumber: 0,
-      finishReason: "stop",
-      usage: { inputTokens: 100, outputTokens: 50 },
-      content: [],
-    } as never);
-
-    await logger.onFinish!({
-      finishReason: "stop",
-      text: "response",
-      totalUsage: { inputTokens: 100, outputTokens: 50 },
-    } as never);
-
-    expect(calls).toHaveLength(0);
-  });
-
-  it("skips external providers when providerOptions.qgrid.logger is false", async () => {
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER });
-
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      prompt: "private request",
-      providerOptions: { qgrid: { logger: false } },
-    } as never);
-
-    await logger.onStepFinish!({
-      stepNumber: 0,
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      response: { modelId: "gemini-3-flash" },
-      finishReason: "stop",
-      usage: { inputTokens: 10, outputTokens: 5, inputTokenDetails: {} },
-      content: [],
-    } as never);
-
-    await logger.onFinish!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      response: { modelId: "gemini-3-flash" },
-      finishReason: "stop",
-      text: "not logged",
-      totalUsage: { inputTokens: 10, outputTokens: 5, inputTokenDetails: {} },
-    } as never);
-
-    expect(calls).toHaveLength(0);
+    const [createInput] = server.createRuns();
+    expect(createInput?.userPrompt).toBe("follow-up");
+    expect(JSON.parse(String(createInput?.history))).toEqual([
+      { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
+    ]);
   });
 
   it.each([
@@ -399,554 +354,263 @@ describe("createQgridLogger", () => {
       requestedModelName: "anthropic/claude-sonnet-4-7",
       modelName: "anthropic/claude-sonnet-4-7-20260715",
     },
-  ])("canonicalizes the $provider telemetry provider prefix", async (model) => {
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER });
-
-    await logger.onStart!({
-      model: { provider: model.provider, modelId: model.requestedModelId },
-      prompt: "test",
-    } as never);
-
-    await logger.onFinish!({
-      model: { provider: model.provider, modelId: model.requestedModelId },
-      response: { modelId: model.servedModelId },
-      finishReason: "stop",
-      text: "ok",
-      totalUsage: { inputTokens: 1, outputTokens: 1, inputTokenDetails: {} },
-    } as never);
-
-    const createRunCall = calls.find((call) => call.url.includes("/createRun"));
-    const finishCall = calls.find((call) => call.url.includes("/finishRun"));
-    expect(createRunCall?.body.input.modelName).toBe(model.requestedModelName);
-    expect(finishCall?.body.input).toMatchObject({
-      modelName: model.modelName,
-      requestedModelName: model.requestedModelName,
-    });
-  });
-
-  it("skips all hooks when createRun fails", async () => {
-    const errors: Error[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw new Error("server down");
+  ])("canonicalizes the $provider telemetry provider prefix", async (names) => {
+    const server = mockQgridServer();
+    const model = new MockLanguageModelV3({
+      provider: names.provider,
+      modelId: names.requestedModelId,
+      doGenerate: async () => ({
+        content: [{ type: "text", text: "ok" }],
+        finishReason: stop,
+        usage: usage(1, 1),
+        response: { modelId: names.servedModelId },
+        warnings: [],
       }),
-    );
-
-    const logger = getIntegration({
-      serverUrl: SERVER,
-      onLogError: (err) => errors.push(err),
     });
 
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
+    await generateText({ model, prompt: "test", telemetry: createQgridLogger({ serverUrl: SERVER }) });
+
+    expect(server.createRuns()[0]?.modelName).toBe(names.requestedModelName);
+    expect(server.finishes()[0]).toMatchObject({
+      modelName: names.modelName,
+      requestedModelName: names.requestedModelName,
+    });
+  });
+
+  it("does not log qgrid provider calls, which the qgrid server logs itself", async () => {
+    const server = mockQgridServer();
+
+    await generateText({
+      model: textModel("ok", "qgrid", "openai/gpt-6-sol"),
       prompt: "test",
-    } as never);
+      telemetry: createQgridLogger({ serverUrl: SERVER }),
+    });
 
-    await logger.onStepFinish!({
-      stepNumber: 0,
-      finishReason: "stop",
-      usage: { inputTokens: 100, outputTokens: 50 },
-      content: [],
-    } as never);
-
-    await logger.onFinish!({
-      finishReason: "stop",
-      text: "response",
-      totalUsage: { inputTokens: 100, outputTokens: 50 },
-    } as never);
-
-    expect(errors).toHaveLength(1);
-    expect(errors[0].message).toBe("server down");
+    expect(server.calls).toEqual([]);
   });
 
-  it("uses messages array for prompt extraction", async () => {
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER });
-    const messages = [
-      { role: "user", content: [{ type: "text", text: "first message" }] },
-      { role: "assistant", content: [{ type: "text", text: "response" }] },
-      { role: "user", content: [{ type: "text", text: "second message" }] },
-    ];
+  it("does not log a generation with providerOptions.qgrid.logger false", async () => {
+    const server = mockQgridServer();
 
-    await logger.onStart!({
-      model: { provider: "anthropic", modelId: "claude-sonnet-4.7" },
-      prompt: undefined,
-      messages,
-    } as never);
+    const result = await generateText({
+      model: textModel("not logged"),
+      prompt: "private request",
+      providerOptions: { qgrid: { logger: false } },
+      telemetry: createQgridLogger({ serverUrl: SERVER }),
+    });
 
-    await logger.onFinish!({
-      finishReason: "stop",
-      text: "done",
-      totalUsage: { inputTokens: 10, outputTokens: 5, inputTokenDetails: {} },
-    } as never);
-
-    const createRunCall = calls.find((c) => c.url.includes("/createRun"));
-    expect(createRunCall?.body.input.userPrompt).toBe("second message");
-
-    // history는 createRun에서 전송됨 (onStart 시점)
-    expect(JSON.parse(String(createRunCall?.body.input.history))).toEqual([
-      { type: "message", role: "user", content: [{ type: "input_text", text: "first message" }] },
-      { type: "message", role: "assistant", content: [{ type: "output_text", text: "response" }] },
-    ]);
+    expect(result.text).toBe("not logged");
+    expect(server.calls).toEqual([]);
   });
 
-  it("filters tool calls and tool results from history (user/assistant only)", async () => {
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER });
-    const messages = [
-      { role: "system", content: "you are helpful" },
-      { role: "user", content: [{ type: "text", text: "hi" }] },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "answer" },
-          { type: "tool-call", toolCallId: "call_1", toolName: "getX", input: { id: 1 } },
-        ],
-      },
-      { role: "tool", content: [{ type: "tool-result", toolCallId: "call_1", output: "x" }] },
-      { role: "user", content: [{ type: "text", text: "follow-up" }] },
-    ];
+  it("reports a createRun failure once and keeps the generation running", async () => {
+    const errors: Error[] = [];
+    const fetchMock = vi.fn(async () => {
+      throw new Error("server down");
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      messages,
-    } as never);
-
-    await logger.onFinish!({
-      finishReason: "stop",
-      text: "done",
-      totalUsage: { inputTokens: 10, outputTokens: 5, inputTokenDetails: {} },
-    } as never);
-
-    const createRunCall = calls.find((c) => c.url.includes("/createRun"));
-    // history는 createRun에서 전송됨. 마지막 user 메시지(follow-up)는 현재 turn이라 제외. system/tool/function_call 도 제외.
-    expect(JSON.parse(String(createRunCall?.body.input.history))).toEqual([
-      { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
-      { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
-    ]);
-  });
-
-  it("keeps unmatched pending tool calls until a later step or finish", async () => {
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER });
-
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
+    const result = await generateText({
+      model: weatherModel(),
       prompt: "Weather in Seoul",
-    } as never);
-
-    await logger.onStepFinish!({
-      stepNumber: 0,
-      finishReason: "tool-calls",
-      usage: { inputTokens: 200, outputTokens: 30, inputTokenDetails: {} },
-      content: [
-        {
-          type: "tool-call",
-          toolCallId: "call_1",
-          toolName: "getWeather",
-          input: { city: "Seoul" },
-        },
-      ],
-    } as never);
-
-    await logger.onStepFinish!({
-      stepNumber: 1,
-      finishReason: "tool-calls",
-      usage: { inputTokens: 250, outputTokens: 20, inputTokenDetails: {} },
-      content: [],
-    } as never);
-
-    await logger.onFinish!({
-      finishReason: "stop",
-      text: "done",
-      totalUsage: { inputTokens: 450, outputTokens: 50, inputTokenDetails: {} },
-    } as never);
-
-    const toolCallStep = calls.find(
-      (c) => c.url.includes("/appendStep") && c.body.input.type === "tool_call",
-    );
-    expect(toolCallStep?.body.input).toMatchObject({
-      stepIndex: 0,
-      toolName: "getWeather",
-      toolArgs: '{"city":"Seoul"}',
+      tools: {
+        getWeather: tool({
+          inputSchema: z.object({ city: z.string() }),
+          execute: async () => ({ temperature: 22 }),
+        }),
+      },
+      stopWhen: isStepCount(3),
+      telemetry: createQgridLogger({ serverUrl: SERVER, onLogError: (e) => errors.push(e) }),
     });
+
+    expect(result.text).toBe("Seoul is 22°C");
+    expect(errors.map((e) => e.message)).toEqual(["server down"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("separates overlapping runs by metadata qgridRunId", async () => {
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER });
+  it("finishes the run as error when the provider fails", async () => {
+    const server = mockQgridServer();
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => {
+        throw new Error("LLM failed");
+      },
+    });
 
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      prompt: "first",
-      metadata: { qgridRunId: "run-1" },
-    } as never);
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      prompt: "second",
-      metadata: { qgridRunId: "run-2" },
-    } as never);
+    await expect(
+      generateText({
+        model,
+        prompt: "test",
+        maxRetries: 0,
+        telemetry: createQgridLogger({ serverUrl: SERVER }),
+      }),
+    ).rejects.toThrow("LLM failed");
 
-    await logger.onFinish!({
-      finishReason: "stop",
-      text: "first response",
-      totalUsage: { inputTokens: 1, outputTokens: 1, inputTokenDetails: {} },
-      metadata: { qgridRunId: "run-1" },
-    } as never);
-    await logger.onFinish!({
-      finishReason: "stop",
-      text: "second response",
-      totalUsage: { inputTokens: 2, outputTokens: 2, inputTokenDetails: {} },
-      metadata: { qgridRunId: "run-2" },
-    } as never);
-
-    const finishCalls = calls.filter((c) => c.url.includes("/finishRun"));
-    expect(finishCalls.map((c) => c.body.input.response)).toEqual([
-      "first response",
-      "second response",
+    expect(server.finishes()).toEqual([
+      expect.objectContaining({ status: "error", errorMessage: "Error: LLM failed" }),
     ]);
   });
 
-  it("closes the active run and quarantines when telemetry keys overlap", async () => {
-    const calls = mockFetch();
-    const errors: Error[] = [];
-    const logger = getIntegration({
-      serverUrl: SERVER,
-      onLogError: (err) => errors.push(err),
-    });
+  it("finishes the run as aborted when generateText is cancelled", async () => {
+    const server = mockQgridServer();
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 20);
 
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      prompt: "first",
-    } as never);
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      prompt: "second",
-    } as never);
-
-    // 늦게 도착하는 이전 onFinish들 — quarantine 중이므로 무시됨
-    await logger.onFinish!({
-      finishReason: "stop",
-      text: "first response",
-      totalUsage: { inputTokens: 1, outputTokens: 1, inputTokenDetails: {} },
-    } as never);
-    await logger.onFinish!({
-      finishReason: "stop",
-      text: "second response",
-      totalUsage: { inputTokens: 2, outputTokens: 2, inputTokenDetails: {} },
-    } as never);
-
-    // overlap된 첫 run만 error finalize됨. 새 run은 생성 안 됨.
-    const finishCalls = calls.filter((c) => c.url.includes("/finishRun"));
-    expect(finishCalls).toHaveLength(1);
-    expect(finishCalls[0].body.input).toMatchObject({
-      status: "error",
-      errorMessage: expect.stringContaining("overlapping runs"),
-    });
-    expect(errors[0].message).toContain("overlapping runs");
-  });
-
-  it.each([
-    { second: "enabled", providerOptions: undefined },
-    { second: "logger-disabled", providerOptions: { qgrid: { logger: false } } },
-  ])("reserves a default key across a pending createRun ($second second)", async (second) => {
-    const calls: FetchCall[] = [];
-    const pendingCreateRun = deferred<Response>();
-    const errors: Error[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as FetchCall["body"];
-        calls.push({ url, body });
-        if (url.includes("/createRun")) return pendingCreateRun.promise;
-        return new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+    await expect(
+      generateText({
+        model: hangingModel(),
+        prompt: "test",
+        abortSignal: controller.signal,
+        telemetry: createQgridLogger({ serverUrl: SERVER }),
       }),
-    );
-    const logger = getIntegration({
-      serverUrl: SERVER,
-      staleRunTimeoutMs: 0,
-      onLogError: (error) => errors.push(error),
-    });
+    ).rejects.toMatchObject({ name: "AbortError" });
 
-    const firstStart = logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      prompt: "first",
-    } as never);
-    const secondStart = logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      prompt: "second",
-      providerOptions: second.providerOptions,
-    } as never);
-
-    expect(calls.filter((call) => call.url.includes("/createRun"))).toHaveLength(1);
-    expect(errors[0]?.message).toContain("overlapping runs");
-
-    pendingCreateRun.resolve(
-      new Response(JSON.stringify({ requestLogId: 1 }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
+    expect(server.finishes()).toEqual([
+      expect.objectContaining({
+        status: "aborted",
+        errorMessage: expect.stringContaining("AbortError"),
       }),
-    );
-    await Promise.all([firstStart, secondStart]);
-
-    for (const text of ["first response", "second response"]) {
-      await logger.onFinish!({
-        model: { provider: "google", modelId: "gemini-3-flash" },
-        response: { modelId: "gemini-3-flash" },
-        finishReason: "stop",
-        text,
-        totalUsage: { inputTokens: 1, outputTokens: 1, inputTokenDetails: {} },
-      } as never);
-    }
-
-    const finishCalls = calls.filter((call) => call.url.includes("/finishRun"));
-    expect(finishCalls).toHaveLength(1);
-    expect(finishCalls[0]?.body.input).toMatchObject({
-      requestLogId: 1,
-      status: "error",
-      errorMessage: expect.stringContaining("overlapping runs"),
-    });
+    ]);
   });
 
-  it("releases the start reservation when createRun fails", async () => {
-    const calls: FetchCall[] = [];
-    const errors: Error[] = [];
-    let createAttempts = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as FetchCall["body"];
-        calls.push({ url, body });
-        if (url.includes("/createRun")) {
-          createAttempts++;
-          if (createAttempts === 1) throw new Error("server down");
-          return new Response(JSON.stringify({ requestLogId: 2 }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
-        }
-        return new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+  it("logs a consumed streamText generation", async () => {
+    const server = mockQgridServer();
+    const model = new MockLanguageModelV3({
+      doStream: async () => ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: "text-start", id: "1" });
+            controller.enqueue({ type: "text-delta", id: "1", delta: "streamed" });
+            controller.enqueue({ type: "text-end", id: "1" });
+            controller.enqueue({ type: "finish", finishReason: stop, usage: usage(5, 3) });
+            controller.close();
+          },
+        }),
       }),
+    });
+
+    const result = streamText({
+      model,
+      prompt: "stream",
+      telemetry: createQgridLogger({ serverUrl: SERVER }),
+    });
+    await result.consumeStream();
+
+    await vi.waitFor(() =>
+      expect(server.finishes()).toEqual([
+        expect.objectContaining({
+          status: "succeeded",
+          response: "streamed",
+          totalInputTokens: 5,
+          totalOutputTokens: 3,
+        }),
+      ]),
     );
-    const logger = getIntegration({
-      serverUrl: SERVER,
-      staleRunTimeoutMs: 0,
-      onLogError: (error) => errors.push(error),
-    });
-
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      prompt: "first fails",
-    } as never);
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      prompt: "retry",
-    } as never);
-    await logger.onFinish!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      response: { modelId: "gemini-3-flash" },
-      finishReason: "stop",
-      text: "ok",
-      totalUsage: { inputTokens: 1, outputTokens: 1, inputTokenDetails: {} },
-    } as never);
-
-    expect(createAttempts).toBe(2);
-    expect(errors.map((error) => error.message)).toEqual(["server down"]);
-    const finishCall = calls.find((call) => call.url.includes("/finishRun"));
-    expect(finishCall?.body.input).toMatchObject({
-      requestLogId: 2,
-      status: "succeeded",
-      response: "ok",
-    });
+    expect(server.steps()).toEqual([expect.objectContaining({ type: "generate", stepIndex: 0 })]);
   });
 
-  it.each(["enabled-first", "disabled-first"] as const)(
-    "quarantines ambiguous logger-disabled overlap ($case)",
-    async (order) => {
-      const calls = mockFetch();
-      const errors: Error[] = [];
-      const logger = getIntegration({
-        serverUrl: SERVER,
-        staleRunTimeoutMs: 0,
-        onLogError: (error) => errors.push(error),
-      });
-      const enabledStart = {
-        model: { provider: "google", modelId: "gemini-3-flash" },
-        prompt: "logged",
-      };
-      const disabledStart = {
-        model: { provider: "google", modelId: "gemini-3-flash" },
-        prompt: "not logged",
-        providerOptions: { qgrid: { logger: false } },
-      };
-
-      if (order === "enabled-first") {
-        await logger.onStart!(enabledStart as never);
-        await logger.onStart!(disabledStart as never);
-      } else {
-        await logger.onStart!(disabledStart as never);
-        await logger.onStart!(enabledStart as never);
-      }
-
-      for (const text of ["logged response", "suppressed response"]) {
-        await logger.onFinish!({
-          model: { provider: "google", modelId: "gemini-3-flash" },
-          response: { modelId: "gemini-3-flash" },
-          finishReason: "stop",
-          text,
-          totalUsage: { inputTokens: 1, outputTokens: 1, inputTokenDetails: {} },
-        } as never);
-      }
-
-      expect(errors[0]?.message).toContain("overlapping runs");
-      const finishCalls = calls.filter((call) => call.url.includes("/finishRun"));
-      if (order === "enabled-first") {
-        expect(finishCalls).toHaveLength(1);
-        expect(finishCalls[0]?.body.input).toMatchObject({
-          status: "error",
-          errorMessage: expect.stringContaining("overlapping runs"),
-        });
-      } else {
-        expect(calls).toHaveLength(0);
-      }
-    },
-  );
-
-  it("keeps qgrid double-log suppression isolated from an external default-key run", async () => {
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER, staleRunTimeoutMs: 0 });
-
-    await logger.onStart!({
-      model: { provider: "qgrid", modelId: "openai/gpt-5.4" },
-      prompt: "qgrid-owned",
-    } as never);
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      prompt: "external",
-    } as never);
-
-    await logger.onFinish!({
-      model: { provider: "qgrid", modelId: "openai/gpt-5.4" },
-      response: { modelId: "gpt-5.4" },
-      finishReason: "stop",
-      text: "qgrid response",
-      totalUsage: { inputTokens: 1, outputTokens: 1, inputTokenDetails: {} },
-    } as never);
-    await logger.onFinish!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      response: { modelId: "gemini-3-flash" },
-      finishReason: "stop",
-      text: "external response",
-      totalUsage: { inputTokens: 1, outputTokens: 1, inputTokenDetails: {} },
-    } as never);
-
-    expect(calls.filter((call) => call.url.includes("/createRun"))).toHaveLength(1);
-    const finishCall = calls.find((call) => call.url.includes("/finishRun"));
-    expect(finishCall?.body.input).toMatchObject({
-      status: "succeeded",
-      response: "external response",
+  it("finishes the run as error when the stream emits an error part", async () => {
+    const server = mockQgridServer();
+    const model = new MockLanguageModelV3({
+      doStream: async () => ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: "error", error: new Error("stream boom") });
+            controller.close();
+          },
+        }),
+      }),
     });
+
+    const result = streamText({
+      model,
+      prompt: "stream",
+      onError: () => {},
+      telemetry: createQgridLogger({ serverUrl: SERVER }),
+    });
+    await result.consumeStream();
+
+    await vi.waitFor(() =>
+      expect(server.finishes()).toEqual([expect.objectContaining({ status: "error" })]),
+    );
   });
 
-  it("marks runs as error when onFinish is never emitted", async () => {
-    vi.useFakeTimers();
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER, staleRunTimeoutMs: 100 });
+  it("finishes the run as aborted when streamText is cancelled", async () => {
+    const server = mockQgridServer();
+    const controller = new AbortController();
+    const model = new MockLanguageModelV3({
+      doStream: async () => ({
+        stream: new ReadableStream({
+          start(stream) {
+            stream.enqueue({ type: "text-start", id: "1" });
+            stream.enqueue({ type: "text-delta", id: "1", delta: "partial" });
+          },
+        }),
+      }),
+    });
 
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
+    const result = streamText({
+      model,
+      prompt: "stream",
+      abortSignal: controller.signal,
+      telemetry: createQgridLogger({ serverUrl: SERVER }),
+    });
+    setTimeout(() => controller.abort(), 20);
+    await result.consumeStream();
+
+    await vi.waitFor(() =>
+      expect(server.finishes()).toEqual([expect.objectContaining({ status: "aborted" })]),
+    );
+  });
+
+  it("logs concurrent calls through one logger as separate runs", async () => {
+    const server = mockQgridServer();
+    const telemetry = createQgridLogger({ serverUrl: SERVER });
+
+    await Promise.all([
+      generateText({ model: textModel("first"), prompt: "a", telemetry }),
+      generateText({ model: textModel("second"), prompt: "b", telemetry }),
+    ]);
+
+    const finishes = server.finishes();
+    expect(finishes).toHaveLength(2);
+    expect(new Set(finishes.map((f) => f.requestLogId))).toEqual(new Set([1, 2]));
+    const responseByRun = new Map(finishes.map((f) => [f.requestLogId, f.response]));
+    const promptByRun = new Map(server.createRuns().map((c, i) => [i + 1, c.userPrompt]));
+    expect(responseByRun.get(1)).toBe(promptByRun.get(1) === "a" ? "first" : "second");
+    expect(server.steps().map((s) => s.requestLogId).sort()).toEqual([1, 2]);
+  });
+
+  it("finishes a run that never reports a terminal event once, after the stale-run timeout", async () => {
+    const server = mockQgridServer();
+    const controller = new AbortController();
+
+    const generation = generateText({
+      model: hangingModel(),
       prompt: "test",
-    } as never);
+      abortSignal: controller.signal,
+      telemetry: createQgridLogger({ serverUrl: SERVER, staleRunTimeoutMs: 50 }),
+    }).catch(() => undefined);
 
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.waitFor(() =>
+      expect(server.finishes()).toEqual([
+        expect.objectContaining({ status: "error", errorMessage: expect.stringContaining("stale-run") }),
+      ]),
+    );
 
-    const finishCall = calls.find((c) => c.url.includes("/finishRun"));
-    expect(finishCall?.body.input).toMatchObject({
-      status: "error",
-      errorMessage: "AI SDK generation ended before onFinish was emitted",
-    });
+    controller.abort();
+    await generation;
+    expect(server.finishes()).toHaveLength(1);
   });
 
-  it("marks runs as aborted when the AI SDK abort signal fires", async () => {
-    const calls = mockFetch();
-    const abortController = new AbortController();
-    const logger = getIntegration({ serverUrl: SERVER, staleRunTimeoutMs: 0 });
+  it("uses the configured tokenName", async () => {
+    const server = mockQgridServer();
 
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
+    await generateText({
+      model: textModel(),
       prompt: "test",
-      abortSignal: abortController.signal,
-    } as never);
-
-    abortController.abort("user stopped");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    const finishCall = calls.find((c) => c.url.includes("/finishRun"));
-    expect(finishCall?.body.input).toMatchObject({
-      status: "aborted",
-      errorMessage: "user stopped",
+      telemetry: createQgridLogger({ serverUrl: SERVER, tokenName: "my-custom-token" }),
     });
-  });
 
-  it("expires suppressed qgrid runs when their finish event never arrives", async () => {
-    vi.useFakeTimers();
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER, staleRunTimeoutMs: 100 });
-
-    await logger.onStart!({
-      model: { provider: "qgrid", modelId: "openai/gpt-5.4" },
-      prompt: "handled by qgrid wrapper",
-    } as never);
-
-    await vi.advanceTimersByTimeAsync(100);
-
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      prompt: "next normal call",
-    } as never);
-    await logger.onFinish!({
-      finishReason: "stop",
-      text: "ok",
-      totalUsage: { inputTokens: 1, outputTokens: 1, inputTokenDetails: {} },
-    } as never);
-
-    const createRunCall = calls.find((c) => c.url.includes("/createRun"));
-    expect(createRunCall?.body.input).toMatchObject({
-      userPrompt: "next normal call",
-    });
-  });
-
-  it("uses custom tokenName from config", async () => {
-    const calls = mockFetch();
-    const logger = getIntegration({ serverUrl: SERVER, tokenName: "...abc1" });
-
-    await logger.onStart!({
-      model: { provider: "google", modelId: "gemini-3-flash" },
-      prompt: "test",
-    } as never);
-
-    await logger.onStepFinish!({
-      stepNumber: 0,
-      finishReason: "stop",
-      usage: { inputTokens: 10, outputTokens: 5, inputTokenDetails: {} },
-      content: [],
-    } as never);
-
-    await logger.onFinish!({
-      finishReason: "stop",
-      text: "ok",
-      totalUsage: { inputTokens: 10, outputTokens: 5, inputTokenDetails: {} },
-    } as never);
-
-    const finishCall = calls.find((c) => c.url.includes("/finishRun"));
-    expect(finishCall?.body.input.tokenName).toBe("...abc1");
+    expect(server.finishes()[0]?.tokenName).toBe("my-custom-token");
   });
 });

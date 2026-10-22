@@ -2,7 +2,7 @@
 
 [English](./README.md) · **한국어**
 
-AI SDK v6 custom `LanguageModelV3` / `ImageModelV3` provider for [qgrid](https://github.com/cartanova-ai/Qgrid).
+[qgrid](https://github.com/cartanova-ai/Qgrid)용 AI SDK 7 custom provider입니다. AI SDK 7이 받는 `LanguageModelV3` / `ImageModelV3` 명세를 구현합니다.
 
 **기존 AI SDK 코드 변경 없이, `model` 한 줄만 바꾸면 구독 토큰 풀링(토큰 N개 × concurrent permit) + request log 대시보드를 사용할 수 있습니다.**
 
@@ -24,7 +24,7 @@ AI SDK v6 custom `LanguageModelV3` / `ImageModelV3` provider for [qgrid](https:/
  const { text } = await generateText({
    model: google("gemini-3-flash"),
    prompt: "복잡한 질문",
-+  experimental_telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
++  telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
  });
 ```
 
@@ -34,7 +34,7 @@ AI SDK v6 custom `LanguageModelV3` / `ImageModelV3` provider for [qgrid](https:/
 pnpm add @cartanova/qgrid-ai-sdk
 ```
 
-Peer dependencies: `ai@^6.0.0`, `@ai-sdk/provider@^3.0.0`
+Peer dependencies: `ai@^7.0.0`, `@ai-sdk/provider@^4.0.0`
 
 ## 빠른 시작
 
@@ -64,7 +64,7 @@ import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
 const { text } = await generateText({
   model: qgrid("openai/gpt-6-luna"),
-  system: "당신은 학술 논문 요약가입니다.",
+  instructions: "당신은 학술 논문 요약가입니다.",
   prompt: paperText,
 });
 ```
@@ -80,7 +80,7 @@ import { z } from "zod";
 
 const { output } = await generateText({
   model: qgrid("openai/gpt-5.6-terra"),
-  system: "논문 메타데이터를 추출해주세요.",
+  instructions: "논문 메타데이터를 추출해주세요.",
   prompt: paperText,
   output: Output.object({
     schema: z.object({
@@ -118,7 +118,7 @@ for await (const chunk of textStream) {
 ### Tool Calling
 
 ```typescript
-import { generateText, stepCountIs, tool } from "ai";
+import { generateText, isStepCount, tool } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 import { z } from "zod";
 
@@ -134,7 +134,7 @@ const { text } = await generateText({
       },
     }),
   },
-  stopWhen: stepCountIs(3),
+  stopWhen: isStepCount(3),
 });
 ```
 
@@ -146,7 +146,7 @@ tool-call 턴 뒤에도 계속 진행해 모델의 최종 응답을 받습니다
 `tools`와 `Output.object`를 함께 사용할 수도 있습니다.
 
 ```typescript
-import { generateText, Output, stepCountIs, tool } from "ai";
+import { generateText, Output, isStepCount, tool } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 import { z } from "zod";
 
@@ -160,7 +160,7 @@ const { output } = await generateText({
       execute: async ({ city }) => ({ city, temperature: 22 }),
     }),
   },
-  stopWhen: stepCountIs(3),
+  stopWhen: isStepCount(3),
   output: Output.object({
     schema: z.object({
       city: z.string(),
@@ -347,8 +347,8 @@ qgrid는 `grok/*` 모델을 qgrid 대시보드에 등록한 xAI 구독 토큰(�
 | `qgrid(id)` | `grok/grok-4.7`(카탈로그 기본 모델), `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`, 그 밖의 `grok/<id>` | `generateText`, `streamText` |
 | `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0`, `grok/grok-imagine-image-quality` | `generateImage` |
 | `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
-| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0` | `experimental_transcribe` |
-| `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임) | `experimental_generateSpeech` |
+| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0` | `transcribe` |
+| `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임) | `generateSpeech` |
 
 qgrid는 카탈로그에 없는 language model ID를 거부하지 않고 그대로 전달합니다(OpenAI와 같음). 판단은
 subscription backend가 하며 다른 모델로 응답할 수 있으므로, 실제로 실행된 모델은 request log의 응답 모델(또는
@@ -459,8 +459,8 @@ try {
 ```typescript
 import { readFile } from "node:fs/promises";
 import {
-  experimental_generateSpeech as generateSpeech,
-  experimental_transcribe as transcribe,
+  generateSpeech,
+  transcribe,
 } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
@@ -482,14 +482,14 @@ const speech = await generateSpeech({
 speech.audio.uint8Array;
 ```
 
-- `experimental_transcribe`는 bytes로 오디오 형식을 감지하고 실패하면 `audio/wav`를 씁니다. 서버는 `audio/*`가 아닌 값을 거부합니다. transcript에는 segment가 없습니다(`segments: []`).
+- `transcribe`는 bytes로 오디오 형식을 감지하고 실패하면 `audio/wav`를 씁니다. 서버는 `audio/*`가 아닌 값을 거부합니다. transcript에는 segment가 없습니다(`segments: []`).
 - 음성 합성 텍스트는 최대 15,000자입니다. `voice`, `language`, `outputFormat`을 지정하지 않으면 서버 기본값 `ara`, `en`, `mp3`가 쓰이며, live 검증된 조합은 이것뿐입니다. 다른 voice, language(`@ai-sdk/xai`의 `auto` 포함), codec은 그대로 전달되지만 미검증입니다. 서버가 돌려준 오디오 MIME 타입은 `providerMetadata.qgrid.mediaType`에 있고, AI SDK의 `speech.audio.mediaType`은 bytes에서 추정한 값입니다.
 
 ## Telemetry Logger
 
-서버와 AI SDK 2.10.0부터 qgrid provider의 `generateText` 결과에서는 `result.providerMetadata?.qgrid?.requestLogId`로 요청 로그 ID를 확인할 수 있습니다. `streamText`는 스트림 소비 후 `(await result.providerMetadata)?.qgrid?.requestLogId`로 확인합니다. 직접 API를 호출하면 `query` 응답과 스트림 `done` 이벤트의 최상위 `requestLogId`에 같은 값이 담깁니다. `logger: false` 또는 구버전 서버에서는 이 필드가 없으며, 툴 호출 후속 단계는 같은 요청 로그 ID를 공유합니다. 이 ID는 후속 요청 연결 상태가 아니며, 아래 telemetry logger를 쓰는 외부 provider에는 이 metadata가 추가되지 않습니다.
+서버와 AI SDK 2.10.0부터 qgrid provider의 `generateText` 결과에서는 `result.finalStep.providerMetadata?.qgrid?.requestLogId`로 요청 로그 ID를 확인할 수 있습니다. `streamText`는 스트림 소비 후 `(await result.finalStep).providerMetadata?.qgrid?.requestLogId`로 확인합니다. 직접 API를 호출하면 `query` 응답과 스트림 `done` 이벤트의 최상위 `requestLogId`에 같은 값이 담깁니다. `logger: false` 또는 구버전 서버에서는 이 필드가 없으며, 툴 호출 후속 단계는 같은 요청 로그 ID를 공유합니다. 이 ID는 후속 요청 연결 상태가 아니며, 아래 telemetry logger를 쓰는 외부 provider에는 이 metadata가 추가되지 않습니다.
 
-qgrid provider가 아닌 모델(google, openai 직접 호출)에서도 같은 request log 대시보드를 사용하려면 `createQgridLogger`를 `experimental_telemetry`에 넣으면 됩니다.
+qgrid provider가 아닌 모델(google, openai 직접 호출)에서도 같은 request log 대시보드를 사용하려면 `createQgridLogger`를 `telemetry`에 넣으면 됩니다.
 
 ```typescript
 import { generateText } from "ai";
@@ -499,7 +499,7 @@ import { createQgridLogger } from "@cartanova/qgrid-ai-sdk";
 const { text } = await generateText({
   model: google("gemini-3-flash"),
   prompt: "안녕하세요",
-  experimental_telemetry: createQgridLogger({
+  telemetry: createQgridLogger({
     serverUrl: "http://localhost:44900",
   }),
 });
@@ -537,7 +537,7 @@ const { text } = await generateText({
   providerOptions: {
     qgrid: { logger: false } satisfies QgridProviderOptions,
   },
-  experimental_telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
+  telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
 });
 ```
 
@@ -698,6 +698,12 @@ QGRID_REAL_PROVIDER_ACCEPTANCE=1 QGRID_URL=http://localhost:44900 QGRID_MODEL=op
 
 ## 요구사항
 
-- Node.js >= 20
-- AI SDK v6 (`ai@^6.0.0`)
+- Node.js >= 22
+- AI SDK 7 (`ai@^7.0.0`)
 - 실행 중인 qgrid 서버
+
+### AI SDK 7로 업그레이드
+
+- logger는 `experimental_telemetry` 대신 `telemetry: createQgridLogger(...)`로 넘깁니다.
+- `metadata.qgridRunId`는 더 이상 필요 없습니다. logger가 AI SDK의 호출별 `callId`로 run을 구분하므로 logger 하나를 동시 호출에 함께 써도 됩니다.
+- 요청 로그 ID는 `result.finalStep.providerMetadata`에서 읽습니다. AI SDK 7에서 최상위 `providerMetadata`는 deprecated alias로만 남아 있습니다.

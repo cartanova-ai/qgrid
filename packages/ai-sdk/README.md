@@ -2,7 +2,7 @@
 
 **English** · [한국어](./README.ko.md)
 
-AI SDK v6 custom `LanguageModelV3` / `ImageModelV3` provider for [qgrid](https://github.com/cartanova-ai/Qgrid).
+AI SDK 7 custom provider for [qgrid](https://github.com/cartanova-ai/Qgrid), implementing the `LanguageModelV3` / `ImageModelV3` specification that AI SDK 7 accepts.
 
 **Without changing your existing AI SDK code, swap a single `model` line to get subscription-token pooling (N tokens × concurrent permits) + the request log dashboard.**
 
@@ -24,7 +24,7 @@ If you already use another provider (google, openai, ...) directly, add **a sing
  const { text } = await generateText({
    model: google("gemini-3-flash"),
    prompt: "A complex question",
-+  experimental_telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
++  telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
  });
 ```
 
@@ -34,7 +34,7 @@ If you already use another provider (google, openai, ...) directly, add **a sing
 pnpm add @cartanova/qgrid-ai-sdk
 ```
 
-Peer dependencies: `ai@^6.0.0`, `@ai-sdk/provider@^3.0.0`
+Peer dependencies: `ai@^7.0.0`, `@ai-sdk/provider@^4.0.0`
 
 ## Quick start
 
@@ -64,7 +64,7 @@ import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
 const { text } = await generateText({
   model: qgrid("openai/gpt-6-luna"),
-  system: "You are an academic paper summarizer.",
+  instructions: "You are an academic paper summarizer.",
   prompt: paperText,
 });
 ```
@@ -80,7 +80,7 @@ import { z } from "zod";
 
 const { output } = await generateText({
   model: qgrid("openai/gpt-5.6-terra"),
-  system: "Extract the paper metadata.",
+  instructions: "Extract the paper metadata.",
   prompt: paperText,
   output: Output.object({
     schema: z.object({
@@ -126,7 +126,7 @@ for await (const chunk of textStream) {
 ### Tool Calling
 
 ```typescript
-import { generateText, stepCountIs, tool } from "ai";
+import { generateText, isStepCount, tool } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 import { z } from "zod";
 
@@ -142,7 +142,7 @@ const { text } = await generateText({
       },
     }),
   },
-  stopWhen: stepCountIs(3),
+  stopWhen: isStepCount(3),
 });
 ```
 
@@ -154,7 +154,7 @@ tool-call step and asks the model for the final response.
 Tools can be combined with `Output.object`:
 
 ```typescript
-import { generateText, Output, stepCountIs, tool } from "ai";
+import { generateText, Output, isStepCount, tool } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 import { z } from "zod";
 
@@ -168,7 +168,7 @@ const { output } = await generateText({
       execute: async ({ city }) => ({ city, temperature: 22 }),
     }),
   },
-  stopWhen: stepCountIs(3),
+  stopWhen: isStepCount(3),
   output: Output.object({
     schema: z.object({
       city: z.string(),
@@ -357,8 +357,8 @@ Grok model accepts the same factory config as the other models: `serverUrl` (def
 | `qgrid(id)` | `grok/grok-4.7` (default catalog model), `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`, any other `grok/<id>` | `generateText`, `streamText` |
 | `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0`, `grok/grok-imagine-image-quality` | `generateImage` |
 | `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
-| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0` | `experimental_transcribe` |
-| `qgrid.speech(id)` | `grok/grok-tts` (the id only labels the request log) | `experimental_generateSpeech` |
+| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0` | `transcribe` |
+| `qgrid.speech(id)` | `grok/grok-tts` (the id only labels the request log) | `generateSpeech` |
 
 qgrid forwards a language-model id that is not in its catalog unchanged instead of rejecting it,
 as it does for OpenAI; the subscription backend decides. It may serve a different model, so check
@@ -471,8 +471,8 @@ try {
 ```typescript
 import { readFile } from "node:fs/promises";
 import {
-  experimental_generateSpeech as generateSpeech,
-  experimental_transcribe as transcribe,
+  generateSpeech,
+  transcribe,
 } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
@@ -494,14 +494,14 @@ const speech = await generateSpeech({
 speech.audio.uint8Array;
 ```
 
-- `experimental_transcribe` detects the audio type from its bytes and falls back to `audio/wav`; the server rejects anything that is not `audio/*`. Transcripts carry no segments (`segments: []`).
+- `transcribe` detects the audio type from its bytes and falls back to `audio/wav`; the server rejects anything that is not `audio/*`. Transcripts carry no segments (`segments: []`).
 - Speech text is limited to 15,000 characters. Unset `voice`, `language` and `outputFormat` use the server defaults `ara`, `en` and `mp3`, the only combination verified live. Other voices, languages (including `@ai-sdk/xai`'s `auto`) and codecs are passed through but unverified. The server's audio MIME type is in `providerMetadata.qgrid.mediaType`; AI SDK's `speech.audio.mediaType` is sniffed from the bytes.
 
 ## Telemetry Logger
 
-With qgrid server and SDK 2.10.0+, read the parent request-log ID from `result.providerMetadata?.qgrid?.requestLogId` after `generateText`. For `streamText`, consume the stream first, then read `(await result.providerMetadata)?.qgrid?.requestLogId`. Raw API query responses and stream `done` events expose the same ID as top-level `requestLogId`. The field is omitted with `logger: false` or an older server. Tool-run steps share the parent ID; it is not continuation state. This metadata applies to the qgrid provider, not external providers using the telemetry logger below.
+With qgrid server and SDK 2.10.0+, read the parent request-log ID from `result.finalStep.providerMetadata?.qgrid?.requestLogId` after `generateText`. For `streamText`, consume the stream first, then read `(await result.finalStep).providerMetadata?.qgrid?.requestLogId`. Raw API query responses and stream `done` events expose the same ID as top-level `requestLogId`. The field is omitted with `logger: false` or an older server. Tool-run steps share the parent ID; it is not continuation state. This metadata applies to the qgrid provider, not external providers using the telemetry logger below.
 
-To use the same request log dashboard with models that don't go through the qgrid provider (direct google/openai calls), pass `createQgridLogger` to `experimental_telemetry`.
+To use the same request log dashboard with models that don't go through the qgrid provider (direct google/openai calls), pass `createQgridLogger` to `telemetry`.
 
 ```typescript
 import { generateText } from "ai";
@@ -511,7 +511,7 @@ import { createQgridLogger } from "@cartanova/qgrid-ai-sdk";
 const { text } = await generateText({
   model: google("gemini-3-flash"),
   prompt: "Hello",
-  experimental_telemetry: createQgridLogger({
+  telemetry: createQgridLogger({
     serverUrl: "http://localhost:44900",
   }),
 });
@@ -550,7 +550,7 @@ const { text } = await generateText({
   providerOptions: {
     qgrid: { logger: false } satisfies QgridProviderOptions,
   },
-  experimental_telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
+  telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
 });
 ```
 
@@ -714,6 +714,12 @@ Keep new tests focused on observable contracts or concrete regressions. Preserve
 
 ## Requirements
 
-- Node.js >= 20
-- AI SDK v6 (`ai@^6.0.0`)
+- Node.js >= 22
+- AI SDK 7 (`ai@^7.0.0`)
 - A running qgrid server
+
+### Upgrading to AI SDK 7
+
+- Pass the logger as `telemetry: createQgridLogger(...)` instead of `experimental_telemetry`.
+- Drop `metadata.qgridRunId`. The logger keys each run by AI SDK's per-call `callId`, so one logger can serve concurrent calls.
+- Read the request-log ID from `result.finalStep.providerMetadata`. AI SDK 7 keeps the top-level `providerMetadata` only as a deprecated alias.

@@ -112,12 +112,16 @@ describe("qgrid.video with AI SDK experimental_generateVideo", () => {
       fps: 24,
       seed: undefined,
       image: undefined,
+      frameImages: undefined,
+      inputReferences: undefined,
+      generateAudio: true,
       providerOptions: { xai: { lastFrame: "https://example.com/last.png", keyframes: [] } },
     });
     expect(result.videos).toEqual([{ type: "url", url: VIDEO_URL, mediaType: "video/mp4" }]);
     expect(result.warnings).toEqual([
       expect.objectContaining({ feature: "providerOptions.xai.keyframes" }),
       expect.objectContaining({ feature: "fps" }),
+      expect.objectContaining({ feature: "generateAudio" }),
       expect.objectContaining({ feature: "providerOptions.xai.lastFrame" }),
     ]);
   });

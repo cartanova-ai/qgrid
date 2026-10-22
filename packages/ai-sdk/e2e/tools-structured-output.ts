@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
-import { generateText, Output, stepCountIs, streamText, tool } from "ai";
+import { generateText, Output, isStepCount, streamText, tool } from "ai";
 import { z } from "zod";
 
 import { qgrid, type QgridAnthropicModel, type QgridOpenAIModel } from "../src/index";
@@ -59,7 +59,7 @@ async function main() {
             }),
           },
           output: Output.object({ schema }),
-          stopWhen: stepCountIs(3),
+          stopWhen: isStepCount(3),
           maxRetries: 0,
         };
         if (mode === "generate") {
@@ -98,7 +98,7 @@ async function main() {
         }),
       },
       output: Output.object({ schema: z.object({ marker: z.string() }) }),
-      stopWhen: stepCountIs(3),
+      stopWhen: isStepCount(3),
       maxRetries: 0,
     });
     let text = "";

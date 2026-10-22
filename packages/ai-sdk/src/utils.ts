@@ -461,15 +461,10 @@ export function getErrorMessage(cause: unknown): string {
   }
 }
 
-export function extractUserPrompt(
-  prompt: string | ModelMessage[] | undefined,
-  messages: ModelMessage[] | undefined,
-): string {
-  if (prompt !== undefined && !Array.isArray(prompt)) return prompt;
-  const messageList = messages ?? prompt ?? [];
-
-  for (let i = messageList.length - 1; i >= 0; i--) {
-    const msg = messageList[i];
+// AI SDK telemetry delivers a string prompt as a trailing user message.
+export function extractUserPrompt(messages: ModelMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
 
     if (msg?.role === "user") {
       return extractTextContent(msg.content);
