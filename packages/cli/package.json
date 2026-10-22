@@ -26,38 +26,38 @@
     "test": "vitest run --dir src && node --test tooling/check-bundled-api-dependencies.node-test.mjs"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.0",
-    "@ai-sdk/provider": "^3.0.0",
-    "@ai-sdk/provider-utils": "^4.0.0",
+    "@ai-sdk/anthropic": "catalog:",
+    "@ai-sdk/provider": "catalog:",
+    "@ai-sdk/provider-utils": "catalog:",
     "@better-auth/core": "catalog:",
-    "@better-auth/passkey": "~1.6.0",
-    "@better-auth/sso": "~1.6.0",
-    "@logtape/logtape": "2.0.0",
-    "@logtape/pretty": "2.0.0",
-    "@oxc-project/runtime": "^0.79.1",
-    "ai": "^6.0.1",
+    "@better-auth/passkey": "catalog:",
+    "@better-auth/sso": "catalog:",
+    "@logtape/logtape": "catalog:",
+    "@logtape/pretty": "catalog:",
+    "@oxc-project/runtime": "catalog:",
+    "ai": "catalog:",
     "better-auth": "catalog:",
     "commander": "^13.0.0",
-    "dotenv": "^16",
-    "fastify": "^4",
-    "ioredis": "^5.8.2",
+    "dotenv": "catalog:",
+    "fastify": "catalog:",
+    "ioredis": "catalog:",
     "json-schema-to-zod": "^2.8.1",
-    "knex": "^3.2.9",
-    "pg": "^8.16.3",
+    "knex": "catalog:",
+    "pg": "catalog:",
     "pngjs": "^7.0.0",
-    "sonamu": "0.11.16",
-    "typescript": "7.1.0-dev.20260831.1",
+    "sonamu": "0.13.0",
+    "typescript": "catalog:",
     "ws": "8.20.0",
-    "zod": "^4.3.6"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
-    "semver": "^7.7.4",
+    "semver": "catalog:",
     "tsdown": "catalog:",
     "yaml": "^2.8.2"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

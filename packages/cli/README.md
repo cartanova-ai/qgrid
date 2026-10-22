@@ -104,7 +104,7 @@ Server behavior variables:
 
 ## Prerequisites
 
-- Node.js >= 20
+- Node.js >= 22
 - PostgreSQL
 - Docker (if running PostgreSQL locally as a container)
 - [Claude Code](https://www.anthropic.com/claude-code) (for Anthropic models)

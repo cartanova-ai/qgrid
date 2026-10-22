@@ -33,9 +33,9 @@
     "@ai-sdk/provider": "catalog:",
     "ai": "catalog:",
     "tsdown": "catalog:",
-    "typescript": "catalog:",
+    "typescript": "catalog:ts-node-compat",
     "vitest": "catalog:",
-    "zod": "4.4.3"
+    "zod": "catalog:"
   },
   "peerDependencies": {
     "@ai-sdk/provider": "^4.0.0",

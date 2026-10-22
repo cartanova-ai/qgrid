@@ -81,14 +81,13 @@ export interface GrokSeedModel {
 
 // U0 capture 2026-10-16 (GET /models: four ids, context_window 256000, default effort high)
 export const GROK_SEED_MODELS: readonly GrokSeedModel[] = Object.freeze(
-  ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"].map(
-    (id): GrokSeedModel =>
-      Object.freeze({
-        id,
-        contextWindow: 256_000,
-        reasoningEfforts: GROK_REASONING_EFFORTS,
-        defaultEffort: "high",
-      }),
+  ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"].map((id): GrokSeedModel =>
+    Object.freeze({
+      id,
+      contextWindow: 256_000,
+      reasoningEfforts: GROK_REASONING_EFFORTS,
+      defaultEffort: "high",
+    }),
   ),
 );
 

@@ -103,7 +103,7 @@ CLI는 실행 시 npm의 최신 버전을 확인하고 patch를 포함해 설치
 
 ## 사전 요구사항
 
-- Node.js >= 20
+- Node.js >= 22
 - PostgreSQL
 - Docker (로컬 PostgreSQL을 컨테이너로 실행할 경우)
 - [Claude Code](https://www.anthropic.com/claude-code) (Anthropic 모델 사용 시)

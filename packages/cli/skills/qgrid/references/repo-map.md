@@ -10,7 +10,7 @@ Use this map to orient qgrid work quickly.
 - `packages/cli`: global `qgrid` command, bundled server boot, dependency checks, DB preflight, and qgrid Codex/Claude Code skill sync. The CLI package ships `skills/qgrid` and its `postinstall` links it into consuming projects.
 - `scripts` and `packages/api/scripts`: smoke tests, debug scripts, runtime probes.
 - `tools/oxlint/anti-slop`: vendored anti-slop oxlint JS plugin, loaded from `.oxlintrc.json` and enforced by `mise run check`. `@oxlint/plugins` must match the installed `oxlint` version.
-- Toolchain: Sonamu 0.11 (CLI in `@sonamu-kit/cli`) and its required TypeScript `7.1.0-dev.20260831.1` in the root, api, cli, and web packages. `packages/ai-sdk` stays on TypeScript 5.9 because tsdown needs the TypeScript JS API to emit its `.d.ts`; `packages/cli` disables dts because it ships only a binary. Web `tsconfig.json` is a references-only solution file pointing at `tsconfig.app.json`, because Sonamu's web typecheck runs each project reference.
+- Toolchain: Sonamu 0.13 (CLI in `@sonamu-kit/cli`, Fastify 5) and its required TypeScript `7.1.0-dev.20260831.1` in the root, api, cli, and web packages. `packages/ai-sdk` uses TypeScript 6.0.2 from the `ts-node-compat` named catalog (synced from Sonamu) because tsdown needs the TypeScript JS API to emit its `.d.ts`; `packages/cli` disables dts because it ships only a binary. Web `tsconfig.json` is a references-only solution file pointing at `tsconfig.app.json`, because Sonamu's web typecheck runs each project reference.
 - `docs`: local planning, diagnosis, and solution history. `docs/WORKFLOW.md` is the collaboration convention.
 
 ## Deprecated/context-only package

@@ -40,6 +40,9 @@ coverage/
 *.lcov
 .nyc_output/
 
+# Vitest 5 report output (e.g. --reporter=json writes .vitest/json/output.json)
+.vitest/
+
 # TypeScript cache
 *.tsbuildinfo
 

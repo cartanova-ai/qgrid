@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 
-import Fastify from "fastify";
+import Fastify, { type FastifyError } from "fastify";
 import { BadRequestException, ServiceUnavailableException, Sonamu } from "sonamu";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -2012,7 +2012,8 @@ describe("QgridFrame Grok media and voice (U11)", () => {
 
   it("answers an oversize JSON body with a Sonamu 413 instead of a 500", async () => {
     const server = Fastify({ bodyLimit: REQUEST_BODY_LIMIT_BYTES });
-    server.setErrorHandler((error, _request, reply) => {
+    // Fastify 5 types handler errors as unknown; Sonamu's lifecycle.onError passes an Error.
+    server.setErrorHandler<FastifyError>((error, _request, reply) => {
       handleServerError(mapRequestBodyTooLarge(error), reply);
     });
     server.post("/media", async () => ({ ok: true }));
