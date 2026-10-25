@@ -354,7 +354,7 @@ describe("GrokDispatcher selection", () => {
     const preferred = await h.dispatcher.selectToken("chat", { preferredTokenId: 2 });
     expect(preferred.token.id).toBe(2);
     preferred.release();
-    h.billing.set(1, billingAt(90));
+    h.billing.set(1, billingAt(100));
     await expect(
       h.dispatcher.selectToken("chat", { preferredTokenId: 1, requirePreferredToken: true }),
     ).rejects.toBeInstanceOf(QuotaThresholdExceededError);
@@ -460,13 +460,29 @@ describe("GrokDispatcher selection", () => {
     expect(h.events.some((event) => event.startsWith("/billing"))).toBe(true);
   });
 
-  it("blocks over-threshold tokens and reports QuotaThresholdExceededError", async () => {
+  it("ignores the configured threshold while weekly quota remains", async () => {
     const h = createHarness();
-    h.add(1, 1, 50);
-    h.billing.set(1, billingAt(75));
+    h.add(1, 1, 75);
+    h.billing.set(1, billingAt(92));
+    const reservation = await h.dispatcher.selectToken("chat");
+    expect(reservation.token.id).toBe(1);
+    reservation.release();
+    expect(h.dispatcher.getQuotaSnapshot()[0]).toMatchObject({ threshold: 100, blocked: false });
+  });
+
+  it.each([75, null])("blocks exhausted weekly quota with configured threshold %s", async (threshold) => {
+    const h = createHarness();
+    h.add(1, 1, threshold);
+    h.billing.set(1, billingAt(100));
     await expect(h.dispatcher.selectToken("chat")).rejects.toBeInstanceOf(
       QuotaThresholdExceededError,
     );
+    expect(h.dispatcher.getQuotaSnapshot()[0]).toMatchObject({ threshold: 100, blocked: true });
+    h.clock.now += 61_000;
+    h.billing.set(1, billingAt(92));
+    const reservation = await h.dispatcher.selectToken("chat");
+    expect(reservation.token.id).toBe(1);
+    reservation.release();
   });
 });
 
@@ -596,7 +612,7 @@ describe("GrokDispatcher chat", () => {
     expect(h.clock.now - startedAt).toBe(30_000);
   });
 
-  it("blocks an exhausted token until a fresh billing read below threshold", async () => {
+  it("clears an exhaustion block after fresh billing falls below 100%", async () => {
     const h = createHarness();
     h.add(1, 5, 80);
     h.add(2, 1);
@@ -609,7 +625,7 @@ describe("GrokDispatcher chat", () => {
     await h.dispatcher.prefetch(token);
     expect(h.dispatcher.isEligible(token, "chat")).toBe(false);
     h.clock.now += 61_000;
-    h.billing.set(1, billingAt(50));
+    h.billing.set(1, billingAt(92));
     await h.dispatcher.prefetch(token);
     expect(h.dispatcher.isEligible(token, "chat")).toBe(true);
   });
@@ -980,7 +996,7 @@ describe("GrokDispatcher media", () => {
     };
     const h = createHarness({ media, maxInflightPerToken: 1 });
     h.add(1, 1, 50);
-    h.billing.set(1, billingAt(75));
+    h.billing.set(1, billingAt(100));
     const token = h.dispatcher.tokens.get(1)!;
     token.cooldowns.set("video", h.clock.now + 120_000);
     token.inFlight = 1;

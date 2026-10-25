@@ -44,9 +44,10 @@ Anthropic tokens live in an in-memory `Map<tokenId, PooledToken>`.
 
 Quota threshold:
 
-- `quota_threshold` checks `five_hour.utilization` and the shared `seven_day.utilization` for every model and also checks
-  `seven_day_overage_included.utilization` for the Fable family (Fable 5 and 5.1,
-  `isFableFamilyModel` in `anthropic-constants.ts`), using the highest available utilization.
+- `quota_threshold` applies only to `five_hour.utilization`. Shared `seven_day.utilization`
+  and the Fable family's `seven_day_overage_included.utilization` exclude tokens only at 100%.
+  Weekly exhaustion is checked even without a configured threshold. Keepalive uses the same
+  policy, so a 5-hour utilization of 0% and weekly utilization of 92% passes an 80% threshold.
 - A runtime quota-exhausted result invalidates every 60-second usage-cache key used before and
   after a possible OAuth refresh, so the next untargeted request rechecks usage and can select
   another token.

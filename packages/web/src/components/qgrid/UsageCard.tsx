@@ -26,7 +26,7 @@ import { isOAuthProvider, useOAuthLoginFlow } from "./use-oauth-login-flow";
 type Token = TokenSubsetMapping["A"];
 
 // Quota gate 가 구현된 provider 에서만 threshold 편집/표시를 연다(거짓 UI 방지).
-const QUOTA_THRESHOLD_PROVIDERS = new Set(["anthropic", "openai", "grok"]);
+const QUOTA_THRESHOLD_PROVIDERS = new Set(["anthropic", "openai"]);
 
 // threshold 입력(문자열) → 저장값(number|null) 검증.
 // 빈 값 또는 0 = 해제(null, 제한 없음). 1..100 정수는 그대로. 소수/음수/100 초과는 거부.
@@ -300,8 +300,7 @@ function TokenUsage({ token, theme }: { token: Token; theme: ProviderTheme }) {
           resetsAt={data.sevenDay.resetsAt}
           windowDurationMins={data.sevenDay.windowDurationMins}
           theme={theme}
-          // Grok 은 기간 창 하나(sevenDay)만 있어 그것이 gate 기준 primary 다.
-          threshold={token.provider === "grok" ? thresholdForPrimary : undefined}
+          threshold={token.provider === "anthropic" || token.provider === "grok" ? 100 : undefined}
         />
       )}
     </div>
@@ -413,7 +412,7 @@ function ThresholdControl({ token }: { token: Token }) {
               htmlFor={`threshold-${token.id}`}
               className="text-[10px] uppercase tracking-wider text-sand-500 font-medium"
             >
-              사용률 제한
+              {token.provider === "anthropic" ? "5시간 사용률 제한" : "주간 사용률 제한"}
             </label>
             <div className="mt-1 flex items-center gap-2">
               <button
@@ -446,8 +445,12 @@ function ThresholdControl({ token }: { token: Token }) {
             {validation.ok ? (
               <p className="mt-1.5 text-[11px] text-sand-500 leading-snug">
                 {validation.value === null
-                  ? "제한 없음 — 사용률과 무관하게 항상 사용합니다."
-                  : "기준 사용률이 임계치에 달하면 해당 토큰을 건너뜁니다."}
+                  ? token.provider === "anthropic"
+                    ? "5시간 제한 없음. 주간 사용량 100%에서는 제외합니다."
+                    : "제한 없음 — 사용률과 무관하게 항상 사용합니다."
+                  : token.provider === "anthropic"
+                    ? "5시간 사용률에 적용합니다. 주간은 100%에서만 제외합니다."
+                    : "주간 사용률이 임계치에 달하면 해당 토큰을 건너뜁니다."}
               </p>
             ) : (
               <p className="mt-1.5 text-[11px] text-red-500">{validation.error}</p>
@@ -734,9 +737,17 @@ function SortableTokenCard({ token }: { token: Token }) {
           {QUOTA_THRESHOLD_PROVIDERS.has(token.provider) && token.quota_threshold !== null && (
             <span
               className="px-1.5 py-0.5 rounded-full bg-sienna-50 text-[10px] tabular-nums font-medium text-sienna-600"
-              title={`사용률 ${token.quota_threshold}% 이상이면 이 토큰 제외`}
+              title={`${token.provider === "anthropic" ? "5시간" : "주간"} 사용률 ${token.quota_threshold}% 이상이면 이 토큰 제외`}
             >
               ≤ {token.quota_threshold}%
+            </span>
+          )}
+          {token.provider === "grok" && (
+            <span
+              className="px-1.5 py-0.5 rounded-full bg-sienna-50 text-[10px] tabular-nums font-medium text-sienna-600"
+              title="주간 사용률 100%에서 이 토큰 제외"
+            >
+              7d 100%
             </span>
           )}
         </div>
@@ -747,7 +758,7 @@ function SortableTokenCard({ token }: { token: Token }) {
           {token.reauth_required && <ReloginButton token={token} />}
           <div className="flex-1" />
           <WeightControl token={token} />
-          <ThresholdControl token={token} />
+          {token.provider !== "grok" && <ThresholdControl token={token} />}
         </div>
       </div>
     </div>

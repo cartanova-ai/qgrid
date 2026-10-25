@@ -946,13 +946,13 @@ describe("OpenAIDispatcher direct runtime", () => {
     expect(started).not.toHaveBeenCalled();
   });
 
-  it("routes past an over-threshold token instead of treating it as capacity", async () => {
+  it("applies the configured threshold to the OpenAI weekly primary window", async () => {
     const names: string[] = [];
     const d = new OpenAIDispatcher(config(), {
       clientFactory: () => ({ responses: () => events({ type: "completed", responseId: "r" }) }),
       fetch: async () =>
         new Response(
-          JSON.stringify({ rate_limits: { primary_window: { used_percent: 90 } } }),
+          JSON.stringify({ rate_limits: { primary_window: { used_percent: 90, limit_window_seconds: 604_800 } } }),
           { status: 200, headers: { "content-type": "application/json" } },
         ),
     });

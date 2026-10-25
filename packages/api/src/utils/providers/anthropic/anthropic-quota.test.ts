@@ -30,15 +30,16 @@ describe("readAnthropicQuotaUsage", () => {
     await expect(readAnthropicQuotaUsage("access-token")).resolves.toEqual({
       kind: "ok",
       utilizationPct: 17,
+      weeklyUtilizationPct: null,
       cacheAgeMs: 1_250,
     });
   });
 
   it.each([
-    { fiveHour: 0, sevenDay: 100, expected: 100 },
-    { fiveHour: 80, sevenDay: 20, expected: 80 },
-    { fiveHour: null, sevenDay: 100, expected: 100 },
-  ])("includes shared weekly usage in Opus eligibility: %j", async ({ fiveHour, sevenDay, expected }) => {
+    { fiveHour: 0, sevenDay: 92 },
+    { fiveHour: 80, sevenDay: 20 },
+    { fiveHour: null, sevenDay: 100 },
+  ])("keeps five-hour and weekly usage separate: %j", async ({ fiveHour, sevenDay }) => {
     fetchUsageWithMetaMock.mockResolvedValueOnce({
       data: {
         five_hour: { utilization: fiveHour, resets_at: null },
@@ -49,7 +50,8 @@ describe("readAnthropicQuotaUsage", () => {
 
     await expect(readAnthropicQuotaUsage("access-token", "claude-opus-5-5")).resolves.toMatchObject({
       kind: "ok",
-      utilizationPct: expected,
+      utilizationPct: fiveHour,
+      weeklyUtilizationPct: sevenDay,
     });
   });
 
@@ -65,19 +67,22 @@ describe("readAnthropicQuotaUsage", () => {
 
     await expect(readAnthropicQuotaUsage("access-token", "claude-fable-5")).resolves.toMatchObject({
       kind: "ok",
-      utilizationPct: 100,
+      utilizationPct: 10,
+      weeklyUtilizationPct: 100,
     });
     await expect(
       readAnthropicQuotaUsage("access-token", "claude-fable-5-1"),
     ).resolves.toMatchObject({
       kind: "ok",
-      utilizationPct: 100,
+      utilizationPct: 10,
+      weeklyUtilizationPct: 100,
     });
     await expect(
       readAnthropicQuotaUsage("access-token", "claude-sonnet-4-6"),
     ).resolves.toMatchObject({
       kind: "ok",
       utilizationPct: 10,
+      weeklyUtilizationPct: null,
     });
   });
 

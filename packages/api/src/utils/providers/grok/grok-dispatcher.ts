@@ -86,6 +86,7 @@ export const GROK_REFRESH_FAILED_COOLDOWN_MS = 5_000;
 export const GROK_MAX_STALE_AUTH_RETRIES = 1;
 const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 300_000;
+const GROK_WEEKLY_QUOTA_LIMIT = 100;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -820,7 +821,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
 
     if ((token.quotaBlocks.get(requestClass) ?? 0) > now) return "quota";
 
-    if (token.quotaThreshold !== null && token.overThreshold) return "quota";
+    if (token.overThreshold) return "quota";
 
     if ((token.cooldowns.get(requestClass) ?? 0) > now) return "cooldown";
 
@@ -838,29 +839,19 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
    * Refreshes the 60 s settings/subscription/billing caches. Lookup failures fail open, so an
    * expired bearer is refreshed first: a lookup with it would fail and open every gate. A failed
    * refresh therefore takes the token out of selection (`refresh_failed`) instead of failing open.
-   * Billing is read only when a threshold or quota block gates the token, unless `includeBilling`.
+   * Weekly exhaustion is checked for every token, independently of its configured threshold.
    */
-  async prefetch(
-    token: GrokTokenState,
-    signal?: AbortSignal,
-    includeBilling = false,
-  ): Promise<void> {
+  async prefetch(token: GrokTokenState, signal?: AbortSignal): Promise<void> {
     if (!token.credentials || token.invalidReason || token.reauthRequired) return;
     let now = this.now();
     const tasks: Promise<void>[] = [];
-
-    const wantsBilling = () =>
-      includeBilling ||
-      token.quotaThreshold !== null ||
-      [...token.quotaBlocks.values()].some((until) => until > now);
 
     const stale = (entry: Cached<unknown> | undefined) =>
       !entry ||
       entry.generation !== token.generation ||
       now - entry.fetchedAt >= GROK_LOOKUP_CACHE_TTL_MS;
 
-    const billingDue = () =>
-      wantsBilling() && stale(token.billing) && now >= token.billingNotBefore;
+    const billingDue = () => stale(token.billing) && now >= token.billingNotBefore;
 
     if (!stale(token.settings) && !stale(token.subscription) && !billingDue()) return;
 
@@ -903,7 +894,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
   async refreshUsage(tokenId: number): Promise<void> {
     const token = this.tokens.get(tokenId);
 
-    if (token) await this.prefetch(token, undefined, true);
+    if (token) await this.prefetch(token);
   }
 
   /** Transient refresh failure for `presented`; ignored when the token already holds newer ones. */
@@ -1036,18 +1027,18 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
           return;
         }
 
-        const limit = token.quotaThreshold ?? 100;
-        const over = token.quotaThreshold !== null && result.utilizationPct >= token.quotaThreshold;
+        const limit = GROK_WEEKLY_QUOTA_LIMIT;
+        const over = result.utilizationPct >= limit;
 
         if (over && !token.overThreshold) {
           logger.info(
-            `quota_threshold gate: over_threshold ${token.name}[${token.id}] (${result.utilizationPct}% >= ${token.quotaThreshold}%)`,
+            `quota_threshold gate: over_threshold ${token.name}[${token.id}] (${result.utilizationPct}% >= ${limit}%)`,
           );
         }
 
         if (!over && token.overThreshold) {
           logger.info(
-            `quota_threshold gate: recovered ${token.name}[${token.id}] (${result.utilizationPct}% < ${token.quotaThreshold}%)`,
+            `quota_threshold gate: recovered ${token.name}[${token.id}] (${result.utilizationPct}% < ${limit}%)`,
           );
         }
 
@@ -1202,7 +1193,12 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       if (present.has("quota")) {
         const over = [...reasons].flatMap(([token, reason]) =>
           reason === "quota"
-            ? [{ name: token.name, threshold: token.overThreshold ? token.quotaThreshold : null }]
+            ? [
+                {
+                  name: token.name,
+                  threshold: token.overThreshold ? GROK_WEEKLY_QUOTA_LIMIT : null,
+                },
+              ]
             : [],
         );
 
@@ -1231,7 +1227,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     if (reason === "quota") {
       return new QuotaThresholdExceededError(
         quotaMessage([
-          { name: token.name, threshold: token.overThreshold ? token.quotaThreshold : null },
+          { name: token.name, threshold: token.overThreshold ? GROK_WEEKLY_QUOTA_LIMIT : null },
         ]),
       );
     }
@@ -2097,7 +2093,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
                   fetchedAt: token.billing!.fetchedAt,
                 }
               : null,
-          quotaThreshold: token.quotaThreshold,
+          quotaThreshold: GROK_WEEKLY_QUOTA_LIMIT,
           overThreshold: token.overThreshold,
           onDemandExcluded: settings?.kind === "ok" && settings.onDemandEnabled === true,
           zdrVideoExcluded: token.zdr === true,
@@ -2141,7 +2137,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
         return {
           name: token.name,
           usedPercent: fresh ? billing.utilizationPct : null,
-          threshold: token.quotaThreshold,
+          threshold: GROK_WEEKLY_QUOTA_LIMIT,
           blocked:
             token.overThreshold || [...token.quotaBlocks.values()].some((until) => until > now),
           resetsAt: fresh ? billing.periodEndMs : null,

@@ -140,9 +140,9 @@ Usage/quota:
 
 - Usage API is `https://api.anthropic.com/api/oauth/usage`.
 - qgrid caches Anthropic usage by access-token suffix for 60 seconds.
-- Quota threshold uses the higher of `five_hour.utilization` and the shared `seven_day.utilization`;
-  Fable family models (Fable 5 and 5.1) additionally use the usage-credit
-  `seven_day_overage_included.utilization`. Any applicable window can exclude the token.
+- The configured quota threshold applies only to `five_hour.utilization`. The shared
+  `seven_day.utilization` and Fable-only `seven_day_overage_included.utilization` block only at
+  100%, independently of the configured threshold.
 - Usage lookup failure is fail-open for routing.
 
 ## OpenAI OAuth And Refresh Flow
@@ -274,7 +274,10 @@ When a refresh fails in a way that only re-login can fix, qgrid removes the toke
 
 `quota_threshold` is a routing gate, not a hard external-provider guarantee.
 
-- Null means no threshold gate.
+- Null disables the configurable threshold, but Anthropic and Grok still check weekly exhaustion.
+- Anthropic applies the configured threshold to 5-hour usage and a fixed 100% cap to weekly usage.
+- Grok exposes only weekly usage and uses a fixed 100% cap; its stored threshold is not applied.
+- OpenAI applies the configured threshold to its primary usage window, currently weekly.
 - Lookup failure is fail-open.
 - Individual over-threshold tokens are excluded from selection.
 - OpenAI keeps this exclusion as an in-memory `quota-blocked` runtime state without changing the
@@ -283,7 +286,7 @@ When a refresh fails in a way that only re-login can fix, qgrid removes the toke
   `recovered` once a later quota check falls below the threshold. Metadata generations prevent an
   in-flight lookup from restoring a block after a threshold or lifecycle change. The state is not
   persisted across server restarts.
-- Grok also keeps threshold and exhaustion blocks in memory. Its exhaustion block is request-class
+- Grok also keeps weekly-cap and exhaustion blocks in memory. Its exhaustion block is request-class
   scoped, and `/settings.on_demand_enabled = true` independently excludes the entire account
   (`packages/api/src/utils/providers/grok/grok-dispatcher.ts`).
 - If all ready/eligible tokens are over threshold, qgrid throws `QuotaThresholdExceededError`.

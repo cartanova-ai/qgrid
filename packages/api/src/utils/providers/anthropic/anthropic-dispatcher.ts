@@ -175,25 +175,18 @@ export class AnthropicDispatcher implements ProviderDispatcher {
     eligible: PooledToken[];
     overThresholdTokens: Array<{ tokenName: string; threshold: number }>;
   }> {
-    const thresholded = rows.filter((token) => this.hasQuotaThreshold(token));
-
-    if (thresholded.length === 0) return { eligible: rows, overThresholdTokens: [] };
-
-    const eligibleIds = new Set(
-      rows.flatMap((token) => (this.hasQuotaThreshold(token) ? [] : [token.id])),
-    );
-
+    const eligibleIds = new Set<number>();
     const overThresholdTokens: Array<{ tokenName: string; threshold: number }> = [];
 
     const checks = await Promise.allSettled(
-      thresholded.map(async (token) => ({
+      rows.map(async (token) => ({
         token,
         result: await readAnthropicQuotaUsage(token.credentials.accessToken, model),
       })),
     );
 
     checks.forEach((check, index) => {
-      const token = check.status === "rejected" ? thresholded[index] : check.value.token;
+      const token = check.status === "rejected" ? rows[index] : check.value.token;
 
       if (!token) return;
 
@@ -216,17 +209,24 @@ export class AnthropicDispatcher implements ProviderDispatcher {
         return;
       }
 
-      if (result.utilizationPct >= token.quotaThreshold) {
+      const weeklyExhausted =
+        result.weeklyUtilizationPct !== null && result.weeklyUtilizationPct >= 100;
+
+      const threshold = weeklyExhausted ? 100 : (token.quotaThreshold ?? null);
+      const utilization = weeklyExhausted ? result.weeklyUtilizationPct : result.utilizationPct;
+
+      if (threshold !== null && utilization !== null && utilization >= threshold) {
         logger.info("quota_threshold gate: over_threshold", {
           tokenId: token.id,
           tokenName: token.name,
           provider: "anthropic",
-          threshold: token.quotaThreshold,
-          cachedUtilization: result.utilizationPct,
+          threshold,
+          cachedUtilization: utilization,
+          window: weeklyExhausted ? "weekly" : "five_hour",
           cacheAge: result.cacheAgeMs,
           reason: "over_threshold",
         });
-        overThresholdTokens.push({ tokenName: token.name, threshold: token.quotaThreshold });
+        overThresholdTokens.push({ tokenName: token.name, threshold });
 
         return;
       }
