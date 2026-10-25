@@ -31,6 +31,16 @@ Do not copy stale docs blindly. Use docs to identify decisions and then verify a
 
 When a repo doc establishes or changes durable rationale for a qgrid feature, reflect the stable decision in `references/decision-rationale.md`. Keep the skill reference as a compact index of why the decision exists and where the source docs live; do not copy full plans or brainstorms into the skill.
 
+## Release versioning
+
+Effective 2026-10-26, version selection follows the user's client-update policy:
+
+- Keep the major version fixed (currently 2) until the user explicitly changes this policy.
+- Bump minor and reset patch to zero when clients need to upgrade `@cartanova/qgrid-ai-sdk` to receive the change.
+- Use a patch bump for every other release. Server, routing, dashboard, and operational changes alone do not require a minor bump.
+- Package publication is separate from client upgrade requirements: publishing SDK and CLI under the same version does not make a patch a mandatory client update.
+- State whether a client SDK upgrade is needed in each Notion release log. Do not renumber previously published releases.
+
 ## Skill and wiki consistency
 
 `packages/cli/skills/qgrid` is the canonical qgrid skill. The CLI package ships this directory to consuming projects. The repository-local `.agents/skills/qgrid` directory is a checked mirror for agents working in this repository; do not edit the mirror as a separate source.
