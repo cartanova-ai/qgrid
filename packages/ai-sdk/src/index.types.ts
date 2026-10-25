@@ -29,8 +29,7 @@ type QgridCommonProviderConfig = {
 export type QgridImageModel =
   | "openai/gpt-image-2"
   | "grok/grok-imagine-image"
-  | "grok/grok-imagine-image-2.0"
-  | "grok/grok-imagine-image-quality";
+  | "grok/grok-imagine-image-2.0";
 
 /** Grok video generation model ids (xAI subscription; not yet wired to a provider factory). */
 export type QgridVideoModel =

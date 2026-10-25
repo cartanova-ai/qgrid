@@ -34,6 +34,25 @@ describe("readAnthropicQuotaUsage", () => {
     });
   });
 
+  it.each([
+    { fiveHour: 0, sevenDay: 100, expected: 100 },
+    { fiveHour: 80, sevenDay: 20, expected: 80 },
+    { fiveHour: null, sevenDay: 100, expected: 100 },
+  ])("includes shared weekly usage in Opus eligibility: %j", async ({ fiveHour, sevenDay, expected }) => {
+    fetchUsageWithMetaMock.mockResolvedValueOnce({
+      data: {
+        five_hour: { utilization: fiveHour, resets_at: null },
+        seven_day: { utilization: sevenDay, resets_at: null },
+      },
+      cachedAt: Date.now(),
+    });
+
+    await expect(readAnthropicQuotaUsage("access-token", "claude-opus-5-5")).resolves.toMatchObject({
+      kind: "ok",
+      utilizationPct: expected,
+    });
+  });
+
   it("uses the separate Fable 7-day limit only for Fable family requests", async () => {
     const usage = {
       data: {
@@ -104,7 +123,7 @@ describe("readAnthropicQuotaUsage", () => {
     });
   });
 
-  it("treats missing five_hour utilization as lookup_failed", async () => {
+  it("treats missing usage across applicable windows as lookup_failed", async () => {
     fetchUsageWithMetaMock.mockResolvedValueOnce({
       data: { five_hour: { utilization: null, resets_at: null } },
       cachedAt: Date.now(),

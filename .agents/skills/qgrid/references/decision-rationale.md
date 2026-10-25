@@ -174,8 +174,9 @@ Key decisions:
 - The token subscriber disables statement/idle timeouts for `LISTEN` and uses reconnect backoff.
 - `quota_threshold` is a routing guardrail, not a load balancer. It prevents an individual token from crossing a configured utilization percentage; it does not equalize traffic.
 - Threshold values are nullable integers from 1 to 100. `0` is not valid; `100` means exclude only at full utilization.
-- Provider criteria differ by primary window: Anthropic uses `five_hour.utilization` plus the
-  Fable-only `seven_day_overage_included.utilization` when applicable; OpenAI uses
+- Provider criteria differ by quota window: Anthropic uses the highest of `five_hour.utilization`,
+  the shared `seven_day.utilization`, and the Fable-only `seven_day_overage_included.utilization`
+  when applicable; OpenAI uses
   `primary.usedPercent`.
 - Threshold gates are by token id, not token name. Names are display/logging labels and can change.
 - Token window keepalive is opt-in at two levels since 2.8.0 (`ea7feb3`): an instance fires only with env `QGRID_TOKEN_WINDOW_KEEPALIVE_ENABLED=true`, and only for tokens with `keepalive_enabled = true`. The runner gate exists because developer instances sharing the production DB fired duplicate pings under the 2.7.6 default-on switch; the per-token flag lets shared or credit-metered accounts stay out. The cost is that upgrades start with zero targets until both are set.

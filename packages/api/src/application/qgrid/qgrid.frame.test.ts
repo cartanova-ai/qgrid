@@ -1878,7 +1878,7 @@ describe("QgridFrame Grok media and voice (U11)", () => {
     const ref = "data:image/png;base64," + PNG_B64;
 
     const out = await QgridFrame.generateImages({
-      model: "grok/grok-imagine-image-quality",
+      model: "grok/grok-imagine-image-2.0",
       prompt: "cat",
       n: 1,
       aspectRatio: "1:1",
@@ -1890,7 +1890,7 @@ describe("QgridFrame Grok media and voice (U11)", () => {
     expect(grok.generateImages).not.toHaveBeenCalled();
     expect(grok.editImages).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "grok-imagine-image-quality",
+        model: "grok-imagine-image-2.0",
         prompt: "cat",
         n: 1,
         aspectRatio: "1:1",
@@ -1900,7 +1900,7 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       }),
     );
     expect(out).toEqual({
-      model: "grok/grok-imagine-image-quality",
+      model: "grok/grok-imagine-image-2.0",
       tokenName: "grok/a",
       images: [{ b64: PNG_B64, mimeType: "image/png", revisedPrompt: "a cat" }],
       usage: { imageCount: 1, costInUsdTicks: 500_000_000 },
@@ -1910,7 +1910,7 @@ describe("QgridFrame Grok media and voice (U11)", () => {
     });
     expect(requestLogCreateRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        requested_model_name: "grok/grok-imagine-image-quality",
+        requested_model_name: "grok/grok-imagine-image-2.0",
         project_name: "proj",
         is_image_generation: true,
       }),
@@ -1929,12 +1929,12 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       expect.objectContaining({
         status: "succeeded",
         token_name: "grok/a",
-        model_name: "grok/grok-imagine-image-quality",
+        model_name: "grok/grok-imagine-image-2.0",
         cost_usd: 0,
         cost_source: "provider",
         is_image_generation: true,
         image_cost_usd: 50_000,
-        image_cost_method: "reported:grok/grok-imagine-image-quality:ticks=500000000",
+        image_cost_method: "reported:grok/grok-imagine-image-2.0:ticks=500000000",
       }),
     );
   });
@@ -1946,13 +1946,27 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       tokenName: "grok/a",
     });
 
-    const out = await QgridFrame.generateImages({ model: "grok/grok-imagine-image-quality", prompt: "x", n: 2, logger: false });
+    const out = await QgridFrame.generateImages({ model: "grok/grok-imagine-image-2.0", prompt: "x", n: 2, resolution: "2k", quality: "medium", logger: false });
 
-    expect(out.costUsd).toBeCloseTo(0.1, 12);
+    expect(out.costUsd).toBeCloseTo(0.16, 12);
     expect(out.costSource).toBe("pricing_table");
     expect(out.images.map((image) => image.mimeType)).toEqual(["image/png", "image/png"]);
     expect(out.requestLogId).toBeUndefined();
     expect(requestLogCreateRunMock).not.toHaveBeenCalled();
+  });
+
+  it("generateImages estimates auto edits including reference-image cost", async () => {
+    grok.editImages!.mockResolvedValueOnce({
+      result: { data: [{ b64_json: PNG_B64 }] },
+      tokenId: 3,
+      tokenName: "grok/a",
+    });
+    const out = await QgridFrame.generateImages({
+      model: "grok/grok-imagine-image-2.0", prompt: "edit", resolution: "2k",
+      referenceImages: [`data:image/png;base64,${PNG_B64}`], logger: false,
+    });
+    expect(out.costUsd).toBeCloseTo(0.09, 12);
+    expect(out.costSource).toBe("pricing_table");
   });
 
   it.each([

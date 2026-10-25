@@ -82,11 +82,11 @@ async function grokTextExample() {
 
 async function grokImageExample() {
   const { images, providerMetadata } = await generateImage({
-    model: qgrid.image("grok/grok-imagine-image"),
+    model: qgrid.image("grok/grok-imagine-image-2.0"),
     prompt: "A lighthouse at dusk, oil painting",
     n: 2,
     aspectRatio: "16:9",
-    providerOptions: { xai: { resolution: "2k", quality: "high", output_format: "jpeg" } },
+    providerOptions: { xai: { resolution: "2k", quality: "low", output_format: "jpeg" } },
   });
   images[0].mediaType; // "image/jpeg"
   providerMetadata.xai?.images[0]; // revisedPrompt and the call's costInUsdTicks

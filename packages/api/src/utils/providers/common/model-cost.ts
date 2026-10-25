@@ -270,13 +270,33 @@ const GROK_COSTS = new Map<string, ModelCosts>(
   }),
 );
 
-// Ticks per generated image at the default 1k resolution (the probe's quality 1k image cost exactly
-// this amount). Unlisted image models have no estimate.
-const GROK_IMAGE_PRICE_TICKS = new Map<string, number>(
-  Object.entries({
-    "grok-imagine-image-quality": 500_000_000,
-  }),
-);
+// Per-image ticks from https://docs.x.ai/developers/pricing (2026-10-25).
+const GROK_IMAGE_PRICE_TICKS = new Map<
+  string,
+  { input: number; output: Readonly<Record<string, number>> }
+>([
+  [
+    "grok-imagine-image",
+    {
+      input: 20_000_000,
+      output: { "1k": 200_000_000, "2k": 200_000_000 },
+    },
+  ],
+  [
+    "grok-imagine-image-2.0",
+    {
+      input: 100_000_000,
+      output: {
+        "1k:low": 400_000_000,
+        "1.5k:low": 500_000_000,
+        "2k:low": 600_000_000,
+        "1k:medium": 600_000_000,
+        "1.5k:medium": 700_000_000,
+        "2k:medium": 800_000_000,
+      },
+    },
+  ],
+]);
 
 export interface GrokMediaCost {
   costUsd: number;
@@ -286,19 +306,32 @@ export interface GrokMediaCost {
 }
 
 /**
- * Image cost: the reported ticks when present, otherwise the per-image catalog price times the
- * image count. Undefined when neither is known, so callers store an unknown cost, not a guess.
+ * Prefer reported ticks; otherwise price output quality/resolution and input images separately.
+ * Unknown models or price combinations have no estimate.
  */
 export function grokImageCost(
   model: string,
   imageCount: number,
   reportedTicks?: number,
+  options: { resolution?: string; quality?: string; inputImageCount?: number } = {},
 ): GrokMediaCost | undefined {
   if (reportedTicks !== undefined) return grokReportedCost(reportedTicks);
-  const perImage = GROK_IMAGE_PRICE_TICKS.get(model.split("/").pop() ?? model);
+  const id = model.split("/").pop() ?? model;
+  const prices = GROK_IMAGE_PRICE_TICKS.get(id);
+
+  if (!prices) return undefined;
+  const inputImageCount = options.inputImageCount ?? 0;
+  const resolution = options.resolution ?? "1k";
+  const defaultQuality = inputImageCount > 0 ? "medium" : "low";
+
+  const quality = options.quality && options.quality !== "auto" ? options.quality : defaultQuality;
+
+  const priceKey = id === "grok-imagine-image-2.0" ? `${resolution}:${quality}` : resolution;
+
+  const perImage = Object.hasOwn(prices.output, priceKey) ? prices.output[priceKey] : undefined;
 
   if (perImage === undefined) return undefined;
-  const ticks = perImage * imageCount;
+  const ticks = perImage * imageCount + prices.input * inputImageCount;
 
   return { costUsd: usdFromGrokTicks(ticks), costSource: "pricing_table", ticks };
 }

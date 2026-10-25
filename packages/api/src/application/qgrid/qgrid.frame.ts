@@ -1728,7 +1728,12 @@ class QgridFrameClass extends BaseFrameClass {
         : await media.generateImages(request);
 
       const decoded = decodeGrokImages(dispatched.result);
-      const cost = grokImageCost(id, decoded.images.length, decoded.costInUsdTicks);
+
+      const cost = grokImageCost(id, decoded.images.length, decoded.costInUsdTicks, {
+        resolution: input.resolution,
+        quality: input.quality,
+        inputImageCount: refs.length,
+      });
 
       const output: GenerateImagesOutput = {
         model: route,

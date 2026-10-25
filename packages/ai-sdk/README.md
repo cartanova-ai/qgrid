@@ -355,7 +355,7 @@ Grok model accepts the same factory config as the other models: `serverUrl` (def
 | Factory | Model ids | AI SDK function |
 | --- | --- | --- |
 | `qgrid(id)` | `grok/grok-4.7` (default catalog model), `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`, any other `grok/<id>` | `generateText`, `streamText` |
-| `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0`, `grok/grok-imagine-image-quality` | `generateImage` |
+| `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0` | `generateImage` |
 | `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
 | `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0` | `transcribe` |
 | `qgrid.speech(id)` | `grok/grok-tts` (the id only labels the request log) | `generateSpeech` |
@@ -414,16 +414,19 @@ error. Compress the input, or pass an https image URL where the option accepts o
 
 ### Grok images
 
+Use `grok-imagine-image-2.0` for generation and editing. Its `quality` values are `low`, `medium`,
+and `auto`; omission uses `auto` (currently low for generation, medium for editing).
+
 ```typescript
 import { generateImage } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
 const { images, providerMetadata } = await generateImage({
-  model: qgrid.image("grok/grok-imagine-image"),
+  model: qgrid.image("grok/grok-imagine-image-2.0"),
   prompt: "A lighthouse at dusk, oil painting",
   n: 2,
   aspectRatio: "16:9",
-  providerOptions: { xai: { resolution: "2k", quality: "high", output_format: "jpeg" } },
+  providerOptions: { xai: { resolution: "2k", quality: "low", output_format: "jpeg" } },
 });
 images[0].mediaType; // "image/jpeg"
 providerMetadata.xai?.images[0]; // revisedPrompt and the call's costInUsdTicks

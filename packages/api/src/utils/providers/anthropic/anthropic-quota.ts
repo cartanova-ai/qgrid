@@ -19,7 +19,7 @@ export async function readAnthropicQuotaUsage(
 
     if (data.error) return { kind: "lookup_failed", reason: data.error };
 
-    const utilizations = [data.five_hour?.utilization];
+    const utilizations = [data.five_hour?.utilization, data.seven_day?.utilization];
 
     // Fable 계열(5, 5.1)은 5시간 창과 별개로 usage credits 기반 7일 버킷도 소진될 수 있다.
     if (isFableFamilyModel(model)) {
@@ -33,7 +33,7 @@ export async function readAnthropicQuotaUsage(
     );
 
     if (!Number.isFinite(utilization)) {
-      return { kind: "lookup_failed", reason: "five_hour utilization unavailable" };
+      return { kind: "lookup_failed", reason: "quota utilization unavailable" };
     }
 
     return {

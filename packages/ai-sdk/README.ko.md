@@ -345,7 +345,7 @@ qgrid는 `grok/*` 모델을 qgrid 대시보드에 등록한 xAI 구독 토큰(�
 | Factory | 모델 ID | AI SDK 함수 |
 | --- | --- | --- |
 | `qgrid(id)` | `grok/grok-4.7`(카탈로그 기본 모델), `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`, 그 밖의 `grok/<id>` | `generateText`, `streamText` |
-| `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0`, `grok/grok-imagine-image-quality` | `generateImage` |
+| `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0` | `generateImage` |
 | `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
 | `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0` | `transcribe` |
 | `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임) | `generateSpeech` |
@@ -403,16 +403,19 @@ Grok language model은 user 이미지 part(https URL 또는 inline bytes)를 버
 
 ### Grok 이미지
 
+생성과 편집에는 `grok-imagine-image-2.0`을 사용합니다. `quality`는 `low`, `medium`, `auto`이며,
+생략하면 `auto`입니다(현재 생성은 low, 편집은 medium).
+
 ```typescript
 import { generateImage } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
 const { images, providerMetadata } = await generateImage({
-  model: qgrid.image("grok/grok-imagine-image"),
+  model: qgrid.image("grok/grok-imagine-image-2.0"),
   prompt: "A lighthouse at dusk, oil painting",
   n: 2,
   aspectRatio: "16:9",
-  providerOptions: { xai: { resolution: "2k", quality: "high", output_format: "jpeg" } },
+  providerOptions: { xai: { resolution: "2k", quality: "low", output_format: "jpeg" } },
 });
 images[0].mediaType; // "image/jpeg"
 providerMetadata.xai?.images[0]; // revisedPrompt와 해당 호출의 costInUsdTicks

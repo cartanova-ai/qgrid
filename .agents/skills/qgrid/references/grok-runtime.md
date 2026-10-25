@@ -78,6 +78,12 @@ Provider `cost_in_usd_ticks` is authoritative, including zero; one tick is `1e-1
 
 Qgrid exposes image generation/editing, asynchronous video start/status, transcription, and speech through `api.x.ai`. Reference images select `/images/edits`; video uses `/videos/generations` and `/videos/{request_id}`; voice uses multipart `/stt` and JSON `/tts` (`grok-media-client.ts`, `grok-voice-client.ts`, `packages/api/src/application/qgrid/qgrid.frame.ts`).
 
+Image generation and editing default to `grok-imagine-image-2.0`; the public SDK lists it and
+`grok-imagine-image` (1.0). Quality omission passes through as upstream `auto`, currently low for
+generation and medium for editing. Reported ticks remain authoritative. Without ticks, image cost
+uses the active model's output resolution/quality and input-image count at the official API rates
+(verified 2026-10-25). Unknown price combinations remain unknown; retired models have no estimate.
+
 Chat turns also accept `imageGeneration` (the dashboard chat sends `"auto"`): the dispatcher adds the proxy's server-side `{ "type": "image_generation" }` tool, and completed `image_generation_call` items (base64 JPEG, Grok Imagine) become `GenerateResult.images`, so generation and edits of earlier images work inside a conversation. `imageGenerationOptions` (OpenAI quality/size/background) is rejected. The turn's provider-reported cost already includes the image, so the request log stores `image_cost_usd = 0` with `image_cost_method = "included:grok-provider-cost"`. Verified 2026-10-21 through the subscription proxy; the model occasionally answers "I'll do it" without calling the tool (1 of 5 edit attempts).
 
 Inline audio, each inline image, and the aggregate inline images in one request are capped at 7 MiB decoded. The server maps Fastify's oversized-body error to HTTP 413 (`packages/api/src/application/qgrid/qgrid.types.ts`, `qgrid.frame.ts`).
