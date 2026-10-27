@@ -79,6 +79,17 @@ const OPENAI_COSTS = new Map<string, OpenAIModelSpec>(
       cacheCreationInputTokens: 2.5,
       longContext: LONG_CONTEXT_272K,
     },
+    // GPT-6.1 Terra (2026-10-26 출시): Standard API pricing verified 2026-10-27. GPT-6.1 Sol 의 정확히 절반 단가.
+    // Codex 카탈로그(2026-10-27, client 0.164.0)는 ultra 까지 허용하고 기본 effort 는 low 다.
+    // @see https://developers.openai.com/api/docs/models/gpt-6.1-terra
+    "gpt-6.1-terra": {
+      maxEffort: "ultra",
+      inputTokens: 1,
+      outputTokens: 5,
+      cachedInputTokens: 0.05,
+      cacheCreationInputTokens: 1.25,
+      longContext: LONG_CONTEXT_272K,
+    },
     // GPT-6 Sol, Luna (2026-09-22 출시): Standard API pricing verified 2026-09-23. GPT-5.6 Sol/Luna 의 절반 단가.
     // Codex 카탈로그(2026-09-23)는 Sol 에 ultra, Luna 에 max 까지 허용하고 기본 effort 는 둘 다 medium 이다.
     // @see https://developers.openai.com/api/docs/models/gpt-6-sol
@@ -366,6 +377,7 @@ const OPENAI_FAST_MULTIPLIERS = new Map<string, number>(
   Object.entries({
     "gpt-6-astra": 2,
     "gpt-6.1-sol": 2,
+    "gpt-6.1-terra": 2,
     "gpt-6-sol": 2,
     "gpt-6-luna": 2,
     "gpt-5.6-sol": 2,

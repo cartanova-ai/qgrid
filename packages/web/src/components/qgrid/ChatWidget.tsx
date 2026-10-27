@@ -53,6 +53,7 @@ const MODEL_PRESET_GROUPS: { label: string; models: string[] }[] = [
     models: [
       "openai/gpt-6-astra",
       "openai/gpt-6.1-sol",
+      "openai/gpt-6.1-terra",
       "openai/gpt-6-sol",
       "openai/gpt-6-luna",
       "openai/gpt-5.6-terra",

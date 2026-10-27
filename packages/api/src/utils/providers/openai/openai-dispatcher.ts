@@ -35,6 +35,7 @@ const logger = getLogger(["qgrid", "openai-dispatcher"]);
 
 // Verified with the subscription Responses backend; public API support is not sufficient.
 const THINKING_OFF_MODELS = new Set([
+  "gpt-6.1-terra",
   "gpt-6-sol",
   "gpt-6-luna",
   "gpt-5.6-sol",

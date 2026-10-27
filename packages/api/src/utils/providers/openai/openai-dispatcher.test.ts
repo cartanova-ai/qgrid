@@ -53,7 +53,7 @@ async function tickTimer(): Promise<void> {
 }
 
 describe("OpenAIDispatcher direct runtime", () => {
-  it.each(["gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"])(
+  it.each(["gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"])(
     "disables thinking and omits summaries through generate/stream for %s",
     async (model) => {
       const run = vi.fn((options: OpenAIResponsesOptions) => {
@@ -1011,6 +1011,7 @@ describe("effort 어휘 해석 (Codex 카탈로그 기준)", () => {
   it("모델이 지원하는 값은 그대로 보내고, 상한 초과·공개 API 어휘는 reasoning 에서 빼 백엔드 기본값을 쓴다", async () => {
     await expect(mappedEffortFor("gpt-6-astra", "ultra")).resolves.toBe("ultra");
     await expect(mappedEffortFor("gpt-6.1-sol", "ultra")).resolves.toBe("ultra");
+    await expect(mappedEffortFor("gpt-6.1-terra", "ultra")).resolves.toBe("ultra");
     await expect(mappedEffortFor("gpt-6-sol", "ultra")).resolves.toBe("ultra");
     await expect(mappedEffortFor("gpt-6-luna", "max")).resolves.toBe("max");
     await expect(mappedEffortFor("gpt-6-luna", "ultra")).resolves.toBeUndefined();

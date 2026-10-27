@@ -16,7 +16,7 @@ Use this reference before changing OpenAI transport, concurrency, routing, promp
 
 `providerOptions.qgrid.thinking` reaches the Responses builder as a boolean. False overrides request/default effort and sends `reasoning: { effort: "none" }` without a reasoning summary. True uses a valid resolved effort, or explicitly sends `low` when effort is absent or unsupported, so a raw API request cannot fall back to a non-thinking backend default. Omission preserves the existing behavior: valid effort is forwarded; absent or unsupported effort leaves the backend default in effect. True and omission retain the requested reasoning summary policy. `none` belongs only to the internal wire type, not the public effort enum.
 
-The 2026-10-10 subscription probe accepted off for `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `gpt-5.5`. `gpt-6-astra` and `gpt-6.1-sol` explicitly rejected it. Other model IDs are unverified for off and are rejected locally only when false is requested. Model-access failures are not evidence of mandatory thinking. Validate terminal success and response settings, not HTTP 200 alone: errors can arrive within SSE. The same policy applies to text-model requests driving image generation, not to the image model itself.
+The 2026-10-10 subscription probe accepted off for `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `gpt-5.5`; a 2026-10-27 probe also accepted it for `gpt-6.1-terra`. `gpt-6-astra` and `gpt-6.1-sol` explicitly rejected it. Other model IDs are unverified for off and are rejected locally only when false is requested. Model-access failures are not evidence of mandatory thinking. Validate terminal success and response settings, not HTTP 200 alone: errors can arrive within SSE. The same policy applies to text-model requests driving image generation, not to the image model itself.
 
 ## Adding an OpenAI model
 
@@ -45,7 +45,7 @@ availability or identical limits on qgrid's ChatGPT-subscription route.
    Report mocked tests separately from any live smoke test. Model registration does not authorize
    a release, version bump, deployment, or remote migration.
 
-### GPT-6 Astra, Sol, Luna, and GPT-6.1 Sol
+### GPT-6 Astra, Sol, Luna, GPT-6.1 Sol, and GPT-6.1 Terra
 
 `openai/gpt-6-astra` uses the existing text generation, streaming and structured-output paths.
 The model supports image input. The language-model SDK adapter forwards user-message image parts
@@ -87,16 +87,28 @@ received `400 The 'gpt-6.1-sol' model is not supported when using Codex with a C
 succeeded; the pinned User-Agent version did not need to change. The catalog now labels GPT-6 Sol
 "Previous generation workhorse model" without a retirement date. Ultrafast (`service_tier: "ultrafast"`, $60 /
 $6 / $300) is a public-API tier for GPT-6 Astra only; the subscription catalog exposes just the `fast` tier.
+`openai/gpt-6.1-terra` (released 2026-10-26) uses the same paths. Standard prices per million tokens:
+input $1, cached input $0.05, cache write $1.25, output $5, with the same 272K multipliers and the 2x Fast rate;
+every rate is exactly half of GPT-6.1 Sol. The Codex subscription catalog fetched 2026-10-27 with
+`client_version=0.164.0` lists `context_window=500000`, effort through `ultra`, default `low`, and text+image input;
+the same fetch also raised GPT-6.1 Sol to `context_window=500000`. The
+[model page](https://developers.openai.com/api/docs/models/gpt-6.1-terra) separately lists 1.05M context, 922K
+maximum input, 128K maximum output, and effort `none` through `max`. On 2026-10-27, `low`, `max`, and structured
+output succeeded through a local qgrid server, and a direct probe with qgrid's client accepted `effort: "none"`
+with zero reasoning tokens. `ultra` failed for both Terra and GPT-6.1 Sol with `Invalid value: 'ultra'`: Codex CLI
+maps `ultra` to `multi_agent_reasoning_effort`, `max`, or the highest supported level before sending, while qgrid
+currently forwards it verbatim. Treat that as a pre-existing defect for every `ultra` model, not a Terra limit.
 
 ## Existing OpenAI model pricing and limits
 
-Checked 2026-09-23 against the official [Standard pricing table](https://developers.openai.com/api/docs/pricing)
+Checked 2026-09-23 (GPT-6.1 rows 2026-10-27) against the official [Standard pricing table](https://developers.openai.com/api/docs/pricing)
 and the local Codex subscription catalog. Prices are USD per million tokens:
 
 | Model | Input | Cached input | Cache write | Output | Codex context | Maximum Codex effort |
 |---|---:|---:|---:|---:|---:|---|
 | GPT-6 Astra | 10 | 1 | 12.50 | 50 | 272K | ultra |
-| GPT-6.1 Sol | 2 | 0.10 | 2.50 | 10 | 272K | ultra |
+| GPT-6.1 Sol | 2 | 0.10 | 2.50 | 10 | 500K | ultra |
+| GPT-6.1 Terra | 1 | 0.05 | 1.25 | 5 | 500K | ultra |
 | GPT-6 Sol | 2 | 0.20 | 2.50 | 10 | 272K | ultra |
 | GPT-6 Luna | 0.10 | 0.01 | 0.125 | 0.50 | 272K | max |
 | GPT-5.6 Sol | 4 | 0.40 | 5 | 20 | 272K | ultra |
@@ -108,7 +120,7 @@ GPT-5.3-Codex-Spark has a 128K catalog context and effort through `xhigh`; its t
 remains an explicitly documented generic estimate. Retired model pricing rows remain for legacy logs.
 The catalog does not establish a maximum output size. GPT-5.6 public API specifications list 1.05M
 context, 922K maximum input and 128K maximum output; do not conflate them with the subscription limits.
-Codex default effort is `low` for GPT-6.1 Sol and GPT-5.6 Sol, `medium` for GPT-6 Astra/Sol/Luna, GPT-5.6 Terra/Luna and GPT-5.5, and `high` for Spark.
+Codex default effort is `low` for GPT-6.1 Sol/Terra and GPT-5.6 Sol, `medium` for GPT-6 Astra/Sol/Luna, GPT-5.6 Terra/Luna and GPT-5.5, and `high` for Spark.
 GPT-5.5 retires from the Codex/ChatGPT route on 2026-10-14 (the API-key route is unaffected); it stays in the SDK type and price table but is excluded from chat presets.
 The SDK default remains `low` regardless of the backend default.
 
