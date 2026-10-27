@@ -163,15 +163,25 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
   const sortColumn = sort.slice(0, separator);
   const sortDirection = sort.slice(separator + 1) === "asc" ? "asc" : "desc";
 
+  // 행은 COUNT 없이(list) 먼저 받고, 건수는 별도 요청으로 채운다 — 대량 로그에서 COUNT 가
+  // 행 표시를 1초 넘게 막았다. 건수 키에는 페이지·정렬을 넣지 않아 페이지 이동 때 재사용된다.
   const { data, isLoading, isError, refresh, isRefreshing } = RequestLogService.useRequestLogs(
     "P",
     {
       num: PAGE_SIZE,
       page,
       orderBy: sort,
+      queryMode: "list",
       ...listFilters,
     },
   );
+
+  const { data: countData, refresh: refreshCount } = RequestLogService.useRequestLogs("P", {
+    num: PAGE_SIZE,
+    page: 1,
+    queryMode: "count",
+    ...listFilters,
+  });
 
   const {
     data: costData,
@@ -184,7 +194,7 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
   });
 
   const rows = data?.rows ?? [];
-  const total = data?.total ?? 0;
+  const total = countData?.total;
   const hasRunning = rows.some((row) => row.status === "running");
 
   // Running rows gain their token, serving model, and TTFT mid-run; poll until they finish.
@@ -192,13 +202,15 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
     const timer = hasRunning
       ? setInterval(() => {
           void refresh();
+          void refreshCount();
           void refreshCost();
         }, RUNNING_REFRESH_MS)
       : undefined;
 
     return () => clearInterval(timer);
-  }, [hasRunning, refresh, refreshCost]);
-  const totalPages = Math.ceil(total / PAGE_SIZE);
+  }, [hasRunning, refresh, refreshCount, refreshCost]);
+  // 건수 응답 전에는 페이지 수를 모르므로 이동 버튼을 숨긴다(0 → 렌더 안 함).
+  const totalPages = total === undefined ? 0 : Math.ceil(total / PAGE_SIZE);
 
   const updateFilter = (patch: Partial<LogsSearch>) => {
     onSearchChange({ ...search, ...patch, page: 1 });
@@ -251,7 +263,7 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
         {/* 목록과 합계 비용을 같은 필터로 다시 읽는다. 필터 셀렉트의 선택지는 갱신하지 않는다. */}
         <button
           type="button"
-          onClick={() => void Promise.all([refresh(), refreshCost()])}
+          onClick={() => void Promise.all([refresh(), refreshCount(), refreshCost()])}
           disabled={isRefreshing}
           aria-label="Reload"
           title="Reload"
@@ -260,7 +272,9 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
           <RefreshIcon className={isRefreshing ? "size-3.5 animate-spin" : "size-3.5"} />
         </button>
         <div className="flex-1" />
-        <span className="text-[11px] text-sand-400">{isError || !data ? "—" : total} results</span>
+        <span className="text-[11px] text-sand-400">
+          {total === undefined ? "—" : total} results
+        </span>
         {isCostError ? (
           <span role="alert" className="text-[11px] text-danger-500">
             Failed to load total cost.
