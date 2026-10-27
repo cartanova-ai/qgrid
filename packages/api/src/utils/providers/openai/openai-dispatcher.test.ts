@@ -1008,14 +1008,14 @@ describe("effort 어휘 해석 (Codex 카탈로그 기준)", () => {
     return mapped?.reasoning?.effort;
   }
 
-  it("모델이 지원하는 값은 그대로 보내고, 상한 초과·공개 API 어휘는 reasoning 에서 빼 백엔드 기본값을 쓴다", async () => {
-    await expect(mappedEffortFor("gpt-6-astra", "ultra")).resolves.toBe("ultra");
-    await expect(mappedEffortFor("gpt-6.1-sol", "ultra")).resolves.toBe("ultra");
-    await expect(mappedEffortFor("gpt-6.1-terra", "ultra")).resolves.toBe("ultra");
-    await expect(mappedEffortFor("gpt-6-sol", "ultra")).resolves.toBe("ultra");
+  it("모델이 지원하는 값은 그대로 보내되 ultra 는 wire 상한인 max 로 보내고, 상한 초과·공개 API 어휘는 reasoning 에서 빼 백엔드 기본값을 쓴다", async () => {
+    await expect(mappedEffortFor("gpt-6-astra", "ultra")).resolves.toBe("max");
+    await expect(mappedEffortFor("gpt-6.1-sol", "ultra")).resolves.toBe("max");
+    await expect(mappedEffortFor("gpt-6.1-terra", "ultra")).resolves.toBe("max");
+    await expect(mappedEffortFor("gpt-6-sol", "ultra")).resolves.toBe("max");
     await expect(mappedEffortFor("gpt-6-luna", "max")).resolves.toBe("max");
     await expect(mappedEffortFor("gpt-6-luna", "ultra")).resolves.toBeUndefined();
-    await expect(mappedEffortFor("gpt-5.6-terra", "ultra")).resolves.toBe("ultra");
+    await expect(mappedEffortFor("gpt-5.6-terra", "ultra")).resolves.toBe("max");
     await expect(mappedEffortFor("gpt-5.5", "xhigh")).resolves.toBe("xhigh");
     await expect(mappedEffortFor("gpt-5.5", "max")).resolves.toBeUndefined();
     await expect(mappedEffortFor("gpt-5.6-terra", "minimal")).resolves.toBeUndefined();

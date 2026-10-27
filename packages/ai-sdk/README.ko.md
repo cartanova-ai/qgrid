@@ -207,7 +207,7 @@ const { text } = await generateText({
 | `logger` | `boolean` | 공통 | qgrid request log 저장 여부. 기본값은 `true`. `false`로 설정해도 client tool 실행과 multi-step 연결은 계속 동작 |
 | `sessionKey` | `string` | OpenAI 전용 | 전체 history 재전송 시 불투명 prompt-cache affinity를 파생하는 멀티턴 대화 식별자 ([아래](#멀티턴-prompt-cache-sessionkey) 참조) |
 | `thinking` | `boolean` | 공통 | 생략하면 기존 모델별 동작 유지. `true`는 effort로 깊이를 조절하고, `false`는 요청 effort와 config `defaultEffort`를 무시. 모델·실행 경로 미지원 시 오류 |
-| `effort` | OpenAI: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` \| `"ultra"` | OpenAI 전용 (`QgridOpenAIProviderOptions`) | ChatGPT 구독 Codex 경로의 reasoning 깊이. GPT-6 Astra/Sol과 GPT-5.6 Sol/Terra는 `"ultra"`까지, GPT-6 Luna와 GPT-5.6 Luna는 `"max"`까지 지원하며, 모델이 지원하지 않는 값은 서버가 조용히 무시하고 백엔드 기본값을 적용. `"none"`/`"minimal"`은 공개 effort 값이 아니며 thinking 비활성화에는 `thinking: false`를 사용 |
+| `effort` | OpenAI: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` \| `"ultra"` | OpenAI 전용 (`QgridOpenAIProviderOptions`) | ChatGPT 구독 Codex 경로의 reasoning 깊이. GPT-6 Astra, GPT-6/6.1 Sol, GPT-6.1 Terra, GPT-5.6 Sol/Terra는 `"ultra"`까지 지원하되 qgrid는 `"ultra"`를 백엔드에 `"max"`로 보내며(Codex의 ultra는 qgrid가 실행하지 않는 하위 에이전트 위임을 포함), GPT-6 Luna와 GPT-5.6 Luna는 `"max"`까지 지원하며, 모델이 지원하지 않는 값은 서버가 조용히 무시하고 백엔드 기본값을 적용. `"none"`/`"minimal"`은 공개 effort 값이 아니며 thinking 비활성화에는 `thinking: false`를 사용 |
 | `effort` | Anthropic: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` | Anthropic 전용 (`QgridAnthropicProviderOptions`) | Claude Code `--effort` 허용값. 집합 밖의 값은 서버가 조용히 무시하고 qgrid 기본(`"low"`)을 적용. 모델별 상한(예: Sonnet 4.6은 `"xhigh"` 없음)은 Claude Code가 처리 |
 | `verbosity` | `"low"` \| `"medium"` \| `"high"` | OpenAI 전용 | 응답 텍스트의 상세도 |
 | `reasoningSummary` | `"auto"` \| `"concise"` \| `"detailed"` \| `"none"` | OpenAI 전용 | 추론 요약 출력 방식 |

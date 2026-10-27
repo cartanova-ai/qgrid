@@ -95,9 +95,14 @@ the same fetch also raised GPT-6.1 Sol to `context_window=500000`. The
 [model page](https://developers.openai.com/api/docs/models/gpt-6.1-terra) separately lists 1.05M context, 922K
 maximum input, 128K maximum output, and effort `none` through `max`. On 2026-10-27, `low`, `max`, and structured
 output succeeded through a local qgrid server, and a direct probe with qgrid's client accepted `effort: "none"`
-with zero reasoning tokens. `ultra` failed for both Terra and GPT-6.1 Sol with `Invalid value: 'ultra'`: Codex CLI
-maps `ultra` to `multi_agent_reasoning_effort`, `max`, or the highest supported level before sending, while qgrid
-currently forwards it verbatim. Treat that as a pre-existing defect for every `ultra` model, not a Terra limit.
+with zero reasoning tokens.
+
+`ultra` is a Codex client mode, not a wire value: the backend rejects it with `Invalid value: 'ultra'` and accepts
+effort only through `max`. Codex CLI pairs `ultra` with sub-agent delegation and sends the catalog's
+`multi_agent_reasoning_effort` (`xhigh` for Astra and GPT-6.1 Sol/Terra), else `max`, else the highest supported
+level. qgrid has no delegation, so it accepts `ultra` where the catalog lists it but sends `max`, the deepest
+single-request reasoning; request logs keep the requested `ultra`. Before this mapping (fixed in 2.15.1) every
+`ultra` request failed. Verified live for GPT-6.1 Terra and Sol on 2026-10-27.
 
 ## Existing OpenAI model pricing and limits
 

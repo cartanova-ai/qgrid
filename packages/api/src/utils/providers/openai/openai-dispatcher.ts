@@ -190,7 +190,8 @@ function asReasoning(req: GenerateRequest): OpenAIReasoning | undefined {
 
   const reasoning: OpenAIReasoning = {};
 
-  if (effort) reasoning.effort = effort;
+  // ultra is a Codex client mode (sub-agent delegation), not a wire value; the backend accepts up to max.
+  if (effort) reasoning.effort = effort === "ultra" ? "max" : effort;
 
   if (summary) reasoning.summary = summary;
 
