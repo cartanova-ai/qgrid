@@ -875,6 +875,106 @@ describe("RequestLogModel PostgreSQL", () => {
     }
   });
 
+  it("prices unsourced finishRun and save costs at write time but keeps unknown media unpriced", async () => {
+    const projectName = `write-cost-${randomUUID()}`;
+    const ids: number[] = [];
+    const read = (id: number) =>
+      RequestLogModel.getPuri("r")
+        .from("request_logs")
+        .select({ cost_usd: "cost_usd", cost_source: "cost_source" })
+        .where("id", id)
+        .first();
+    try {
+      const priced = await RequestLogModel.createRun({ user_prompt: "priced", project_name: projectName });
+      const media = await RequestLogModel.createRun({ user_prompt: "media", project_name: projectName });
+      ids.push(priced, media);
+      // Sonnet 4.6: 1K input × $3 + 1K output × $15 = $0.018; a source-less caller cost is re-priced.
+      await RequestLogModel.finishRun(priced, {
+        status: "succeeded",
+        token_name: "anthropic/test",
+        model_name: "claude-sonnet-4-6",
+        input_tokens: 1_000,
+        output_tokens: 1_000,
+        cost_usd: 1,
+      });
+      await RequestLogModel.finishRun(media, {
+        status: "succeeded",
+        token_name: "grok/test",
+        model_name: "grok/tts",
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_usd: null,
+        cost_source: null,
+      });
+      expect(await read(priced)).toEqual({ cost_usd: 18_000, cost_source: "pricing_table" });
+      expect(await read(media)).toEqual({ cost_usd: null, cost_source: null });
+
+      const saved = (
+        await RequestLogModel.save([
+        {
+          user_prompt: "saved",
+          project_name: projectName,
+          token_name: "anthropic/test",
+          model_name: "claude-sonnet-4-6",
+          input_tokens: 1_000,
+          output_tokens: 1_000,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
+          cost_usd: null,
+          cost_source: null,
+        } as Parameters<typeof RequestLogModel.save>[0][number],
+        ])
+      )[0]!;
+      ids.push(saved);
+      expect(await read(saved)).toEqual({ cost_usd: 18_000, cost_source: "pricing_table" });
+    } finally {
+      await RequestLogModel.del(ids);
+    }
+  });
+
+  it("prices an expired run whose generate steps carried no cost source", async () => {
+    const id = await RequestLogModel.createRun({ user_prompt: "stale external run" });
+    try {
+      await RequestLogModel.recordRunProgress(id, { token_name: "anthropic/test", model_name: "claude-sonnet-4-6" });
+      await RequestLogModel.appendStep(id, { step_index: 0, type: "generate", input_tokens: 1_000, output_tokens: 1_000 });
+      await RequestLogModel.appendStep(id, { step_index: 1, type: "tool_call", tool_call_id: "call-1", tool_name: "t" });
+
+      await expect(
+        RequestLogModel.tryExpireStaleToolWaitingRun(id, new Date(Date.now() + 60_000), "stale"),
+      ).resolves.toBe(true);
+      const row = await RequestLogModel.getPuri("r")
+        .from("request_logs")
+        .select({ cost_usd: "cost_usd", cost_source: "cost_source" })
+        .where("id", id)
+        .first();
+      expect(row).toEqual({ cost_usd: 18_000, cost_source: "pricing_table" });
+    } finally {
+      await RequestLogModel.del([id]);
+    }
+  });
+
+  it("lists distinct project and model names in ascending order without NULL", async () => {
+    const prefix = `distinct-${randomUUID()}`;
+    const ids: number[] = [];
+    try {
+      for (const project of [`${prefix}-b`, `${prefix}-a`, `${prefix}-b`, null]) {
+        const id = await RequestLogModel.createRun({ user_prompt: "distinct", project_name: project ?? undefined });
+        ids.push(id);
+        await RequestLogModel.recordRunProgress(id, { model_name: `${prefix}-model` });
+      }
+
+      const projects = (await RequestLogModel.distinctProjectNames()).filter((name) => name.startsWith(prefix));
+      expect(projects).toEqual([`${prefix}-a`, `${prefix}-b`]);
+      expect((await RequestLogModel.distinctModelNames()).filter((name) => name.startsWith(prefix))).toEqual([
+        `${prefix}-model`,
+      ]);
+      const all = await RequestLogModel.distinctProjectNames();
+      expect(all).toEqual([...all].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+    } finally {
+      await RequestLogModel.del(ids);
+    }
+  });
+
   it("does not expire a run while another connection holds its follow-up lock", async () => {
     const wdb = RequestLogModel.getPuri("w");
     const client = new Client(wdb.knex.client.config.connection as ClientConfig);
