@@ -596,17 +596,11 @@ describe("RequestLogModel cost provenance", () => {
   });
 
   /**
-   * totalCost 는 확정 비용(SQL SUM)과 legacy 재계산(JS) 두 쿼리로 나뉜다.
+   * totalCost 는 저장된 비용을 SQL SUM 한 번으로 합산한다.
    * @param confirmedTotal SUM 쿼리가 돌려줄 micro-USD 합계
-   * @param legacyRows 재계산 대상 row 들
    */
-  function mockTotalCostQueries(
-    confirmedTotal: number,
-    legacyRows: unknown[],
-    unknownImageCostCount = 0,
-    unknownCostCount = 0,
-  ) {
-    // subset qb 는 SELECT 를 비우고(clear) 집계/축소된 컬럼만 다시 얹는다 — 구현과 같은 체인.
+  function mockTotalCostQuery(confirmedTotal: number, unknownImageCostCount = 0, unknownCostCount = 0) {
+    // subset qb 는 SELECT 를 비우고(clear) 집계 컬럼만 다시 얹는다 — 구현과 같은 체인.
     const sumChain = {
       where: vi.fn(),
       whereIn: vi.fn(),
@@ -621,31 +615,16 @@ describe("RequestLogModel cost provenance", () => {
     sumChain.clear.mockReturnValue(sumChain);
     sumChain.select.mockReturnValue(sumChain);
 
-    const legacyChain = {
-      where: vi.fn(),
-      whereIn: vi.fn(),
-      whereRaw: vi.fn(),
-      clear: vi.fn(),
-      select: vi.fn(async () => legacyRows),
-    };
-    legacyChain.where.mockReturnValue(legacyChain);
-    legacyChain.whereIn.mockReturnValue(legacyChain);
-    legacyChain.whereRaw.mockReturnValue(legacyChain);
-    legacyChain.clear.mockReturnValue(legacyChain);
-
-    const getSubsetQueries = vi
-      .fn()
-      .mockReturnValueOnce({ qb: sumChain })
-      .mockReturnValueOnce({ qb: legacyChain });
+    const getSubsetQueries = vi.fn().mockReturnValue({ qb: sumChain });
     vi.spyOn(
       RequestLogModel as unknown as { getSubsetQueries: typeof getSubsetQueries },
       "getSubsetQueries",
     ).mockImplementation(getSubsetQueries);
-    return { sumChain, legacyChain };
+    return { sumChain, getSubsetQueries };
   }
 
   it("uses exact stored cost for rows with a cost source", async () => {
-    mockTotalCostQueries(3_000, []);
+    mockTotalCostQuery(3_000);
 
     await expect(RequestLogModel.totalCost()).resolves.toEqual({
       usd: 0.003,
@@ -655,7 +634,7 @@ describe("RequestLogModel cost provenance", () => {
   });
 
   it("counts unpriced non-token media rows separately from unknown image costs", async () => {
-    const { sumChain } = mockTotalCostQueries(3_000, [], 2, 3);
+    const { sumChain } = mockTotalCostQuery(3_000, 2, 3);
 
     await expect(RequestLogModel.totalCost()).resolves.toEqual({
       usd: 0.003,
@@ -679,77 +658,18 @@ describe("RequestLogModel cost provenance", () => {
     }
   });
 
-  it("sums every row in SQL without a cost_source predicate", async () => {
-    const { sumChain, legacyChain } = mockTotalCostQueries(3_000, []);
+  it("sums stored costs in one SQL query without re-pricing source-less rows", async () => {
+    const { sumChain, getSubsetQueries } = mockTotalCostQuery(3_000);
 
     await RequestLogModel.totalCost();
 
+    expect(getSubsetQueries).toHaveBeenCalledTimes(1);
     expect(sumChain.select).toHaveBeenCalledTimes(1);
-    // source 없는 행도 저장된 이미지 비용을 포함하고 driver 차액만 별도로 보정한다.
     expect(sumChain.whereRaw).not.toHaveBeenCalled();
-    expect(legacyChain.whereRaw).toHaveBeenCalledWith(
-      "request_logs.cost_source IS NULL OR request_logs.cost_usd IS NULL",
-    );
   });
 
-  it("keeps TTL-aware price-table recomputation for legacy rows", async () => {
-    mockTotalCostQueries(0, [
-      {
-        model_name: "claude-sonnet-4-6",
-        input_tokens: 100_000,
-        output_tokens: 0,
-        cache_read_tokens: 0,
-        cache_creation_tokens: 80_000,
-        cache_creation_5m_tokens: 30_000,
-        cache_creation_1h_tokens: 50_000,
-        cost_usd: null,
-        cost_source: null,
-      },
-    ]);
-
-    await expect(RequestLogModel.totalCost().then((result) => result.usd)).resolves.toBeCloseTo(0.4725, 10);
-  });
-
-  it("adds only the delta for legacy rows already counted in the SQL sum", async () => {
-    // 전체 SUM 이 저장값 0.2 를 이미 포함하므로, 재계산값 0.4725 와의 차액만 더해야 한다.
-    mockTotalCostQueries(200_000, [
-      {
-        model_name: "claude-sonnet-4-6",
-        input_tokens: 100_000,
-        output_tokens: 0,
-        cache_read_tokens: 0,
-        cache_creation_tokens: 80_000,
-        cache_creation_5m_tokens: 30_000,
-        cache_creation_1h_tokens: 50_000,
-        cost_usd: 200_000,
-        cost_source: null,
-      },
-    ]);
-
-    await expect(RequestLogModel.totalCost().then((result) => result.usd)).resolves.toBeCloseTo(0.4725, 10);
-  });
-
-  it("leaves the stored value untouched for legacy rows without a model name", async () => {
-    // 모델을 모르면 재계산할 수 없다. 저장값이 SUM 에 이미 들어갔으므로 보정하지 않는다.
-    mockTotalCostQueries(5_000, [
-      {
-        model_name: null,
-        input_tokens: 100,
-        output_tokens: 100,
-        cache_read_tokens: 0,
-        cache_creation_tokens: 0,
-        cache_creation_5m_tokens: null,
-        cache_creation_1h_tokens: null,
-        cost_usd: 5_000,
-        cost_source: null,
-      },
-    ]);
-
-    await expect(RequestLogModel.totalCost().then((result) => result.usd)).resolves.toBeCloseTo(0.005, 10);
-  });
-
-  it("applies list filters to both cost queries so totals match the filtered list", async () => {
-    const { sumChain, legacyChain } = mockTotalCostQueries(0, []);
+  it("applies list filters so totals match the filtered list", async () => {
+    const { sumChain } = mockTotalCostQuery(0);
 
     await RequestLogModel.totalCost({
       num: 0,
@@ -759,39 +679,17 @@ describe("RequestLogModel cost provenance", () => {
       model_name: "openai/gpt-5.5",
     });
 
-    for (const chain of [sumChain, legacyChain]) {
-      expect(chain.where).toHaveBeenCalledWith("request_logs.project_name", "deti");
-      expect(chain.where).toHaveBeenCalledWith("request_logs.token_name", "openai/yds");
-      expect(chain.where).toHaveBeenCalledWith("request_logs.model_name", "openai/gpt-5.5");
-    }
+    expect(sumChain.where).toHaveBeenCalledWith("request_logs.project_name", "deti");
+    expect(sumChain.where).toHaveBeenCalledWith("request_logs.token_name", "openai/yds");
+    expect(sumChain.where).toHaveBeenCalledWith("request_logs.model_name", "openai/gpt-5.5");
   });
 
-  it("applies the unassigned-project filter to both cost queries", async () => {
-    const { sumChain, legacyChain } = mockTotalCostQueries(0, []);
+  it("applies the unassigned-project filter", async () => {
+    const { sumChain } = mockTotalCostQuery(0);
 
     await RequestLogModel.totalCost({ num: 0, page: 1, project_name_is_null: true });
 
-    for (const chain of [sumChain, legacyChain]) {
-      expect(chain.where).toHaveBeenCalledWith("request_logs.project_name", null);
-    }
-  });
-
-  it("combines the SQL-summed total with the legacy recomputation delta", async () => {
-    mockTotalCostQueries(3_000, [
-      {
-        model_name: "claude-sonnet-4-6",
-        input_tokens: 100_000,
-        output_tokens: 0,
-        cache_read_tokens: 0,
-        cache_creation_tokens: 80_000,
-        cache_creation_5m_tokens: 30_000,
-        cache_creation_1h_tokens: 50_000,
-        cost_usd: null,
-        cost_source: null,
-      },
-    ]);
-
-    await expect(RequestLogModel.totalCost().then((result) => result.usd)).resolves.toBeCloseTo(0.4755, 10);
+    expect(sumChain.where).toHaveBeenCalledWith("request_logs.project_name", null);
   });
 });
 
@@ -800,7 +698,7 @@ describe("RequestLogModel PostgreSQL", () => {
     await Sonamu.initForTesting();
   });
 
-  it("includes image costs once and filters both stored totals and legacy adjustments", async () => {
+  it("includes image costs once and filters stored totals", async () => {
     const projectName = `cost-${randomUUID()}`;
     const ids: number[] = [];
     try {
@@ -829,9 +727,9 @@ describe("RequestLogModel PostgreSQL", () => {
       const { rows } = await RequestLogModel.findMany("C", params);
       expect(rows.map((row) => row.id)).toEqual(expect.arrayContaining([ids[0], ids[1], ids[3], ids[4]]));
       expect(rows).toHaveLength(4);
-      // .038 known images + .001 hosted driver + .002 text; other project excluded.
+      // .03 known images + .005/.001 stored drivers + .001 hosted driver + .002 text; other project excluded.
       const total = await RequestLogModel.totalCost(params);
-      expect(total.usd).toBeCloseTo(0.041, 10);
+      expect(total.usd).toBeCloseTo(0.039, 10);
       expect(total.unknownImageCostCount).toBe(1);
     } finally {
       await RequestLogModel.del(ids);

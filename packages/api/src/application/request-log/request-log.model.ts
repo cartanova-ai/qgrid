@@ -890,12 +890,9 @@ class RequestLogModelClass extends BaseModelClass<
   /**
    * 화면 표시용 총 비용. 목록과 같은 필터를 적용한다.
    *
-   * driver와 image 비용을 함께 SUM한 뒤, legacy driver 비용의 차액만 보정한다.
-   * 이미지 비용은 저장값을 한 번만 포함하고 가격표 재계산 대상에서 제외한다.
-   *
-   * legacy 보정을 남겨둔 이유: 백필로 기존 legacy 는 0 이 되었지만, 외부 로거가
-   * `AppendStepInput`/`FinishRunInput` 으로 costSource 없이 넣으면 다시 생길 수 있다.
-   * 그런 row 는 저장값 대신 현재 가격표 재계산값이 맞으므로 차액을 더한다.
+   * driver와 image 비용 저장값을 SQL로 한 번 합산한다. 출처 없는 driver 비용은 쓰기 시점에
+   * `resolvePricingCost`로 확정하고 기존 row 는 백필로 확정했으므로, 읽을 때 가격표로 다시
+   * 계산하지 않는다(`scripts/backfill-request-log-costs.ts` dry-run 으로 보정 0 을 확인).
    *
    * 필터 조건을 여기서 다시 구현하지 않고 `applyListFilters` 를 공유하는 것이 핵심이다 —
    * 두 쿼리가 각자 필터를 가지면 화면에서 필터를 걸었을 때 행 수와 비용이 조용히 어긋난다.
@@ -923,7 +920,7 @@ class RequestLogModelClass extends BaseModelClass<
     // executeCountQuery 와 같은 방식으로 select 를 비우고 집계만 남긴다.
     const stored = await totalQb
       .clear("select")
-      // 음수 저장값(과거 버그)은 0 으로 눌러서 더한다 — JS 쪽 Math.max 와 같은 규칙.
+      // 음수 저장값(과거 버그)은 0 으로 눌러서 더한다.
       .select({
         total: Puri.rawNumber(
           "COALESCE(SUM(GREATEST(request_logs.cost_usd, 0) + COALESCE(request_logs.image_cost_usd, 0)), 0)",
@@ -935,52 +932,10 @@ class RequestLogModelClass extends BaseModelClass<
       })
       .first();
 
-    const { qb: legacyQb } = this.getSubsetQueries("C");
-    this.applyListFilters(legacyQb, params);
-    this.applySonamuFilters(legacyQb, sonamuFilter);
-
-    const legacyRows = await legacyQb
-      .whereRaw("request_logs.cost_source IS NULL OR request_logs.cost_usd IS NULL")
-      .clear("select")
-      .select({
-        token_name: "request_logs.token_name",
-        model_name: "request_logs.model_name",
-        input_tokens: "request_logs.input_tokens",
-        output_tokens: "request_logs.output_tokens",
-        cache_read_tokens: "request_logs.cache_read_tokens",
-        cache_creation_tokens: "request_logs.cache_creation_tokens",
-        cache_creation_5m_tokens: "request_logs.cache_creation_5m_tokens",
-        cache_creation_1h_tokens: "request_logs.cache_creation_1h_tokens",
-        cost_usd: "request_logs.cost_usd",
-      });
-
     // Postgres returns SUM/COUNT as bigint, which node-postgres delivers as text
     // even though `Puri.rawNumber` types it as number.
-    const storedTotal = bigintAggregate.parse(stored?.total ?? 0) / MICRO_USD;
-
-    // legacy row 는 위 SUM 에 저장값으로 이미 포함되어 있다. 재계산값과의 차액만 더한다.
-    const usd = legacyRows.reduce((sum, row) => {
-      const alreadySummed = Math.max(row.cost_usd ?? 0, 0) / MICRO_USD;
-      const usage = normalizedUsageForCost(row);
-
-      if (!usage.model) return sum;
-
-      return (
-        sum +
-        calculateCostUsd(usage.model, {
-          inputTokens: usage.inputTokens,
-          outputTokens: usage.outputTokens,
-          cachedInputTokens: usage.cachedInputTokens,
-          cacheCreationInputTokens: usage.cacheCreationInputTokens,
-          cacheCreationInputTokens5m: usage.cacheCreationInputTokens5m,
-          cacheCreationInputTokens1h: usage.cacheCreationInputTokens1h,
-        }) -
-        alreadySummed
-      );
-    }, storedTotal);
-
     return {
-      usd,
+      usd: bigintAggregate.parse(stored?.total ?? 0) / MICRO_USD,
       unknownImageCostCount: bigintAggregate.parse(stored?.unknownImageCostCount ?? 0),
       unknownCostCount: bigintAggregate.parse(stored?.unknownCostCount ?? 0),
     };
