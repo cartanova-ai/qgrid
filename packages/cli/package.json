@@ -45,7 +45,7 @@
     "knex": "catalog:",
     "pg": "catalog:",
     "pngjs": "^7.0.0",
-    "sonamu": "0.13.0",
+    "sonamu": "0.13.6",
     "typescript": "catalog:",
     "ws": "8.20.0",
     "zod": "catalog:"

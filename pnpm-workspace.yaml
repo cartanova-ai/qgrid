@@ -269,16 +269,14 @@ overrides:
   seroval-plugins: 1.5.6
 
 minimumReleaseAgeExclude:
-  - sonamu@0.13.0
+  - sonamu@0.13.6
   - "@sonamu-kit/cli@0.3.0"
-  - "@sonamu-kit/react-components@0.5.0"
+  - "@sonamu-kit/react-components@0.5.1"
   - "@sonamu-kit/hmr-runner@0.3.0"
 
 # Upstream peer ranges lag the versions their own parents install; remove each once upstream widens it.
 peerDependencyRules:
   allowedVersions:
-    # sonamu 0.13.0 resolves @sonamu-kit/tasks ^0.3.1, which pins logtape 2.0.0; the Sonamu catalog installs 2.4.2.
-    "@sonamu-kit/tasks>@logtape/logtape": 2.4.2
     # sonamu/cache statically imports bentocache's redis driver, so ioredis must be installed even
     # with memory-only caching. bentocache and @boringnode/bus still declare ioredis ^5; sonamu
     # 0.13 requires ioredis 6, and Sonamu's upgrade guide states its cache adapters work on it.
