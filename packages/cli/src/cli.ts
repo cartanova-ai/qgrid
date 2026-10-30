@@ -7,13 +7,7 @@ import { Command } from "commander";
 import { z } from "zod";
 
 import { applyQgridDatabaseEnv } from "./database-env";
-import {
-  parseVersion,
-  pnpmGlobalBinDir,
-  runSelfUpdate,
-  SELF_UPDATE_CHECK_TIMEOUT_MS,
-  SELF_UPDATE_INSTALL_TIMEOUT_MS,
-} from "./self-update";
+import { pnpmGlobalBinDir, runSelfUpdate, SELF_UPDATE_CHECK_TIMEOUT_MS } from "./self-update";
 
 const cliPackageSchema = z.object({ version: z.string() });
 
@@ -29,16 +23,14 @@ function readCliPackage(): z.infer<typeof cliPackageSchema> {
 
 const pkg = readCliPackage();
 
-export const RUNTIME_CLI_DEPENDENCIES = [
+const RUNTIME_CLI_DEPENDENCIES = [
   {
     command: "claude",
-    packageName: "@anthropic-ai/claude-code",
     label: "Claude Code",
     missingReason: "Anthropic tokens require Claude Code.",
+    installGuide: "https://code.claude.com/docs/en/setup",
   },
 ] as const;
-
-type RuntimeCliDependency = (typeof RUNTIME_CLI_DEPENDENCIES)[number];
 
 function commandVersion(command: string, env: NodeJS.ProcessEnv = process.env): string | null {
   try {
@@ -73,47 +65,13 @@ function commandPath(command: string): string {
   }
 }
 
-function warnMissingRuntimeCliDependency(dep: RuntimeCliDependency): void {
-  console.warn(`Warning: ${dep.command} CLI not found. ${dep.missingReason}`);
-  console.warn(`Install: npm i -g ${dep.packageName}`);
-}
-
-function installRuntimeCliDependency(dep: RuntimeCliDependency): void {
-  execFileSync("npm", ["i", "-g", `${dep.packageName}@latest`], {
-    stdio: "inherit",
-    timeout: SELF_UPDATE_INSTALL_TIMEOUT_MS,
-  });
-}
-
-export function ensureLatestRuntimeCliDependencies(): void {
+/** 런타임 CLI는 사용하는 쪽이 설치·업데이트를 관리한다. qgrid는 없을 때 경고만 한다. */
+export function warnMissingRuntimeCliDependencies(): void {
   for (const dep of RUNTIME_CLI_DEPENDENCIES) {
-    let installedOutput = commandVersion(dep.command);
+    if (commandVersion(dep.command)) continue;
 
-    try {
-      const installed = parseVersion(installedOutput);
-
-      if (installed) {
-        const latest = packageLatestVersion(dep.packageName);
-
-        if (installed === latest) continue;
-
-        console.log(`Updating ${dep.label}: ${installed} → ${latest}`);
-        installRuntimeCliDependency(dep);
-        installedOutput = commandVersion(dep.command);
-      } else {
-        console.log(`Updating ${dep.label}: installing latest`);
-        installRuntimeCliDependency(dep);
-        installedOutput = commandVersion(dep.command);
-      }
-    } catch (e) {
-      console.warn(
-        `Warning: failed to update ${dep.label}: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
-
-    if (!installedOutput) {
-      warnMissingRuntimeCliDependency(dep);
-    }
+    console.warn(`Warning: ${dep.command} CLI not found. ${dep.missingReason}`);
+    console.warn(`Install ${dep.label}: ${dep.installGuide}`);
   }
 }
 
@@ -177,7 +135,7 @@ program
       if (outcome.kind === "exit") process.exit(outcome.exitCode);
     }
 
-    ensureLatestRuntimeCliDependencies();
+    warnMissingRuntimeCliDependencies();
 
     // --db가 최우선이며, Qgrid의 공개 DB 환경변수로 정규화한 뒤 Sonamu 내부 env로 복사한다.
     if (opts.db) {
