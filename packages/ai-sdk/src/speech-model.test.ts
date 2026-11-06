@@ -77,3 +77,60 @@ describe("qgrid.speech with AI SDK generateSpeech", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("qgrid.speech with openai/ models", () => {
+  it("maps voice, instructions and outputFormat; warns like @ai-sdk/openai for language and speed", async () => {
+    vi.stubEnv("QGRID_URL", "https://qgrid.example");
+    const wav = Buffer.from("RIFF0000WAVEfmt ");
+    const fetchMock = vi.fn(async () =>
+      Response.json({ audio: wav.toString("base64"), mimeType: "audio/wav", tokenName: "openai/main" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await generateSpeech({
+      model: qgrid.speech("openai/gpt-realtime-2.1-mini"),
+      text: "Hello",
+      voice: "cedar",
+      language: "en",
+      speed: 1.2,
+      outputFormat: "mp3",
+      providerOptions: { openai: { instructions: "warm", speed: 1.5 } },
+    });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://qgrid.example/api/qgrid/speak");
+    expect(JSON.parse(String(init.body))).toEqual({
+      params: {
+        model: "openai/gpt-realtime-2.1-mini",
+        text: "Hello",
+        voice: "cedar",
+        format: "wav",
+        instructions: "warm",
+      },
+    });
+    expect(result.audio.uint8Array).toEqual(new Uint8Array(wav));
+    expect(result.warnings).toEqual([
+      expect.objectContaining({ feature: "outputFormat", details: expect.stringContaining("Using wav instead") }),
+      expect.objectContaining({ feature: "language", details: expect.stringContaining("do not support language selection") }),
+      expect.objectContaining({ feature: "speed" }),
+      expect.objectContaining({ feature: "providerOptions.openai.speed" }),
+    ]);
+  });
+
+  it("prefers the top-level instructions over openai.instructions and passes pcm through", async () => {
+    vi.stubEnv("QGRID_URL", "https://qgrid.example");
+    const fetchMock = vi.fn(async () =>
+      Response.json({ audio: Buffer.from([0, 0]).toString("base64"), mimeType: "audio/pcm;rate=24000", tokenName: "openai/main" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await generateSpeech({
+      model: qgrid.speech("openai/gpt-realtime-2.1-mini"),
+      text: "Hello",
+      instructions: "calm",
+      outputFormat: "pcm",
+      providerOptions: { openai: { instructions: "ignored" } },
+    });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).params).toMatchObject({ format: "pcm", instructions: "calm" });
+    expect(result.warnings).toEqual([]);
+    expect(result.providerMetadata.qgrid).toMatchObject({ mediaType: "audio/pcm;rate=24000" });
+  });
+});

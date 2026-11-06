@@ -46,6 +46,8 @@
       "id": "provider-runtimes",
       "code": [
         "packages/api/src/utils/providers/openai/openai-dispatcher.ts",
+        "packages/api/src/utils/providers/openai/openai-realtime-protocol.ts",
+        "packages/api/src/utils/providers/openai/openai-voice-client.ts",
         "packages/api/src/utils/providers/anthropic/anthropic-dispatcher.ts",
         "packages/api/src/utils/providers/grok/grok-dispatcher.ts",
         "packages/api/src/utils/providers/grok/grok-oauth.ts",

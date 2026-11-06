@@ -59,6 +59,7 @@ export default {
   "qgrid.grokContentPolicy": (detail: string) =>
     `콘텐츠 정책 위반으로 Grok 생성이 차단되었습니다: ${detail}`,
   "qgrid.grokInvalidRequest": (detail: string) => `잘못된 Grok 요청입니다: ${detail}`,
+  "qgrid.openaiVoiceInvalidRequest": (detail: string) => `잘못된 OpenAI 음성 요청입니다: ${detail}`,
   "qgrid.grokLoginFailed": (detail: string) => `Grok 로그인에 실패했습니다: ${detail}`,
   "qgrid.grokNotOAuthToken": "Grok 로그인 결과가 xAI OAuth 토큰이 아닙니다",
   "qgrid.grokNoWorkers": (detail: string) => `사용 가능한 Grok 토큰이 없습니다: ${detail}`,

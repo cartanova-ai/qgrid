@@ -58,6 +58,7 @@ export default {
   "qgrid.grokContentPolicy": (detail: string) =>
     `Grok generation blocked by content policy: ${detail}`,
   "qgrid.grokInvalidRequest": (detail: string) => `Invalid Grok request: ${detail}`,
+  "qgrid.openaiVoiceInvalidRequest": (detail: string) => `Invalid OpenAI voice request: ${detail}`,
   "qgrid.grokLoginFailed": (detail: string) => `Grok login failed: ${detail}`,
   "qgrid.grokNotOAuthToken": "Grok login returned credentials that are not an xAI OAuth token",
   "qgrid.grokNoWorkers": (detail: string) => `No Grok token is available: ${detail}`,
