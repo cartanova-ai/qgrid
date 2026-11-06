@@ -26,6 +26,12 @@ import { type RequestLogSubsetKey, type RequestLogSubsetMapping } from "../sonam
 import { requestLogLoaderQueries, requestLogSubsetQueries } from "../sonamu.generated.sso";
 import { renderJsonSchemaZodText, renderParsedJsonSchemaTypeText } from "./json-schema-type-text";
 import {
+  MICRO_USD,
+  normalizedUsageForCost,
+  resolvePricingCost,
+  type RequestLogUsageRow,
+} from "./request-log-cost";
+import {
   type HistoryItems,
   type RequestLogListParams,
   type RequestLogSaveParams,
@@ -35,8 +41,8 @@ import {
 } from "./request-log.types";
 import { formatZodCode } from "./zod-code-format";
 
-// cost_usd는 정수 micro-USD로 저장. 실제 USD = cost_usd / MICRO_USD.
-export const MICRO_USD = 1_000_000;
+export { MICRO_USD };
+
 const REQUEST_LOG_RUN_LOCK_CLASS_ID = 718;
 const TOOL_ENUM_VALUE_LIMIT = 6;
 
@@ -109,8 +115,10 @@ export interface FinishRunParams {
 
 type FinishRunUpdate = Partial<FinishRunParams> & { id: number; ttft_ms?: number };
 
+export type RunProgressUpdate = { token_name?: string; model_name?: string; ttft_ms?: number };
+
 /** Copies `key` only when the caller supplied it, so omitted columns stay untouched. */
-function copyDefined<T, K extends keyof T>(target: Partial<T>, source: T, key: K): void {
+function copyDefined<T>(target: Partial<T>, source: T, key: keyof T): void {
   if (source[key] !== undefined) target[key] = source[key];
 }
 
@@ -176,74 +184,12 @@ function aggregateGenerateStepRows(rows: StepAggregateRow[]): RequestLogStepAggr
   return aggregate;
 }
 
-type RequestLogUsageRow = {
-  token_name?: string | null;
-  model_name?: string | null;
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cache_creation_tokens: number;
-  cache_creation_5m_tokens?: number | null;
-  cache_creation_1h_tokens?: number | null;
-  cost_usd?: number | null;
-  cost_source?: string | null;
-};
-
-function isAnthropicUsageRow(row: Pick<RequestLogUsageRow, "token_name" | "model_name">): boolean {
-  return (
-    row.token_name?.startsWith("anthropic/") === true ||
-    row.model_name?.startsWith("claude-") === true ||
-    row.model_name?.startsWith("anthropic/claude-") === true
-  );
-}
-
 /** Provider of a provider-qualified model id (`openai/`, `anthropic/`, `grok/`); legacy ids are unknown. */
 export function providerOfModelName(modelName: string | null | undefined): ProviderId | "unknown" {
   const slash = modelName?.indexOf("/") ?? -1;
   const prefix = slash > 0 ? modelName?.slice(0, slash) : undefined;
 
   return isProviderId(prefix) ? prefix : "unknown";
-}
-
-function canonicalModelName(modelName: string): string {
-  return modelName.includes("/") ? modelName.split("/").pop()! : modelName;
-}
-
-interface UsageForCost {
-  model: string | null;
-  inputTokens: number;
-  outputTokens: number;
-  cachedInputTokens: number;
-  cacheCreationInputTokens: number;
-  cacheCreationInputTokens5m?: number;
-  cacheCreationInputTokens1h?: number;
-}
-
-function normalizedUsageForCost(row: RequestLogUsageRow): UsageForCost {
-  const cacheRead = row.cache_read_tokens;
-  const cacheCreation = row.cache_creation_tokens;
-  const storedInput = row.input_tokens;
-
-  const legacyAnthropicSplitInput =
-    isAnthropicUsageRow(row) && storedInput < cacheRead + cacheCreation;
-
-  const usage: UsageForCost = {
-    model: row.model_name ? canonicalModelName(row.model_name) : null,
-    inputTokens: legacyAnthropicSplitInput ? storedInput + cacheRead + cacheCreation : storedInput,
-    outputTokens: row.output_tokens,
-    cachedInputTokens: cacheRead,
-    cacheCreationInputTokens: cacheCreation,
-  };
-
-  if (row.cache_creation_5m_tokens !== null && row.cache_creation_5m_tokens !== undefined) {
-    usage.cacheCreationInputTokens5m = row.cache_creation_5m_tokens;
-  }
-
-  if (row.cache_creation_1h_tokens !== null && row.cache_creation_1h_tokens !== undefined) {
-    usage.cacheCreationInputTokens1h = row.cache_creation_1h_tokens;
-  }
-
-  return usage;
 }
 
 function normalizeLegacyAnthropicRow<T extends RequestLogUsageRow>(row: T): T {
@@ -427,8 +373,8 @@ class RequestLogModelClass extends BaseModelClass<
   async save(spa: RequestLogSaveParams[]): Promise<number[]> {
     const wdb = this.getPuri("w");
 
-    // register
-    for (const sp of spa) wdb.ubRegister("request_logs", sp);
+    // register — 출처 없는 비용은 finishRun 과 같은 규칙으로 쓰기 시점에 확정한다.
+    for (const sp of spa) wdb.ubRegister("request_logs", { ...sp, ...resolvePricingCost(sp) });
 
     // transaction
     return wdb.transaction(async (trx) => {
@@ -654,6 +600,15 @@ class RequestLogModelClass extends BaseModelClass<
     });
   }
 
+  /** Writes facts known mid-run onto a parent that is still running; finished runs stay as is. */
+  async recordRunProgress(requestLogId: number, progress: RunProgressUpdate): Promise<void> {
+    await this.getPuri("w")
+      .from("request_logs")
+      .where("id", requestLogId)
+      .where("status", "running")
+      .update(progress);
+  }
+
   async finishRun(requestLogId: number, params: FinishRunParams): Promise<void> {
     if (params.status === "succeeded" && !params.token_name) {
       throw new Error("tokenName is required for succeeded runs");
@@ -690,10 +645,10 @@ class RequestLogModelClass extends BaseModelClass<
     if (params.history !== undefined) update.history = params.history;
     update.ttft_ms = (await this.firstGenerateStepTtft(requestLogId)) ?? 0;
 
-    // 서버 run 경로는 step 에서 확정한 exact cost 를 넘긴다. 외부/legacy caller 가 비용을
-    // 생략한 경우에만 저장된 모델+usage 로 계산한다.
+    // 서버 run 경로는 step 에서 확정한 exact cost 와 출처를 넘긴다. 출처 없이 끝난 외부/legacy
+    // run 은 저장된 모델+usage 로 여기서 확정해, 읽기 경로가 다시 계산하지 않게 한다.
     if (
-      params.cost_usd === undefined &&
+      (params.cost_source === undefined || params.cost_source === null) &&
       params.input_tokens !== undefined &&
       params.output_tokens !== undefined
     ) {
@@ -703,34 +658,19 @@ class RequestLogModelClass extends BaseModelClass<
         .where("id", requestLogId)
         .first();
 
-      const effectiveModelName = params.model_name ?? row?.model_name;
+      const resolved = resolvePricingCost({
+        token_name: params.token_name,
+        model_name: params.model_name ?? row?.model_name,
+        input_tokens: params.input_tokens,
+        output_tokens: params.output_tokens,
+        cache_read_tokens: params.cache_read_tokens ?? 0,
+        cache_creation_tokens: params.cache_creation_tokens ?? 0,
+        cache_creation_5m_tokens: params.cache_creation_5m_tokens,
+        cache_creation_1h_tokens: params.cache_creation_1h_tokens,
+        cost_usd: params.cost_usd,
+      });
 
-      if (effectiveModelName) {
-        const model = canonicalModelName(effectiveModelName);
-
-        const usage = normalizedUsageForCost({
-          token_name: params.token_name,
-          model_name: effectiveModelName,
-          input_tokens: params.input_tokens,
-          output_tokens: params.output_tokens,
-          cache_read_tokens: params.cache_read_tokens ?? 0,
-          cache_creation_tokens: params.cache_creation_tokens ?? 0,
-          cache_creation_5m_tokens: params.cache_creation_5m_tokens,
-          cache_creation_1h_tokens: params.cache_creation_1h_tokens,
-        });
-
-        update.cost_usd = Math.round(
-          calculateCostUsd(model, {
-            inputTokens: usage.inputTokens,
-            outputTokens: usage.outputTokens,
-            cachedInputTokens: usage.cachedInputTokens,
-            cacheCreationInputTokens: usage.cacheCreationInputTokens,
-            cacheCreationInputTokens5m: usage.cacheCreationInputTokens5m,
-            cacheCreationInputTokens1h: usage.cacheCreationInputTokens1h,
-          }) * 1_000_000,
-        );
-        update.cost_source = "pricing_table";
-      }
+      if (resolved) Object.assign(update, resolved);
     }
 
     const wdb = this.getPuri("w");
@@ -871,7 +811,26 @@ class RequestLogModelClass extends BaseModelClass<
     expiry.fallback_count = aggregate.fallback_count;
     expiry.cost_usd = aggregate.cost_usd;
 
-    if (aggregate.cost_source !== undefined) expiry.cost_source = aggregate.cost_source;
+    if (aggregate.cost_source !== undefined) {
+      expiry.cost_source = aggregate.cost_source;
+    } else {
+      // 출처 없는 외부 step 만 있던 run 은 만료 시점에 가격표 비용으로 확정한다.
+      const run = await wdb
+        .from("request_logs")
+        .select({ token_name: "token_name", model_name: "model_name" })
+        .where("id", requestLogId)
+        .first();
+
+      Object.assign(
+        expiry,
+        resolvePricingCost({
+          ...aggregate,
+          token_name: run?.token_name,
+          model_name: run?.model_name,
+        }),
+      );
+    }
+
     expiry.ttft_ms = firstTtft?.ttft_ms ?? 0;
 
     const updated = await wdb
@@ -931,12 +890,9 @@ class RequestLogModelClass extends BaseModelClass<
   /**
    * 화면 표시용 총 비용. 목록과 같은 필터를 적용한다.
    *
-   * driver와 image 비용을 함께 SUM한 뒤, legacy driver 비용의 차액만 보정한다.
-   * 이미지 비용은 저장값을 한 번만 포함하고 가격표 재계산 대상에서 제외한다.
-   *
-   * legacy 보정을 남겨둔 이유: 백필로 기존 legacy 는 0 이 되었지만, 외부 로거가
-   * `AppendStepInput`/`FinishRunInput` 으로 costSource 없이 넣으면 다시 생길 수 있다.
-   * 그런 row 는 저장값 대신 현재 가격표 재계산값이 맞으므로 차액을 더한다.
+   * driver와 image 비용 저장값을 SQL로 한 번 합산한다. 출처 없는 driver 비용은 쓰기 시점에
+   * `resolvePricingCost`로 확정하고 기존 row 는 백필로 확정했으므로, 읽을 때 가격표로 다시
+   * 계산하지 않는다(`scripts/backfill-request-log-costs.ts` dry-run 으로 보정 0 을 확인).
    *
    * 필터 조건을 여기서 다시 구현하지 않고 `applyListFilters` 를 공유하는 것이 핵심이다 —
    * 두 쿼리가 각자 필터를 가지면 화면에서 필터를 걸었을 때 행 수와 비용이 조용히 어긋난다.
@@ -964,7 +920,7 @@ class RequestLogModelClass extends BaseModelClass<
     // executeCountQuery 와 같은 방식으로 select 를 비우고 집계만 남긴다.
     const stored = await totalQb
       .clear("select")
-      // 음수 저장값(과거 버그)은 0 으로 눌러서 더한다 — JS 쪽 Math.max 와 같은 규칙.
+      // 음수 저장값(과거 버그)은 0 으로 눌러서 더한다.
       .select({
         total: Puri.rawNumber(
           "COALESCE(SUM(GREATEST(request_logs.cost_usd, 0) + COALESCE(request_logs.image_cost_usd, 0)), 0)",
@@ -976,81 +932,39 @@ class RequestLogModelClass extends BaseModelClass<
       })
       .first();
 
-    const { qb: legacyQb } = this.getSubsetQueries("C");
-    this.applyListFilters(legacyQb, params);
-    this.applySonamuFilters(legacyQb, sonamuFilter);
-
-    const legacyRows = await legacyQb
-      .whereRaw("request_logs.cost_source IS NULL OR request_logs.cost_usd IS NULL")
-      .clear("select")
-      .select({
-        token_name: "request_logs.token_name",
-        model_name: "request_logs.model_name",
-        input_tokens: "request_logs.input_tokens",
-        output_tokens: "request_logs.output_tokens",
-        cache_read_tokens: "request_logs.cache_read_tokens",
-        cache_creation_tokens: "request_logs.cache_creation_tokens",
-        cache_creation_5m_tokens: "request_logs.cache_creation_5m_tokens",
-        cache_creation_1h_tokens: "request_logs.cache_creation_1h_tokens",
-        cost_usd: "request_logs.cost_usd",
-      });
-
     // Postgres returns SUM/COUNT as bigint, which node-postgres delivers as text
     // even though `Puri.rawNumber` types it as number.
-    const storedTotal = bigintAggregate.parse(stored?.total ?? 0) / MICRO_USD;
-
-    // legacy row 는 위 SUM 에 저장값으로 이미 포함되어 있다. 재계산값과의 차액만 더한다.
-    const usd = legacyRows.reduce((sum, row) => {
-      const alreadySummed = Math.max(row.cost_usd ?? 0, 0) / MICRO_USD;
-      const usage = normalizedUsageForCost(row);
-
-      if (!usage.model) return sum;
-
-      return (
-        sum +
-        calculateCostUsd(usage.model, {
-          inputTokens: usage.inputTokens,
-          outputTokens: usage.outputTokens,
-          cachedInputTokens: usage.cachedInputTokens,
-          cacheCreationInputTokens: usage.cacheCreationInputTokens,
-          cacheCreationInputTokens5m: usage.cacheCreationInputTokens5m,
-          cacheCreationInputTokens1h: usage.cacheCreationInputTokens1h,
-        }) -
-        alreadySummed
-      );
-    }, storedTotal);
-
     return {
-      usd,
+      usd: bigintAggregate.parse(stored?.total ?? 0) / MICRO_USD,
       unknownImageCostCount: bigintAggregate.parse(stored?.unknownImageCostCount ?? 0),
       unknownCostCount: bigintAggregate.parse(stored?.unknownCostCount ?? 0),
     };
   }
 
   async distinctProjectNames(): Promise<string[]> {
-    const rows = await this.getPuri("r")
-      .from("request_logs")
-      .distinct("project_name")
-      .where("project_name", "!=", null)
-      .orderBy("project_name", "asc")
-      .select({
-        project_name: "project_name",
-      });
-
-    return rows.map((r) => r.project_name!);
+    return this.distinctIndexedValues("project_name");
   }
 
   async distinctModelNames(): Promise<string[]> {
-    const rows = await this.getPuri("r")
-      .from("request_logs")
-      .distinct("model_name")
-      .where("model_name", "!=", null)
-      .orderBy("model_name", "asc")
-      .select({
-        model_name: "model_name",
-      });
+    return this.distinctIndexedValues("model_name");
+  }
 
-    return rows.map((r) => r.model_name!);
+  /**
+   * Loose index scan: 컬럼 인덱스에서 다음 값만 찾아 건너뛴다. 일반 DISTINCT 는 전체 행 수에
+   * 비례하지만 이 쿼리는 고유값 수에 비례한다. NULL 제외·오름차순 의미는 DISTINCT 와 같다.
+   */
+  private async distinctIndexedValues(column: "project_name" | "model_name"): Promise<string[]> {
+    const result = await this.getPuri("r").knex.raw<{ rows: Array<{ v: string }> }>(
+      `WITH RECURSIVE t AS (
+        (SELECT ?? AS v FROM request_logs WHERE ?? IS NOT NULL ORDER BY ?? LIMIT 1)
+        UNION ALL
+        SELECT (SELECT ?? FROM request_logs WHERE ?? > t.v ORDER BY ?? LIMIT 1) FROM t WHERE t.v IS NOT NULL
+      )
+      SELECT v FROM t WHERE v IS NOT NULL`,
+      [column, column, column, column, column, column],
+    );
+
+    return result.rows.map((row) => row.v);
   }
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })

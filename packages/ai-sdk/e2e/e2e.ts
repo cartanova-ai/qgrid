@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
-import { generateText, Output, stepCountIs, streamText, tool } from "ai";
+import { generateText, Output, isStepCount, streamText, tool } from "ai";
 import { z } from "zod";
 
 import { qgrid, type QgridAnthropicModel, type QgridOpenAIModel } from "../src/index";
@@ -87,7 +87,7 @@ async function main() {
     for await (const chunk of stream.textStream) streamedText += chunk;
     assert.ok(streamedText.trim(), "Empty stream");
     assert.equal(await stream.finishReason, "stop");
-    await assertLog((await stream.providerMetadata)?.qgrid?.requestLogId);
+    await assertLog((await stream.finalStep).providerMetadata?.qgrid?.requestLogId);
 
     const marker = randomUUID();
     let executions = 0;
@@ -107,7 +107,7 @@ async function main() {
         }),
       },
       output: Output.object({ schema }),
-      stopWhen: stepCountIs(3),
+      stopWhen: isStepCount(3),
       maxRetries: 0,
     });
     assert.equal(executions, 1, "Expected one actual tool execution");
@@ -117,7 +117,7 @@ async function main() {
       marker,
       "Final output did not use the tool result",
     );
-    const id = result.providerMetadata?.qgrid?.requestLogId;
+    const id = result.finalStep.providerMetadata?.qgrid?.requestLogId;
     assert.ok(result.steps.length >= 2, "Missing tool continuation");
     assert.ok(
       result.steps.every((step) => step.providerMetadata?.qgrid?.requestLogId === id),

@@ -1,7 +1,8 @@
 import { getLogger } from "@logtape/logtape";
 import { z } from "zod";
 
-import { RequestLogModel } from "../request-log/request-log.model";
+import { type GenerateProgress } from "../../utils/providers/common/provider-dispatcher";
+import { RequestLogModel, type RunProgressUpdate } from "../request-log/request-log.model";
 import {
   estimateImageGenerationCostMicroUsd,
   imageGenerationCostMethod,
@@ -125,6 +126,44 @@ export async function beforeQuery(args: QueryInput): Promise<{
   return { requestLogId, stepIndex };
 }
 
+/**
+ * Returns a dispatcher progress callback that writes the token, serving model, and TTFT onto the
+ * running parent row as they become known. Writes run in order, and a failure only logs: progress
+ * must never fail the request. afterQuery's final values replace these.
+ */
+export function runProgressRecorder(
+  requestLogId: number,
+  stepIndex: number,
+  args: QueryInput,
+): (progress: GenerateProgress) => void {
+  let pending = Promise.resolve();
+
+  return (progress) => {
+    const update: RunProgressUpdate = {};
+
+    if (progress.tokenName) update.token_name = progress.tokenName;
+
+    const modelName = withProviderPrefix(args.model, progress.model);
+
+    if (modelName) update.model_name = modelName;
+
+    // The run's TTFT is its first generate step's; a continued tool run keeps the stored value.
+    if (progress.ttftMs !== undefined && stepIndex === 0) update.ttft_ms = progress.ttftMs;
+
+    if (Object.keys(update).length === 0) return;
+
+    pending = pending.then(async () => {
+      try {
+        await RequestLogModel.recordRunProgress(requestLogId, update);
+      } catch (e) {
+        logger.warn(
+          `run progress update failed for ${requestLogId}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    });
+  };
+}
+
 async function appendGenerateStep(
   requestLogId: number,
   stepIndex: number,
@@ -177,10 +216,12 @@ export async function afterQuery(
 
   const imageParts = getImageParts(result);
 
-  const imageCostMicroUsd = estimateImageGenerationCostMicroUsd(
-    result,
-    args.imageGenerationOptions,
-  );
+  // Grok reports one provider cost for the turn that already includes its image tool calls.
+  const imageCostIncluded = args.model?.startsWith("grok/") === true && imageParts.length > 0;
+
+  const imageCostMicroUsd = imageCostIncluded
+    ? 0
+    : estimateImageGenerationCostMicroUsd(result, args.imageGenerationOptions);
 
   for (const step of buildImageGenerationToolSteps(args, imageParts, stepIndex)) {
     await RequestLogModel.appendStep(requestLogId, step);
@@ -233,8 +274,9 @@ export async function afterQuery(
     cost_usd: agg.cost_usd,
     cost_source: agg.cost_source,
     image_cost_usd: imageCostMicroUsd,
-    image_cost_method:
-      imageCostMicroUsd !== null
+    image_cost_method: imageCostIncluded
+      ? "included:grok-provider-cost"
+      : imageCostMicroUsd !== null
         ? imageGenerationCostMethod(args.imageGenerationOptions, result)
         : null,
     history: filterHistoryForStorage(args.history),

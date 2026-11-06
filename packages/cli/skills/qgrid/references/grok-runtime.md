@@ -45,6 +45,13 @@ Refresh starts 300 seconds plus stable 0–60 second per-account jitter before e
 
 `/billing?format=credits` is camelCase: qgrid reads `config.creditUsagePercent`, `config.currentPeriod`, and `config.prepaidBalance.val`. The observed period was seven days anchored at subscription start. Results are cached for 60 seconds; lookup failure fails open (`grok-quota.ts`, `grok-dispatcher.ts`, `docs/diagnosis/2026-10-16-grok-live-probe.md`).
 
+The response is protobuf JSON, which omits zero-valued scalars: a period without measurable usage arrives without `creditUsagePercent`, so qgrid reads the missing field as 0%. Observed on a Free account on 2026-10-21, where the field stayed absent even after a small request. The period is fixed (it existed before the token's first request and did not move after one), so token-window keepalive does not apply to Grok; xAI documents one weekly pool and no short rolling window.
+
+Every routing prefetch reads billing, even without a configured threshold. Grok exposes only weekly
+usage: accounts are excluded at 100%, and the stored configurable threshold is not applied.
+Dashboard usage (`QgridFrame.usage`) calls the same prefetch through `refreshUsage` and waits up to
+3 seconds. The 60-second lookup cache bounds the xAI calls.
+
 D6 excludes accounts when `/settings.on_demand_enabled` is `true`; `null`, `false`, or absence allows routing. Billing does not carry this field. D7 selects eligible accounts through the shared `SmoothWeightedRoundRobin`, using `tokens.weight`; a valid cache-affinity token remains preferred. `QGRID_GROK_MAX_INFLIGHT_PER_TOKEN` optionally excludes accounts at the cap, while omission leaves Grok uncapped (`grok-quota.ts`, `grok-dispatcher.ts`, `packages/api/src/utils/providers/common/smooth-weighted-round-robin.ts`).
 
 ## Failure and failover rules
@@ -74,9 +81,17 @@ Provider `cost_in_usd_ticks` is authoritative, including zero; one tick is `1e-1
 
 Qgrid exposes image generation/editing, asynchronous video start/status, transcription, and speech through `api.x.ai`. Reference images select `/images/edits`; video uses `/videos/generations` and `/videos/{request_id}`; voice uses multipart `/stt` and JSON `/tts` (`grok-media-client.ts`, `grok-voice-client.ts`, `packages/api/src/application/qgrid/qgrid.frame.ts`).
 
+Image generation and editing default to `grok-imagine-image-2.0`; the public SDK lists it and
+`grok-imagine-image` (1.0). Quality omission passes through as upstream `auto`, currently low for
+generation and medium for editing. Reported ticks remain authoritative. Without ticks, image cost
+uses the active model's output resolution/quality and input-image count at the official API rates
+(verified 2026-10-25). Unknown price combinations remain unknown; retired models have no estimate.
+
+Chat turns also accept `imageGeneration` (the dashboard chat sends `"auto"`): the dispatcher adds the proxy's server-side `{ "type": "image_generation" }` tool, and completed `image_generation_call` items (base64 JPEG, Grok Imagine) become `GenerateResult.images`, so generation and edits of earlier images work inside a conversation. `imageGenerationOptions` (OpenAI quality/size/background) is rejected. The turn's provider-reported cost already includes the image, so the request log stores `image_cost_usd = 0` with `image_cost_method = "included:grok-provider-cost"`. Verified 2026-10-21 through the subscription proxy; the model occasionally answers "I'll do it" without calling the tool (1 of 5 edit attempts).
+
 Inline audio, each inline image, and the aggregate inline images in one request are capped at 7 MiB decoded. The server maps Fastify's oversized-body error to HTTP 413 (`packages/api/src/application/qgrid/qgrid.types.ts`, `qgrid.frame.ts`).
 
-Video starts return a random 128-bit in-memory job handle. Handles expire after 24 hours, polling stays pinned to the starting token, and `projectName` must match the owner supplied at start. D4 returns the upstream `api.x.ai` video URL unchanged; qgrid does not fetch, proxy, or store the bytes (`qgrid.frame.ts`, `grok-media-client.ts`, `packages/ai-sdk/README.md`).
+Video starts return a random 128-bit in-memory job handle. Handles expire after 24 hours, polling stays pinned to the starting token, and `projectName` must match the owner supplied at start. A started job is already admitted and billed, so `getVideo` polls with `ungated: true`: it checks only credential state (inactive, reauth, refresh failure) and skips the quota-threshold, cooldown, in-flight, on-demand, and ZDR gates that admit new requests. After the upstream poll returns, `videoStatus` re-checks `job.final`, so overlapping polls of a finished job write the request log once and return the same result. D4 returns the upstream `api.x.ai` video URL unchanged; qgrid does not fetch, proxy, or store the bytes (`qgrid.frame.ts`, `grok-media-client.ts`, `packages/ai-sdk/README.md`).
 
 **ZDR and video.** xAI refuses `POST /v1/videos/generations` for Zero Data Retention accounts with HTTP 400 `invalid_request`: "Zero Data Retention teams must provide output.upload_url for video generation." The dispatcher therefore keeps a per-token `zdr` state and excludes `zdr === true` tokens from video only; chat, image, STT, and TTS still route. The primary signal is `codingDataRetentionOptOut` on `GET /user?include=subscription`, re-read on the 60 s prefetch with settings; `x-zero-data-retention: true` on a chat-proxy response confirms it, but its absence never clears it. Unknown state, or a failed `/user` read with no prior value, routes (fail open). If a video start still gets the ZDR 400, the token is marked ZDR, video is entitlement-blocked for an hour, and the start fails over under the media rules. With no eligible video token the caller gets `GrokZdrVideoUnavailableError` (HTTP 503) naming the tokens; usage exposes `zdrVideoExcluded`. Both signals were inferred from one account (plan §11). grok-build's remedy, a user-owned S3 presigned `output.upload_url`, is not implemented (`grok-dispatcher.ts`, `grok-quota.ts`).
 

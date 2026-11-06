@@ -53,7 +53,7 @@ async function tickTimer(): Promise<void> {
 }
 
 describe("OpenAIDispatcher direct runtime", () => {
-  it.each(["gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"])(
+  it.each(["gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"])(
     "disables thinking and omits summaries through generate/stream for %s",
     async (model) => {
       const run = vi.fn((options: OpenAIResponsesOptions) => {
@@ -383,6 +383,24 @@ describe("OpenAIDispatcher direct runtime", () => {
     });
     expect(deltas).toEqual(["a", "b"]);
     expect(complete).toHaveBeenCalledWith(expect.objectContaining({ text: "ab" }));
+  });
+
+  it("reports the selected token and the first-delta TTFT as progress before completing", async () => {
+    const d = dispatcher(() =>
+      events(
+        { type: "text-delta", text: "a" },
+        { type: "text-delta", text: "b" },
+        { type: "completed", responseId: "r" },
+      ),
+    );
+    await d.onTokenAdded(1, "one", credentials);
+    const progress = vi.fn();
+
+    await d.generate(request({ onProgress: progress }));
+
+    expect(progress).toHaveBeenNthCalledWith(1, { tokenName: "one" });
+    expect(progress).toHaveBeenNthCalledWith(2, { ttftMs: expect.any(Number) });
+    expect(progress).toHaveBeenCalledTimes(2);
   });
 
   it("still rejects an upstream failure after accepting a completed output message", async () => {
@@ -928,13 +946,13 @@ describe("OpenAIDispatcher direct runtime", () => {
     expect(started).not.toHaveBeenCalled();
   });
 
-  it("routes past an over-threshold token instead of treating it as capacity", async () => {
+  it("applies the configured threshold to the OpenAI weekly primary window", async () => {
     const names: string[] = [];
     const d = new OpenAIDispatcher(config(), {
       clientFactory: () => ({ responses: () => events({ type: "completed", responseId: "r" }) }),
       fetch: async () =>
         new Response(
-          JSON.stringify({ rate_limits: { primary_window: { used_percent: 90 } } }),
+          JSON.stringify({ rate_limits: { primary_window: { used_percent: 90, limit_window_seconds: 604_800 } } }),
           { status: 200, headers: { "content-type": "application/json" } },
         ),
     });
@@ -990,13 +1008,14 @@ describe("effort 어휘 해석 (Codex 카탈로그 기준)", () => {
     return mapped?.reasoning?.effort;
   }
 
-  it("모델이 지원하는 값은 그대로 보내고, 상한 초과·공개 API 어휘는 reasoning 에서 빼 백엔드 기본값을 쓴다", async () => {
-    await expect(mappedEffortFor("gpt-6-astra", "ultra")).resolves.toBe("ultra");
-    await expect(mappedEffortFor("gpt-6.1-sol", "ultra")).resolves.toBe("ultra");
-    await expect(mappedEffortFor("gpt-6-sol", "ultra")).resolves.toBe("ultra");
+  it("모델이 지원하는 값은 그대로 보내되 ultra 는 wire 상한인 max 로 보내고, 상한 초과·공개 API 어휘는 reasoning 에서 빼 백엔드 기본값을 쓴다", async () => {
+    await expect(mappedEffortFor("gpt-6-astra", "ultra")).resolves.toBe("max");
+    await expect(mappedEffortFor("gpt-6.1-sol", "ultra")).resolves.toBe("max");
+    await expect(mappedEffortFor("gpt-6.1-terra", "ultra")).resolves.toBe("max");
+    await expect(mappedEffortFor("gpt-6-sol", "ultra")).resolves.toBe("max");
     await expect(mappedEffortFor("gpt-6-luna", "max")).resolves.toBe("max");
     await expect(mappedEffortFor("gpt-6-luna", "ultra")).resolves.toBeUndefined();
-    await expect(mappedEffortFor("gpt-5.6-terra", "ultra")).resolves.toBe("ultra");
+    await expect(mappedEffortFor("gpt-5.6-terra", "ultra")).resolves.toBe("max");
     await expect(mappedEffortFor("gpt-5.5", "xhigh")).resolves.toBe("xhigh");
     await expect(mappedEffortFor("gpt-5.5", "max")).resolves.toBeUndefined();
     await expect(mappedEffortFor("gpt-5.6-terra", "minimal")).resolves.toBeUndefined();

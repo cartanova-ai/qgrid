@@ -205,13 +205,13 @@ describe("api.x.ai schemas", () => {
     const catalog = GrokApiImageModelCatalog.parse({
       models: [
         {
-          id: "grok-imagine-image-quality",
-          image_price: 500000000,
-          pricing: [{ quality: "quality", resolution: "1k", price_per_image: 500000000 }],
+          id: "grok-imagine-image-2.0",
+          image_price: 400000000,
+          pricing: [{ quality: "low", resolution: "1k", price_per_image: 400000000 }],
         },
       ],
     });
-    expect(grokCatalogModels(catalog)[0]?.pricing?.[0]?.price_per_image).toBe(500000000);
+    expect(grokCatalogModels(catalog)[0]?.pricing?.[0]?.price_per_image).toBe(400000000);
   });
 
   it("parses image, video, STT and TTS shapes", () => {

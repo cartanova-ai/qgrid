@@ -12,6 +12,7 @@ import {
   type GenerateRequest,
   type GenerateResult,
   type GenerateStreamCallbacks,
+  type GeneratedImage,
   type MediaDispatcher,
   type MediaDispatchResult,
   type MediaTokenSelection,
@@ -85,6 +86,7 @@ export const GROK_REFRESH_FAILED_COOLDOWN_MS = 5_000;
 export const GROK_MAX_STALE_AUTH_RETRIES = 1;
 const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 300_000;
+const GROK_WEEKLY_QUOTA_LIMIT = 100;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -377,6 +379,23 @@ function historyItems(history: readonly JsonValue[] | undefined): GrokInputItem[
 
     return item;
   });
+}
+
+/** A completed `image_generation_call` item's base64 result; the proxy returns JPEG. */
+function grokGeneratedImage(
+  result: JsonValue | undefined,
+  prompt: JsonValue | undefined,
+): GeneratedImage | undefined {
+  const data = jsonString(result);
+
+  if (!data) return undefined;
+
+  let mediaType: GeneratedImage["mediaType"] = "image/jpeg";
+
+  if (data.startsWith("iVBORw0KGgo")) mediaType = "image/png";
+  else if (data.startsWith("UklGR")) mediaType = "image/webp";
+
+  return { data, mediaType, revisedPrompt: jsonString(prompt) ?? null };
 }
 
 function userMessage(req: GenerateRequest): GrokInputItem {
@@ -802,7 +821,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
 
     if ((token.quotaBlocks.get(requestClass) ?? 0) > now) return "quota";
 
-    if (token.quotaThreshold !== null && token.overThreshold) return "quota";
+    if (token.overThreshold) return "quota";
 
     if ((token.cooldowns.get(requestClass) ?? 0) > now) return "cooldown";
 
@@ -820,6 +839,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
    * Refreshes the 60 s settings/subscription/billing caches. Lookup failures fail open, so an
    * expired bearer is refreshed first: a lookup with it would fail and open every gate. A failed
    * refresh therefore takes the token out of selection (`refresh_failed`) instead of failing open.
+   * Weekly exhaustion is checked for every token, independently of its configured threshold.
    */
   async prefetch(token: GrokTokenState, signal?: AbortSignal): Promise<void> {
     if (!token.credentials || token.invalidReason || token.reauthRequired) return;
@@ -831,10 +851,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       entry.generation !== token.generation ||
       now - entry.fetchedAt >= GROK_LOOKUP_CACHE_TTL_MS;
 
-    const billingDue = () =>
-      (token.quotaThreshold !== null || [...token.quotaBlocks.values()].some((u) => u > now)) &&
-      stale(token.billing) &&
-      now >= token.billingNotBefore;
+    const billingDue = () => stale(token.billing) && now >= token.billingNotBefore;
 
     if (!stale(token.settings) && !stale(token.subscription) && !billingDue()) return;
 
@@ -864,13 +881,20 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     if (stale(token.settings)) tasks.push(this.loadSettings(token));
 
     if (stale(token.subscription)) tasks.push(this.loadSubscription(token));
-    const blocked = [...token.quotaBlocks.values()].some((until) => until > now);
 
-    if ((token.quotaThreshold !== null || blocked) && stale(token.billing)) {
-      if (now >= token.billingNotBefore) tasks.push(this.loadBilling(token));
-    }
+    if (billingDue()) tasks.push(this.loadBilling(token));
 
     await Promise.all(tasks);
+  }
+
+  /**
+   * Usage view: refreshes a token's stale lookups, billing included, so the dashboard shows usage
+   * before any request has routed through the token. The 60 s cache bounds the xAI calls.
+   */
+  async refreshUsage(tokenId: number): Promise<void> {
+    const token = this.tokens.get(tokenId);
+
+    if (token) await this.prefetch(token);
   }
 
   /** Transient refresh failure for `presented`; ignored when the token already holds newer ones. */
@@ -1003,18 +1027,18 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
           return;
         }
 
-        const limit = token.quotaThreshold ?? 100;
-        const over = token.quotaThreshold !== null && result.utilizationPct >= token.quotaThreshold;
+        const limit = GROK_WEEKLY_QUOTA_LIMIT;
+        const over = result.utilizationPct >= limit;
 
         if (over && !token.overThreshold) {
           logger.info(
-            `quota_threshold gate: over_threshold ${token.name}[${token.id}] (${result.utilizationPct}% >= ${token.quotaThreshold}%)`,
+            `quota_threshold gate: over_threshold ${token.name}[${token.id}] (${result.utilizationPct}% >= ${limit}%)`,
           );
         }
 
         if (!over && token.overThreshold) {
           logger.info(
-            `quota_threshold gate: recovered ${token.name}[${token.id}] (${result.utilizationPct}% < ${token.quotaThreshold}%)`,
+            `quota_threshold gate: recovered ${token.name}[${token.id}] (${result.utilizationPct}% < ${limit}%)`,
           );
         }
 
@@ -1169,7 +1193,12 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       if (present.has("quota")) {
         const over = [...reasons].flatMap(([token, reason]) =>
           reason === "quota"
-            ? [{ name: token.name, threshold: token.overThreshold ? token.quotaThreshold : null }]
+            ? [
+                {
+                  name: token.name,
+                  threshold: token.overThreshold ? GROK_WEEKLY_QUOTA_LIMIT : null,
+                },
+              ]
             : [],
         );
 
@@ -1198,7 +1227,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     if (reason === "quota") {
       return new QuotaThresholdExceededError(
         quotaMessage([
-          { name: token.name, threshold: token.overThreshold ? token.quotaThreshold : null },
+          { name: token.name, threshold: token.overThreshold ? GROK_WEEKLY_QUOTA_LIMIT : null },
         ]),
       );
     }
@@ -1621,12 +1650,8 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
   }
 
   buildChatBody(req: GenerateRequest): GrokChatBody {
-    if (req.imageGeneration !== undefined && req.imageGeneration !== false) {
-      throw new GrokInvalidRequestError(
-        "imageGeneration is not supported on grok chat models; use the Grok image endpoint",
-      );
-    }
-
+    // imageGeneration enables the server-side image tool below; OpenAI's quality/size/background
+    // options have no Grok equivalent.
     if (req.imageGenerationOptions !== undefined) {
       throw new GrokInvalidRequestError(
         "imageGenerationOptions is not supported on grok chat models",
@@ -1679,7 +1704,10 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     const turnIdx =
       history.filter((item) => item.type === "message" && item.role === "user").length + 1;
 
-    const tools = grokTools(req.tools);
+    // imageGeneration lets the model call the proxy's server-side image tool during the turn.
+    const tools = req.imageGeneration
+      ? [...(grokTools(req.tools) ?? []), { type: "image_generation" as const }]
+      : grokTools(req.tools);
 
     const body = buildGrokResponsesRequest({
       model: model.id,
@@ -1741,6 +1769,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
   ): Promise<GenerateResult> {
     const { req, model } = context;
     const startedAt = this.now();
+    req.onProgress?.({ tokenName: token.name });
 
     const headers = buildGrokChatHeaders({
       bearer: credentials.accessToken,
@@ -1787,16 +1816,25 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     let servingModel = model.id;
     let outputMessageAccepted = false;
     const toolCalls: ProviderToolCall[] = [];
+    const images: GeneratedImage[] = [];
     let completed = false;
 
     for await (const event of stream.events) {
       state.upstreamStarted = true;
 
       if (event.type === "created") {
-        if (event.model) servingModel = event.model;
+        if (event.model) {
+          servingModel = event.model;
+          req.onProgress?.({ model: event.model });
+        }
       } else if (event.type === "text-delta") {
         if (outputMessageAccepted) continue;
-        firstDeltaAt ??= this.now();
+
+        if (firstDeltaAt === undefined) {
+          firstDeltaAt = this.now();
+          req.onProgress?.({ ttftMs: firstDeltaAt - startedAt });
+        }
+
         text += event.text;
 
         if (context.onDelta) {
@@ -1806,7 +1844,11 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
       } else if (event.type === "output-item" && event.completed) {
         const item = event.item;
 
-        if (item.type === "function_call") {
+        if (item.type === "image_generation_call") {
+          const image = grokGeneratedImage(item.result, item.prompt);
+
+          if (image) images.push(image);
+        } else if (item.type === "function_call") {
           const callId = jsonString(item.call_id);
           const name = jsonString(item.name);
           const args = jsonString(item.arguments);
@@ -1889,6 +1931,8 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
     }
 
     if (toolCalls.length) result.toolCalls = toolCalls;
+
+    if (images.length) result.images = images;
 
     return result;
   }
@@ -2049,7 +2093,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
                   fetchedAt: token.billing!.fetchedAt,
                 }
               : null,
-          quotaThreshold: token.quotaThreshold,
+          quotaThreshold: GROK_WEEKLY_QUOTA_LIMIT,
           overThreshold: token.overThreshold,
           onDemandExcluded: settings?.kind === "ok" && settings.onDemandEnabled === true,
           zdrVideoExcluded: token.zdr === true,
@@ -2093,7 +2137,7 @@ export class GrokDispatcher implements GrokProviderDispatcher, MediaDispatcher, 
         return {
           name: token.name,
           usedPercent: fresh ? billing.utilizationPct : null,
-          threshold: token.quotaThreshold,
+          threshold: GROK_WEEKLY_QUOTA_LIMIT,
           blocked:
             token.overThreshold || [...token.quotaBlocks.values()].some((until) => until > now),
           resetsAt: fresh ? billing.periodEndMs : null,

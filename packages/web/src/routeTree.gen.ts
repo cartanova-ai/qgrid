@@ -9,26 +9,16 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as TokensRouteImport } from './routes/tokens'
-import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as MonitRouteImport } from './routes/monit'
-import { Route as LogsRouteImport } from './routes/logs'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as LogsRouteImport } from './routes/logs'
+import { Route as MonitRouteImport } from './routes/monit'
+import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as TokensRouteImport } from './routes/tokens'
 import { Route as RequestsShowRouteImport } from './routes/requests/show'
 
-const TokensRoute = TokensRouteImport.update({
-  id: '/tokens',
-  path: '/tokens',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MonitRoute = MonitRouteImport.update({
-  id: '/monit',
-  path: '/monit',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LogsRoute = LogsRouteImport.update({
@@ -36,9 +26,19 @@ const LogsRoute = LogsRouteImport.update({
   path: '/logs',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const MonitRoute = MonitRouteImport.update({
+  id: '/monit',
+  path: '/monit',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TokensRoute = TokensRouteImport.update({
+  id: '/tokens',
+  path: '/tokens',
   getParentRoute: () => rootRouteImport,
 } as any)
 const RequestsShowRoute = RequestsShowRouteImport.update({
@@ -75,12 +75,7 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    | '/'
-    | '/logs'
-    | '/monit'
-    | '/settings'
-    | '/tokens'
-    | '/requests/show'
+    '/' | '/logs' | '/monit' | '/settings' | '/tokens' | '/requests/show'
   fileRoutesByTo: FileRoutesByTo
   to: '/' | '/logs' | '/monit' | '/settings' | '/tokens' | '/requests/show'
   id:
@@ -104,25 +99,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/tokens': {
-      id: '/tokens'
-      path: '/tokens'
-      fullPath: '/tokens'
-      preLoaderRoute: typeof TokensRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/monit': {
-      id: '/monit'
-      path: '/monit'
-      fullPath: '/monit'
-      preLoaderRoute: typeof MonitRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/logs': {
@@ -132,11 +113,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LogsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/monit': {
+      id: '/monit'
+      path: '/monit'
+      fullPath: '/monit'
+      preLoaderRoute: typeof MonitRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/tokens': {
+      id: '/tokens'
+      path: '/tokens'
+      fullPath: '/tokens'
+      preLoaderRoute: typeof TokensRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/requests/show': {

@@ -21,13 +21,12 @@ import { type TokenSubsetMapping } from "@/services/sonamu.generated";
 import { useUpdateTokenMutation } from "@/services/token/use-update-token-mutation";
 
 import { OAuthCodeEntry } from "./OAuthCodeEntry";
-import { unpricedRequestLabel, unpricedRequestTitle } from "./total-cost";
 import { isOAuthProvider, useOAuthLoginFlow } from "./use-oauth-login-flow";
 
 type Token = TokenSubsetMapping["A"];
 
 // Quota gate 가 구현된 provider 에서만 threshold 편집/표시를 연다(거짓 UI 방지).
-const QUOTA_THRESHOLD_PROVIDERS = new Set(["anthropic", "openai", "grok"]);
+const QUOTA_THRESHOLD_PROVIDERS = new Set(["anthropic", "openai"]);
 
 // threshold 입력(문자열) → 저장값(number|null) 검증.
 // 빈 값 또는 0 = 해제(null, 제한 없음). 1..100 정수는 그대로. 소수/음수/100 초과는 거부.
@@ -143,26 +142,19 @@ function formatPeriodType(periodType: string | null | undefined): string | null 
   return label && label !== "unspecified" ? label : null;
 }
 
-/** Grok 등 provider별 상태 표시(on-demand 제외, ZDR 비디오 제외, keepalive 미적용, 과금 주기). */
+/** Grok 등 provider별 상태 표시(on-demand 제외, 과금 주기, 티어). */
 export function UsageStateNotes({
   usage,
 }: {
   usage: {
     onDemandExcluded?: boolean;
-    zdrVideoExcluded?: boolean;
-    keepaliveApplicable?: boolean;
     periodType?: string | null;
     tier?: string | null;
   };
 }) {
   const period = formatPeriodType(usage.periodType);
 
-  const hasNotes =
-    usage.onDemandExcluded === true ||
-    usage.zdrVideoExcluded === true ||
-    usage.keepaliveApplicable === false ||
-    period !== null ||
-    !!usage.tier;
+  const hasNotes = usage.onDemandExcluded === true || period !== null || !!usage.tier;
 
   if (!hasNotes) return null;
 
@@ -176,27 +168,11 @@ export function UsageStateNotes({
           excluded: on-demand billing enabled
         </span>
       )}
-      {usage.zdrVideoExcluded === true && (
-        <span
-          className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700"
-          title="xAI에서 data-retention opt-out(Zero Data Retention)을 끄면 비디오가 다시 라우팅됩니다"
-        >
-          video unavailable: zero data retention
-        </span>
-      )}
       {period !== null && (
         <span className="px-1.5 py-0.5 rounded-full bg-sand-100 text-sand-600">{period}</span>
       )}
       {usage.tier && (
         <span className="px-1.5 py-0.5 rounded-full bg-sand-100 text-sand-600">{usage.tier}</span>
-      )}
-      {usage.keepaliveApplicable === false && (
-        <span
-          className="px-1.5 py-0.5 rounded-full bg-sand-100 text-sand-400"
-          title="이 provider는 토큰 윈도 keepalive 대상이 아닙니다"
-        >
-          keepalive n/a
-        </span>
       )}
     </div>
   );
@@ -257,9 +233,11 @@ function TokenUsage({ token, theme }: { token: Token; theme: ProviderTheme }) {
   const { data, isLoading, dataUpdatedAt } = QgridService.useUsage(token.id);
   // A usage refresh can confirm expiry after the parent loaded its token list.
   // Re-read persisted state once per failed lookup, without interpreting error text.
+  const failedLookupAt = data?.error ? dataUpdatedAt : undefined;
+
   useEffect(() => {
-    if (data?.error) void queryClient.invalidateQueries({ queryKey: ["Token"] });
-  }, [data?.error, dataUpdatedAt, queryClient]);
+    if (failedLookupAt !== undefined) void queryClient.invalidateQueries({ queryKey: ["Token"] });
+  }, [failedLookupAt, queryClient]);
 
   if (token.reauth_required) {
     return (
@@ -322,8 +300,7 @@ function TokenUsage({ token, theme }: { token: Token; theme: ProviderTheme }) {
           resetsAt={data.sevenDay.resetsAt}
           windowDurationMins={data.sevenDay.windowDurationMins}
           theme={theme}
-          // Grok 은 기간 창 하나(sevenDay)만 있어 그것이 gate 기준 primary 다.
-          threshold={token.provider === "grok" ? thresholdForPrimary : undefined}
+          threshold={token.provider === "anthropic" || token.provider === "grok" ? 100 : undefined}
         />
       )}
     </div>
@@ -435,7 +412,7 @@ function ThresholdControl({ token }: { token: Token }) {
               htmlFor={`threshold-${token.id}`}
               className="text-[10px] uppercase tracking-wider text-sand-500 font-medium"
             >
-              사용률 제한
+              {token.provider === "anthropic" ? "5시간 사용률 제한" : "주간 사용률 제한"}
             </label>
             <div className="mt-1 flex items-center gap-2">
               <button
@@ -468,8 +445,12 @@ function ThresholdControl({ token }: { token: Token }) {
             {validation.ok ? (
               <p className="mt-1.5 text-[11px] text-sand-500 leading-snug">
                 {validation.value === null
-                  ? "제한 없음 — 사용률과 무관하게 항상 사용합니다."
-                  : "기준 사용률이 임계치에 달하면 해당 토큰을 건너뜁니다."}
+                  ? token.provider === "anthropic"
+                    ? "5시간 제한 없음. 주간 사용량 100%에서는 제외합니다."
+                    : "제한 없음 — 사용률과 무관하게 항상 사용합니다."
+                  : token.provider === "anthropic"
+                    ? "5시간 사용률에 적용합니다. 주간은 100%에서만 제외합니다."
+                    : "주간 사용률이 임계치에 달하면 해당 토큰을 건너뜁니다."}
               </p>
             ) : (
               <p className="mt-1.5 text-[11px] text-red-500">{validation.error}</p>
@@ -742,14 +723,6 @@ function SortableTokenCard({ token }: { token: Token }) {
           </div>
           <span className={`text-[11px] tabular-nums font-medium shrink-0 ${theme.cost}`}>
             {formatUsd(costData?.usd ?? 0)}
-            {costData && unpricedRequestLabel(costData) ? (
-              <span
-                className="ml-1 font-normal text-sand-400"
-                title={unpricedRequestTitle(costData) ?? undefined}
-              >
-                {unpricedRequestLabel(costData)}
-              </span>
-            ) : null}
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-1 mb-2">
@@ -764,9 +737,17 @@ function SortableTokenCard({ token }: { token: Token }) {
           {QUOTA_THRESHOLD_PROVIDERS.has(token.provider) && token.quota_threshold !== null && (
             <span
               className="px-1.5 py-0.5 rounded-full bg-sienna-50 text-[10px] tabular-nums font-medium text-sienna-600"
-              title={`사용률 ${token.quota_threshold}% 이상이면 이 토큰 제외`}
+              title={`${token.provider === "anthropic" ? "5시간" : "주간"} 사용률 ${token.quota_threshold}% 이상이면 이 토큰 제외`}
             >
               ≤ {token.quota_threshold}%
+            </span>
+          )}
+          {token.provider === "grok" && (
+            <span
+              className="px-1.5 py-0.5 rounded-full bg-sienna-50 text-[10px] tabular-nums font-medium text-sienna-600"
+              title="주간 사용률 100%에서 이 토큰 제외"
+            >
+              7d 100%
             </span>
           )}
         </div>
@@ -777,7 +758,7 @@ function SortableTokenCard({ token }: { token: Token }) {
           {token.reauth_required && <ReloginButton token={token} />}
           <div className="flex-1" />
           <WeightControl token={token} />
-          <ThresholdControl token={token} />
+          {token.provider !== "grok" && <ThresholdControl token={token} />}
         </div>
       </div>
     </div>
@@ -800,12 +781,15 @@ export function UsageCard() {
   const queryClient = useQueryClient();
   const reorderMutation = TokenService.useReorderMutation();
 
-  const [localTokens, setLocalTokens] = useState<Token[]>([]);
+  // A drag shows its new order at once; the optimistic cache write below lands a tick later.
+  // The override applies only while the cached rows are the ones it was made from.
+  const [reorder, setReorder] = useState<{ from: Token[]; tokens: Token[] } | null>(null);
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>("all");
 
-  useEffect(() => {
-    if (data?.rows) setLocalTokens(data.rows);
-  }, [data?.rows]);
+  const serverTokens = data?.rows ?? [];
+
+  const localTokens =
+    reorder !== null && reorder.from === data?.rows ? reorder.tokens : serverTokens;
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -822,7 +806,7 @@ export function UsageCard() {
     if (oldIndex === -1 || newIndex === -1) return;
 
     const reordered = arrayMove(localTokens, oldIndex, newIndex);
-    setLocalTokens(reordered);
+    setReorder({ from: serverTokens, tokens: reordered });
 
     const queryKey = TokenService.getTokensQueryOptions("A", {
       orderBy: "ord-asc" as const,
@@ -839,8 +823,7 @@ export function UsageCard() {
       {
         onError: () => {
           queryClient.setQueryData(queryKey, prev);
-
-          if (data?.rows) setLocalTokens(data.rows);
+          setReorder(null);
         },
         onSettled: () => {
           Promise.all([

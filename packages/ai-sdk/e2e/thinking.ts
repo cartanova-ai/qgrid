@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
-import { generateText, Output, stepCountIs, streamText, tool } from "ai";
+import { generateText, Output, isStepCount, streamText, tool } from "ai";
 import { z } from "zod";
 
 import {
@@ -103,7 +103,7 @@ async function main() {
         }),
       },
       output: Output.object({ schema }),
-      stopWhen: stepCountIs(3),
+      stopWhen: isStepCount(3),
       maxRetries: 0,
       abortSignal: AbortSignal.timeout(90000),
     });

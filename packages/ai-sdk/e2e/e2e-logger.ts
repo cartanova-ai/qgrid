@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
-import { generateText, stepCountIs, tool } from "ai";
+import { generateText, isStepCount, tool } from "ai";
 import { z } from "zod";
 
 import {
@@ -52,15 +52,15 @@ async function main() {
           },
         }),
       },
-      stopWhen: stepCountIs(3),
+      stopWhen: isStepCount(3),
       maxRetries: 0,
-      experimental_telemetry: logger,
+      telemetry: logger,
     });
     assert.equal(result.finishReason, "stop");
     assert.ok(result.text.trim());
     assert.equal(executions, 1);
     assert.deepEqual(errors, []);
-    const id = result.providerMetadata?.qgrid?.requestLogId;
+    const id = result.finalStep.providerMetadata?.qgrid?.requestLogId;
     assert.equal(typeof id, "number", "Missing native requestLogId");
     const params = new URLSearchParams({
       subset: "A",
@@ -68,7 +68,9 @@ async function main() {
       "rawParams[num]": "2",
       "rawParams[page]": "1",
     });
-    const response = await fetch(new URL(`/api/requestLog/findMany?${params}`, serverUrl));
+    const response: Response = await fetch(
+      new URL(`/api/requestLog/findMany?${params}`, serverUrl),
+    );
     assert.ok(response.ok, `Log lookup failed: ${response.status}`);
     const { rows } = (await response.json()) as {
       rows: Array<{ id: number; project_name: string; status: string }>;

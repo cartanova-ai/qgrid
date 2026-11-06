@@ -47,6 +47,7 @@ const logger = getLogger(["qgrid", "openai-dispatcher"]);
 
 // Verified with the subscription Responses backend; public API support is not sufficient.
 const THINKING_OFF_MODELS = new Set([
+  "gpt-6.1-terra",
   "gpt-6-sol",
   "gpt-6-luna",
   "gpt-5.6-sol",
@@ -214,7 +215,8 @@ function asReasoning(req: GenerateRequest): OpenAIReasoning | undefined {
 
   const reasoning: OpenAIReasoning = {};
 
-  if (effort) reasoning.effort = effort;
+  // ultra is a Codex client mode (sub-agent delegation), not a wire value; the backend accepts up to max.
+  if (effort) reasoning.effort = effort === "ultra" ? "max" : effort;
 
   if (summary) reasoning.summary = summary;
 
@@ -551,6 +553,14 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     const startedAt = Date.now();
     let firstDeltaAt: number | undefined;
     let text = "";
+    req.onProgress?.({ tokenName: selection.metadata.name });
+
+    const markFirstDelta = () => {
+      if (firstDeltaAt !== undefined) return;
+      firstDeltaAt = Date.now();
+      req.onProgress?.({ ttftMs: firstDeltaAt - startedAt });
+    };
+
     let outputMessageAccepted = false;
     const messagePhases = new Map<string, string>();
     const streamedMessageIds = new Set<string>();
@@ -623,7 +633,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             streamedMessageIds.add(event.itemId);
           }
 
-          firstDeltaAt ??= Date.now();
+          markFirstDelta();
           text += event.text;
           onDelta?.(event.text);
         } else if (
@@ -657,7 +667,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             (phase !== "commentary" || outputMessageAccepted) &&
             messageText
           ) {
-            firstDeltaAt ??= Date.now();
+            markFirstDelta();
             text += messageText;
             onDelta?.(messageText);
             streamedMessageIds.add(itemId);

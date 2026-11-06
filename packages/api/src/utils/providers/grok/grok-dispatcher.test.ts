@@ -354,7 +354,7 @@ describe("GrokDispatcher selection", () => {
     const preferred = await h.dispatcher.selectToken("chat", { preferredTokenId: 2 });
     expect(preferred.token.id).toBe(2);
     preferred.release();
-    h.billing.set(1, billingAt(90));
+    h.billing.set(1, billingAt(100));
     await expect(
       h.dispatcher.selectToken("chat", { preferredTokenId: 1, requirePreferredToken: true }),
     ).rejects.toBeInstanceOf(QuotaThresholdExceededError);
@@ -449,13 +449,40 @@ describe("GrokDispatcher selection", () => {
     expect(h.events).toEqual([]);
   });
 
-  it("blocks over-threshold tokens and reports QuotaThresholdExceededError", async () => {
+  it("refreshUsage reads billing for a token without a quota threshold", async () => {
     const h = createHarness();
-    h.add(1, 1, 50);
-    h.billing.set(1, billingAt(75));
+    h.add(1);
+    h.billing.set(1, billingAt(12));
+
+    await h.dispatcher.refreshUsage(1);
+
+    expect(h.dispatcher.tokenStates()[0]?.lastBilling).toMatchObject({ utilizationPct: 12 });
+    expect(h.events.some((event) => event.startsWith("/billing"))).toBe(true);
+  });
+
+  it("ignores the configured threshold while weekly quota remains", async () => {
+    const h = createHarness();
+    h.add(1, 1, 75);
+    h.billing.set(1, billingAt(92));
+    const reservation = await h.dispatcher.selectToken("chat");
+    expect(reservation.token.id).toBe(1);
+    reservation.release();
+    expect(h.dispatcher.getQuotaSnapshot()[0]).toMatchObject({ threshold: 100, blocked: false });
+  });
+
+  it.each([75, null])("blocks exhausted weekly quota with configured threshold %s", async (threshold) => {
+    const h = createHarness();
+    h.add(1, 1, threshold);
+    h.billing.set(1, billingAt(100));
     await expect(h.dispatcher.selectToken("chat")).rejects.toBeInstanceOf(
       QuotaThresholdExceededError,
     );
+    expect(h.dispatcher.getQuotaSnapshot()[0]).toMatchObject({ threshold: 100, blocked: true });
+    h.clock.now += 61_000;
+    h.billing.set(1, billingAt(92));
+    const reservation = await h.dispatcher.selectToken("chat");
+    expect(reservation.token.id).toBe(1);
+    reservation.release();
   });
 });
 
@@ -529,9 +556,9 @@ describe("GrokDispatcher chat", () => {
   it("rejects fields Grok does not support", async () => {
     const h = createHarness();
     h.add(1);
-    await expect(h.dispatcher.generate(request({ imageGeneration: true }))).rejects.toBeInstanceOf(
-      GrokInvalidRequestError,
-    );
+    await expect(
+      h.dispatcher.generate(request({ imageGenerationOptions: { quality: "high" } })),
+    ).rejects.toBeInstanceOf(GrokInvalidRequestError);
     await expect(h.dispatcher.generate(request({ serviceTier: "fast" }))).rejects.toBeInstanceOf(
       GrokInvalidRequestError,
     );
@@ -585,7 +612,7 @@ describe("GrokDispatcher chat", () => {
     expect(h.clock.now - startedAt).toBe(30_000);
   });
 
-  it("blocks an exhausted token until a fresh billing read below threshold", async () => {
+  it("clears an exhaustion block after fresh billing falls below 100%", async () => {
     const h = createHarness();
     h.add(1, 5, 80);
     h.add(2, 1);
@@ -598,7 +625,7 @@ describe("GrokDispatcher chat", () => {
     await h.dispatcher.prefetch(token);
     expect(h.dispatcher.isEligible(token, "chat")).toBe(false);
     h.clock.now += 61_000;
-    h.billing.set(1, billingAt(50));
+    h.billing.set(1, billingAt(92));
     await h.dispatcher.prefetch(token);
     expect(h.dispatcher.isEligible(token, "chat")).toBe(true);
   });
@@ -829,6 +856,66 @@ describe("GrokDispatcher chat", () => {
 // Media routing
 // ---------------------------------------------------------------------------
 
+describe("GrokDispatcher image generation tool", () => {
+  it("adds the server-side image tool and returns completed images", async () => {
+    const h = createHarness();
+    h.add(1);
+    const imageItem = {
+      type: "image_generation_call",
+      id: "ig_1",
+      status: "completed",
+      result: "/9j/4AAQSkZJRg",
+      prompt: "a small red apple",
+    };
+    h.chat.set(1, [
+      {
+        kind: "ok",
+        body: [
+          sseEvent({ type: "response.created", response: { id: "resp_1", model: "grok-4.7" } }),
+          sseEvent({ type: "response.output_item.done", item: imageItem }),
+          sseEvent({ type: "response.output_text.delta", item_id: "msg_1", delta: "Here it is." }),
+          sseEvent({
+            type: "response.completed",
+            response: { id: "resp_1", model: "grok-4.7", usage: golden.response.terminalUsage },
+          }),
+        ].join(""),
+      },
+    ]);
+
+    const result = await h.dispatcher.generate(request({ imageGeneration: "auto" }));
+
+    expect(h.requests[0]?.body).toMatchObject({ tools: [{ type: "image_generation" }] });
+    expect(result.text).toBe("Here it is.");
+    expect(result.images).toEqual([
+      { data: "/9j/4AAQSkZJRg", mediaType: "image/jpeg", revisedPrompt: "a small red apple" },
+    ]);
+  });
+
+  it("reports the token, serving model, and TTFT as progress", async () => {
+    const h = createHarness();
+    h.add(1);
+    const progress = vi.fn();
+
+    await h.dispatcher.generate(request({ onProgress: progress }));
+
+    expect(progress.mock.calls.map(([update]) => update)).toEqual([
+      { tokenName: "t1" },
+      { model: "grok-4.7" },
+      { ttftMs: expect.any(Number) },
+    ]);
+  });
+
+  it("sends no image tool without imageGeneration", async () => {
+    const h = createHarness();
+    h.add(1);
+
+    const result = await h.dispatcher.generate(request());
+
+    expect(h.requests[0]?.body).not.toHaveProperty("tools");
+    expect(result.images).toBeUndefined();
+  });
+});
+
 describe("GrokDispatcher media", () => {
   it("blocks the request class on media 403 and fails over once", async () => {
     const seen: string[] = [];
@@ -909,7 +996,7 @@ describe("GrokDispatcher media", () => {
     };
     const h = createHarness({ media, maxInflightPerToken: 1 });
     h.add(1, 1, 50);
-    h.billing.set(1, billingAt(75));
+    h.billing.set(1, billingAt(100));
     const token = h.dispatcher.tokens.get(1)!;
     token.cooldowns.set("video", h.clock.now + 120_000);
     token.inFlight = 1;

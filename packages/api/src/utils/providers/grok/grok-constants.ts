@@ -55,8 +55,8 @@ export const GROK_CLIENT_MODE = "headless";
 // U0 capture 2026-10-16 (GET /models default and /settings default_model)
 export const GROK_DEFAULT_MODEL = "grok-4.7";
 
-// grok-build 1.0.45 image_gen/mod.rs:33
-export const GROK_IMAGE_DEFAULT_MODEL = "grok-imagine-image-quality";
+// https://docs.x.ai/developers/migration/imagine-image-quality-nov-2
+export const GROK_IMAGE_DEFAULT_MODEL = "grok-imagine-image-2.0";
 
 // grok-build 1.0.45 video_gen/mod.rs:36-40
 export const GROK_VIDEO_DEFAULT_MODEL = "grok-imagine-video-1.5";
@@ -81,14 +81,13 @@ export interface GrokSeedModel {
 
 // U0 capture 2026-10-16 (GET /models: four ids, context_window 256000, default effort high)
 export const GROK_SEED_MODELS: readonly GrokSeedModel[] = Object.freeze(
-  ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"].map(
-    (id): GrokSeedModel =>
-      Object.freeze({
-        id,
-        contextWindow: 256_000,
-        reasoningEfforts: GROK_REASONING_EFFORTS,
-        defaultEffort: "high",
-      }),
+  ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"].map((id): GrokSeedModel =>
+    Object.freeze({
+      id,
+      contextWindow: 256_000,
+      reasoningEfforts: GROK_REASONING_EFFORTS,
+      defaultEffort: "high",
+    }),
   ),
 );
 

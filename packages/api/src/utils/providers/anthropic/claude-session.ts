@@ -113,6 +113,8 @@ export interface ClaudeSessionRequest {
   input: Array<UserInput>;
   abortSignal?: AbortSignal;
   includePartialMessages?: boolean;
+  /** Called once with the measured TTFT when the first delta arrives. */
+  onTtft?: (ttftMs: number) => void;
 }
 
 export interface ClaudeSessionResult extends ClaudeStreamResult {
@@ -364,7 +366,19 @@ export function runClaudeSession(
       let buffer = "";
       const streamState: ClaudeStreamJsonState = {};
       const ttftTracker = createTtftTracker();
-      const onTrackedDelta = ttftTracker.wrapDelta(onDelta);
+      let ttftReported = false;
+
+      const onTrackedDelta = ttftTracker.wrapDelta((text) => {
+        const ttftMs = ttftTracker.value();
+
+        if (!ttftReported && ttftMs !== null) {
+          ttftReported = true;
+          req.onTtft?.(ttftMs);
+        }
+
+        onDelta(text);
+      });
+
       // bounded stderr 버퍼(최근 ~4KB만 유지 — 무한 누적 방지).
       let stderrBuf = "";
       const STDERR_CAP = 4096;

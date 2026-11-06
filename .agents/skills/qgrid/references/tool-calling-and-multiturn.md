@@ -34,9 +34,9 @@ that the client has not produced yet. Drain the upstream response to preserve us
 errors, and cancellation. Never split concatenated JSON inside a single message or
 recover malformed envelopes. Ordinary text requests keep their existing aggregation.
 
-`generateText` and `streamText` default to `stepCountIs(1)`. When an executable
+`generateText` and `streamText` default to `isStepCount(1)`. When an executable
 tool can run before the final answer, callers must set a bounded `stopWhen`
-(for example `stepCountIs(3)`) or the AI SDK stops after the first tool-call
+(for example `isStepCount(3)`) or the AI SDK stops after the first tool-call
 step and cannot produce the final text or `Output.object` value.
 
 Do not describe this as OpenAI native function calling, Claude native tool use, or Codex/Claude executing client tools. The tools are client-side AI SDK tools requested through structured-output emulation.

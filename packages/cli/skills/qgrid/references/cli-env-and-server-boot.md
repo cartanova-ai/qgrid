@@ -47,9 +47,10 @@ Sonamu's native `SONAMU_DB_HOST`, `SONAMU_DB_PORT`, `SONAMU_DB_USER`,
 
 Do not treat CLI bundle bootstrapping internals as user-facing qgrid configuration.
 The packaged CLI accepts only `staging` and `production`; `development` and `test`
-require the source workspace. Sonamu 0.10.3 also requires `.env` or
-`.env.<NODE_ENV>` to exist at the API root. Source deployments must retain one of
-those files, while the npm CLI bundle carries an empty `.env` marker itself.
+require the source workspace. Sonamu (0.10.3 and later, including 0.11) also requires `.env` or
+`.env.<NODE_ENV>` to exist at the API root, even for `sonamu build`, which reads no values from it.
+Source deployments and CI builds must provide one of those files (an empty file is enough), while
+the npm CLI bundle carries an empty `.env` marker itself.
 
 ## SDK/client env vars
 

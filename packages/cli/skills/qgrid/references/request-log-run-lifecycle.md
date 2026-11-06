@@ -31,6 +31,8 @@ A tool-result follow-up carries the returned `runContext` and tool results. The 
 
 Errors and client aborts finish the same parent as `error` or `aborted` and roll up usage, cost, fallback count, and cost provenance from every generate step that completed before termination. SSE client closure is authoritative regardless of the provider's abort error text; if a provider result arrives after closure, record its step usage and then leave the parent `aborted` without publishing `done`.
 
+While the provider runs, dispatchers report facts as soon as they are known through `GenerateRequest.onProgress`, and `runProgressRecorder` writes them onto the parent only while it is still `running` (`RequestLogModel.recordRunProgress`): `token_name` after token selection (again on failover), `model_name` when the provider names the serving model (Grok `response.created`; Anthropic records the requested model at selection; OpenAI reports its model only at completion), and `ttft_ms` at the first delta of the run's first step. Writes are ordered and best-effort: a failure only logs. Usage, tokens, cost, and duration arrive with the final usage and stay at their defaults until then. The dashboard shows running rows with the requested → serving model and a running badge, and the list and detail pages poll every 3 seconds while a run is in progress.
+
 Creating the initial `running` row is a precondition for a logger-enabled provider call. Once the provider has succeeded, however, a failure while appending or finalizing logs is best-effort: report the logging error and preserve the generated text/stream result instead of making logging failure replace a successful model result.
 
 Stale cleanup must target old runs that still have unresolved tool-call steps; a long provider request with no pending tool call is not stale merely because its parent row is still running. Cleanup and arriving tool follow-ups share a PostgreSQL transaction advisory lock per request-log id and recheck the unresolved step after acquiring it, so cleanup cannot overwrite an in-flight follow-up across server processes.
@@ -128,11 +130,14 @@ TTFT is tracked by wrapping the first provider delta:
 
 - OpenAI: first `response.output_text.delta` from the direct Responses stream.
 - Anthropic: first text or structured partial JSON delta.
+- Grok: first text delta of the chat attempt.
+
+The same first-delta value is reported as run progress, so a running row shows TTFT before the response completes; the final value replaces it.
 
 If missing, qgrid maps TTFT to `0` in `QueryOutput` and nullable/optional places as appropriate.
 
 ## Logger integration
 
-`packages/ai-sdk/src/logger.ts` lets non-qgrid providers write logs into qgrid through the public lifecycle endpoints. It skips model provider `qgrid` to avoid double logging and skips any generation with `providerOptions.qgrid.logger: false`. Therefore one disabled generation produces neither native qgrid logs nor `createQgridLogger` telemetry logs. Preserve its stale-run fallback because AI SDK telemetry may emit start without a final event on provider failures.
+`packages/ai-sdk/src/logger.ts` lets non-qgrid providers write logs into qgrid through the public lifecycle endpoints. It skips model provider `qgrid` to avoid double logging and skips any generation with `providerOptions.qgrid.logger: false`. Therefore one disabled generation produces neither native qgrid logs nor `createQgridLogger` telemetry logs. Each run is keyed by the AI SDK 7 telemetry `callId` and finishes on exactly one of `onEnd`, `onError`, or `onAbort`. Preserve its stale-run fallback for generations that start but never report a terminal event, such as an unconsumed stream.
 
 External structured output is detected from AI SDK telemetry's `output.responseFormat`, before provider-specific request projection. The logger sends optional `isStructured` and serialized `jsonSchema` fields on `createRun`; the server stores them in the existing `is_structured` and `json_schema` columns. On a succeeded structured run, `finishRun` may also carry `responseJsonOk`, which records JSON parseability only. Omitted fields retain the legacy unstructured defaults, and the native qgrid provider continues to own its existing server-side lifecycle without telemetry duplication.

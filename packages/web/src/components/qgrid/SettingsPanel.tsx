@@ -131,10 +131,12 @@ function SourceBadge({ source }: { source: SettingItem["source"] }) {
 }
 
 function Toggle({
+  label,
   on,
   disabled,
   onChange,
 }: {
+  label: string;
   on: boolean;
   disabled: boolean;
   onChange: (next: boolean) => void;
@@ -143,6 +145,7 @@ function Toggle({
     <button
       type="button"
       role="switch"
+      aria-label={label}
       aria-checked={on}
       disabled={disabled}
       onClick={() => onChange(!on)}
@@ -225,6 +228,7 @@ function SettingRow({ item, disabled = false }: { item: SettingItem; disabled?: 
           {/* boolean 은 누르는 즉시 확정한다 — 토글에 저장 버튼을 붙이면 조작이 두 단계가 된다. */}
           {item.kind === "boolean" && (
             <Toggle
+              label={item.label}
               on={value === "true"}
               disabled={pending}
               onChange={(next) => void commit(String(next))}
@@ -367,6 +371,7 @@ function KeepaliveTokenSettings({ runnerEnabled }: { runnerEnabled: boolean }) {
                 {!token.active && <span className="text-[10px] text-sand-400">토큰 비활성</span>}
               </div>
               <Toggle
+                label={`${token.name} keepalive`}
                 on={token.keepalive_enabled}
                 disabled={!runnerEnabled || updateMutation.isPending}
                 onChange={(next) => void toggle(token.id, next)}

@@ -87,8 +87,10 @@ jobs:
         run: |
           INSTALL_DIR="$(mktemp -d)"
           NODE_BIN="$(mise exec -- node -e 'process.stdout.write(process.execPath)')"
-          mise exec -- npm install --prefix "$INSTALL_DIR" --ignore-scripts "$QGRID_RELEASE_DIR"/cartanova-qgrid-cli-*.tgz
-          cd "$INSTALL_DIR/node_modules/@cartanova/qgrid-cli"
+          # Install globally, as users (npm i -g) and the release image do. With sonamu 0.13, npm's
+          # project-dependency resolver never settles the ioredis peer ranges (^6 vs bentocache's ^5).
+          mise exec -- npm install --global --prefix "$INSTALL_DIR" --ignore-scripts "$QGRID_RELEASE_DIR"/cartanova-qgrid-cli-*.tgz
+          cd "$INSTALL_DIR/lib/node_modules/@cartanova/qgrid-cli"
           "$NODE_BIN" --input-type=module -e "await import('sonamu')"
           printf '%s\n' "QGRID_SMOKE_INSTALL_DIR=$INSTALL_DIR" >> "$GITHUB_ENV"
 
@@ -97,7 +99,7 @@ jobs:
           NODE_BIN="$(mise exec -- node -e 'process.stdout.write(process.execPath)')"
           DB_URL="postgres://postgres:postgres@localhost:5432/postgres"
           BOOT_LOG="$RUNNER_TEMP/qgrid-boot.log"
-          cd "$QGRID_SMOKE_INSTALL_DIR/node_modules/@cartanova/qgrid-cli"
+          cd "$QGRID_SMOKE_INSTALL_DIR/lib/node_modules/@cartanova/qgrid-cli"
           "$NODE_BIN" dist/cli.js --skip-update --db "$DB_URL" --port 44990 > "$BOOT_LOG" 2>&1 &
           QGRID_PID=$!
           for _ in $(seq 1 60); do
@@ -108,7 +110,7 @@ jobs:
             sleep 2
           done
           curl -sf http://localhost:44990/api/qgrid/health || { cat "$BOOT_LOG"; exit 1; }
-          EXPECTED="$(ls "$GITHUB_WORKSPACE"/packages/api/src/migrations/*.ts | wc -l | tr -d ' ')"
+          EXPECTED="$(find "$GITHUB_WORKSPACE/packages/api/src/migrations" -maxdepth 1 -type f -name '*.ts' | wc -l | tr -d ' ')"
           APPLIED="$("$NODE_BIN" --input-type=module -e "
             import pg from 'pg';
             const c = new pg.Client({ connectionString: process.argv[1] });

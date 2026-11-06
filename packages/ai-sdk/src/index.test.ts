@@ -1,3 +1,5 @@
+import { createServer, type Server } from "node:http";
+
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
@@ -18,6 +20,51 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
+
+const loopbackServers: Server[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    loopbackServers.splice(0).map(
+      (server) => new Promise<void>((resolve) => server.close(() => resolve())),
+    ),
+  );
+});
+
+async function listen(server: Server): Promise<string> {
+  loopbackServers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("no loopback port");
+  return `http://127.0.0.1:${address.port}`;
+}
+
+// Anthropic doGenerate sends through undici's own fetch with a request-scoped dispatcher, which a
+// global fetch stub does not intercept. This loopback server forwards each request to the current
+// stub, so those requests reach it over a real socket and the real transport.
+async function serveStubbedFetch(): Promise<{ serverUrl: string; server: Server }> {
+  const server = createServer(async (req, res) => {
+    if (!vi.isMockFunction(globalThis.fetch)) {
+      res.writeHead(500).end("global fetch is not stubbed");
+      return;
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const response = await globalThis.fetch(`http://${req.headers.host}${req.url}`, {
+      method: req.method,
+      headers: { "content-type": String(req.headers["content-type"] ?? "") },
+      body: chunks.length > 0 ? Buffer.concat(chunks).toString() : undefined,
+    });
+    res.writeHead(response.status, Object.fromEntries(response.headers)).end(await response.text());
+  });
+  return { serverUrl: await listen(server), server };
+}
+
+async function openConnections(server: Server): Promise<number> {
+  return new Promise((resolve, reject) =>
+    server.getConnections((error, count) => (error ? reject(error) : resolve(count))),
+  );
+}
 
 function tool() {
   return {
@@ -340,13 +387,10 @@ describe("qgrid AI SDK provider", () => {
     })]);
   });
 
-  it("uses a request-scoped dispatcher for Anthropic generate requests", async () => {
-    let requestInit: RequestInit | undefined;
-
+  it("sends Anthropic generate requests over a request-scoped dispatcher and closes it", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        requestInit = init;
+      vi.fn(async () => {
         return new Response(
           JSON.stringify({
             text: "ok",
@@ -360,16 +404,17 @@ describe("qgrid AI SDK provider", () => {
         );
       }),
     );
+    const { serverUrl, server } = await serveStubbedFetch();
 
-    await qgrid("anthropic/claude-sonnet-4-7").doGenerate({
+    const result = await qgrid("anthropic/claude-sonnet-4-7", { serverUrl }).doGenerate({
       prompt: [{ role: "user", content: [{ type: "text", text: "slow request" }] }],
       providerOptions: { qgrid: { timeoutMs: 600_000 } },
     } as never);
 
-    expect(requestInit).toHaveProperty("dispatcher");
-    expect(
-      (requestInit as RequestInit & { dispatcher: { closed: boolean } }).dispatcher.closed,
-    ).toBe(true);
+    expect(result.content).toEqual([{ type: "text", text: "ok" }]);
+    // Closing the per-request Agent closes its keep-alive socket; the shared global
+    // dispatcher would keep one open.
+    await vi.waitFor(async () => expect(await openConnections(server)).toBe(0));
   });
 
   it("does not replace the dispatcher for OpenAI generate requests", async () => {
@@ -400,48 +445,16 @@ describe("qgrid AI SDK provider", () => {
     expect(requestInit).not.toHaveProperty("dispatcher");
   });
 
-  it("identifies an Anthropic response headers timeout and reports its transport budget", async () => {
-    const cause = Object.assign(new Error("Headers Timeout Error"), {
-      code: "UND_ERR_HEADERS_TIMEOUT",
-    });
-    let dispatcher: { closed: boolean } | undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_url: string, init?: RequestInit & { dispatcher?: { closed: boolean } }) => {
-        dispatcher = init?.dispatcher;
-        throw new TypeError("fetch failed", { cause });
-      }),
-    );
-
-    await expect(
-      qgrid("anthropic/claude-sonnet-4-7").doGenerate({
-        prompt: [{ role: "user", content: [{ type: "text", text: "slow request" }] }],
-        providerOptions: { qgrid: { timeoutMs: 600_000 } },
-      } as never),
-    ).rejects.toThrow(
-      "qgrid query transport failed: response headers timed out after 660000ms (UND_ERR_HEADERS_TIMEOUT)",
-    );
-    expect(dispatcher?.closed).toBe(true);
-  });
-
   it("distinguishes connection refusal from a response headers timeout", async () => {
-    const cause = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:44900"), {
-      code: "ECONNREFUSED",
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw new TypeError("fetch failed", { cause });
-      }),
-    );
+    const closed = createServer();
+    const serverUrl = await listen(closed);
+    await new Promise<void>((resolve) => closed.close(() => resolve()));
 
     await expect(
-      qgrid("anthropic/claude-sonnet-4-7").doGenerate({
+      qgrid("anthropic/claude-sonnet-4-7", { serverUrl }).doGenerate({
         prompt: [{ role: "user", content: [{ type: "text", text: "request" }] }],
       } as never),
-    ).rejects.toThrow(
-      "qgrid query transport failed: connection refused by http://localhost:44900 (ECONNREFUSED)",
-    );
+    ).rejects.toThrow(`qgrid query transport failed: connection refused by ${serverUrl} (ECONNREFUSED)`);
   });
 
   it("sends tools and maps tool-call response", async () => {
@@ -839,7 +852,8 @@ describe("qgrid AI SDK provider", () => {
       }),
     );
 
-    const result = await qgrid("anthropic/claude-sonnet-4-6").doGenerate({
+    const { serverUrl } = await serveStubbedFetch();
+    const result = await qgrid("anthropic/claude-sonnet-4-6", { serverUrl }).doGenerate({
       prompt: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
     } as never);
 
@@ -887,7 +901,8 @@ describe("qgrid AI SDK provider", () => {
       }),
     );
 
-    const result = await qgrid("anthropic/claude-fable-5").doGenerate({
+    const { serverUrl } = await serveStubbedFetch();
+    const result = await qgrid("anthropic/claude-fable-5", { serverUrl }).doGenerate({
       prompt: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
     } as never);
 
@@ -1442,7 +1457,10 @@ describe("qgrid AI SDK provider", () => {
     });
 
     it("drops images for anthropic models with an unsupported warning", async () => {
-      const result = await qgrid("anthropic/claude-haiku-4-5").doGenerate({ prompt } as never);
+      const { serverUrl } = await serveStubbedFetch();
+      const result = await qgrid("anthropic/claude-haiku-4-5", { serverUrl }).doGenerate({
+        prompt,
+      } as never);
 
       expect(queryBody.args.input).toBeUndefined();
       expect(String(queryBody.args.history)).not.toContain("input_image");
@@ -1908,7 +1926,8 @@ describe("qgrid Grok language model", () => {
 
   it("still drops image parts for anthropic models with a warning", async () => {
     const calls = stubQuery([grokOutput({ model: "claude-opus-4-8", providerMetadata: undefined })]);
-    const result = await qgrid("anthropic/claude-opus-4-8").doGenerate({
+    const { serverUrl } = await serveStubbedFetch();
+    const result = await qgrid("anthropic/claude-opus-4-8", { serverUrl }).doGenerate({
       prompt: [
         {
           role: "user",

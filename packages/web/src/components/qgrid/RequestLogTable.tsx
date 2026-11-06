@@ -1,4 +1,5 @@
 import { Link, useNavigate } from "@tanstack/react-router";
+import { useEffect } from "react";
 import ChevronLeftIcon from "~icons/lucide/chevron-left";
 import ChevronRightIcon from "~icons/lucide/chevron-right";
 import RefreshIcon from "~icons/lucide/refresh-cw";
@@ -10,8 +11,6 @@ import { type LogsSearch } from "@/routes/logs";
 import { type RequestLogListParams } from "@/services/request-log/request-log.types";
 import { QgridService, RequestLogService, TokenService } from "@/services/services.generated";
 import { RequestLogOrderBy } from "@/services/sonamu.generated";
-
-import { unpricedRequestLabel, unpricedRequestTitle } from "./total-cost";
 
 const PAGE_SIZE = 50;
 const UNASSIGNED = "__unassigned__";
@@ -38,6 +37,8 @@ function formatDuration(ms: number): string {
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
+const RUNNING_REFRESH_MS = 3_000;
+
 function RequestModel({
   status,
   requestedModel,
@@ -52,10 +53,15 @@ function RequestModel({
   fallbackCount: number | null;
 }) {
   if (status === "running") {
+    const running = requestModelDisplay({ status, requestedModel, servedModel, imageCostMethod });
+
     return (
-      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 font-medium whitespace-nowrap">
-        실행 중
-      </span>
+      <>
+        <span className="text-xs text-sand-500">{running.label}</span>
+        <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 font-medium whitespace-nowrap">
+          실행 중
+        </span>
+      </>
     );
   }
 
@@ -157,15 +163,25 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
   const sortColumn = sort.slice(0, separator);
   const sortDirection = sort.slice(separator + 1) === "asc" ? "asc" : "desc";
 
+  // 행은 COUNT 없이(list) 먼저 받고, 건수는 별도 요청으로 채운다 — 대량 로그에서 COUNT 가
+  // 행 표시를 1초 넘게 막았다. 건수 키에는 페이지·정렬을 넣지 않아 페이지 이동 때 재사용된다.
   const { data, isLoading, isError, refresh, isRefreshing } = RequestLogService.useRequestLogs(
     "P",
     {
       num: PAGE_SIZE,
       page,
       orderBy: sort,
+      queryMode: "list",
       ...listFilters,
     },
   );
+
+  const { data: countData, refresh: refreshCount } = RequestLogService.useRequestLogs("P", {
+    num: PAGE_SIZE,
+    page: 1,
+    queryMode: "count",
+    ...listFilters,
+  });
 
   const {
     data: costData,
@@ -178,8 +194,23 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
   });
 
   const rows = data?.rows ?? [];
-  const total = data?.total ?? 0;
-  const totalPages = Math.ceil(total / PAGE_SIZE);
+  const total = countData?.total;
+  const hasRunning = rows.some((row) => row.status === "running");
+
+  // Running rows gain their token, serving model, and TTFT mid-run; poll until they finish.
+  useEffect(() => {
+    const timer = hasRunning
+      ? setInterval(() => {
+          void refresh();
+          void refreshCount();
+          void refreshCost();
+        }, RUNNING_REFRESH_MS)
+      : undefined;
+
+    return () => clearInterval(timer);
+  }, [hasRunning, refresh, refreshCount, refreshCost]);
+  // 건수 응답 전에는 페이지 수를 모르므로 이동 버튼을 숨긴다(0 → 렌더 안 함).
+  const totalPages = total === undefined ? 0 : Math.ceil(total / PAGE_SIZE);
 
   const updateFilter = (patch: Partial<LogsSearch>) => {
     onSearchChange({ ...search, ...patch, page: 1 });
@@ -232,7 +263,7 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
         {/* 목록과 합계 비용을 같은 필터로 다시 읽는다. 필터 셀렉트의 선택지는 갱신하지 않는다. */}
         <button
           type="button"
-          onClick={() => void Promise.all([refresh(), refreshCost()])}
+          onClick={() => void Promise.all([refresh(), refreshCount(), refreshCost()])}
           disabled={isRefreshing}
           aria-label="Reload"
           title="Reload"
@@ -241,7 +272,9 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
           <RefreshIcon className={isRefreshing ? "size-3.5 animate-spin" : "size-3.5"} />
         </button>
         <div className="flex-1" />
-        <span className="text-[11px] text-sand-400">{isError || !data ? "—" : total} results</span>
+        <span className="text-[11px] text-sand-400">
+          {total === undefined ? "—" : total} results
+        </span>
         {isCostError ? (
           <span role="alert" className="text-[11px] text-danger-500">
             Failed to load total cost.
@@ -249,14 +282,6 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
         ) : (
           <span className="text-[11px] tabular-nums font-medium text-sienna-600">
             {costData ? formatUsd(costData.usd) : "—"}
-            {costData && unpricedRequestLabel(costData) ? (
-              <span
-                className="ml-1 font-normal text-sand-400"
-                title={unpricedRequestTitle(costData) ?? undefined}
-              >
-                {unpricedRequestLabel(costData)}
-              </span>
-            ) : null}
           </span>
         )}
       </div>
@@ -323,7 +348,9 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                       </th>
                     );
                   })}
-                  <th className="w-8" />
+                  <th className="w-8">
+                    <span className="sr-only">Details</span>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-sand-100/60">

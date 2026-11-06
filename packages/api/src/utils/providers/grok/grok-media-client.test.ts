@@ -92,7 +92,7 @@ describe("GrokMediaClient images", () => {
     // Key order matters for byte-level parity with grok-build.
     expect(JSON.stringify(sent?.body)).toBe(
       JSON.stringify({
-        model: "grok-imagine-image-quality",
+        model: "grok-imagine-image-2.0",
         prompt: "red square",
         n: 1,
         aspect_ratio: "1:1",
@@ -106,20 +106,20 @@ describe("GrokMediaClient images", () => {
   it("maps SDK option names and keeps response_format b64_json", async () => {
     const { impl, calls } = fakeFetch(async () => json(imageResponse));
     await new GrokMediaClient({ fetch: impl }).generateImages(AUTH, {
-      model: "grok-imagine-image-pro",
+      model: "grok-imagine-image-2.0",
       prompt: "p",
       n: 3,
       resolution: "2k",
-      quality: "high",
+      quality: "medium",
       outputFormat: "png",
     });
     expect(calls[0]?.body).toEqual({
-      model: "grok-imagine-image-pro",
+      model: "grok-imagine-image-2.0",
       prompt: "p",
       n: 3,
       resolution: "2k",
       response_format: "b64_json",
-      quality: "high",
+      quality: "medium",
       output_format: "png",
     });
   });
@@ -255,7 +255,7 @@ describe("GrokMediaClient images", () => {
     ]);
     expect(calls[0]?.headers["content-type"]).toBe("application/json");
     expect(calls[0]?.body).toEqual({
-      model: "grok-imagine-image-quality",
+      model: "grok-imagine-image-2.0",
       prompt: "make it blue",
       n: 1,
       resolution: "1k",

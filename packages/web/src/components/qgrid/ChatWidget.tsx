@@ -53,6 +53,7 @@ const MODEL_PRESET_GROUPS: { label: string; models: string[] }[] = [
     models: [
       "openai/gpt-6-astra",
       "openai/gpt-6.1-sol",
+      "openai/gpt-6.1-terra",
       "openai/gpt-6-sol",
       "openai/gpt-6-luna",
       "openai/gpt-5.6-terra",
@@ -77,6 +78,11 @@ const MODEL_PRESET_GROUPS: { label: string; models: string[] }[] = [
       "anthropic/claude-sonnet-4-6",
       "anthropic/claude-haiku-4-5",
     ],
+  },
+  {
+    label: "Grok",
+    // ai-sdk QgridGrokModel 의 구독 카탈로그 id(grok-4.7 이 기본). Grok 4.6/4.7 은 Build 모델로 라우팅된다.
+    models: ["grok/grok-4.7", "grok/grok-4.7-build-fast", "grok/grok-4.6", "grok/grok-4.5"],
   },
 ];
 
@@ -105,6 +111,7 @@ type ChatMessage =
 const PROVIDER_LABELS = new Map([
   ["openai", "OpenAI"],
   ["anthropic", "Anthropic"],
+  ["grok", "Grok"],
 ]);
 
 // dispatcher 원문 에러(NO_OPENAI_WORKERS 등)와, 토큰 0개라 부팅이 끝나지 않는 환경의
@@ -174,8 +181,8 @@ export function ChatWidget() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const provider = model.split("/")[0];
-  // 이미지 입력은 OpenAI(codex) 경로만 UserInput 으로 전달된다.
-  const supportsImages = provider === "openai";
+  // OpenAI와 Grok 경로는 이미지 입력(image→text)과 대화 중 이미지 생성·편집(imageGeneration: "auto")을 받는다.
+  const supportsImages = provider === "openai" || provider === "grok";
 
   const { data: tokensData } = TokenService.useTokens(
     "A",
@@ -772,6 +779,7 @@ export function ChatWidget() {
           type="button"
           onClick={() => setOpen(true)}
           title="채팅 열기"
+          aria-label="채팅 열기"
           className="block size-15 rounded-[35%] overflow-hidden shadow-[0_6px_20px_rgba(44,36,24,0.25)] hover:scale-105 active:scale-[0.96] transition-transform duration-150"
         >
           <img src={chatIcon} alt="" className="size-full object-cover" />

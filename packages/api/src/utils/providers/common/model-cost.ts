@@ -79,6 +79,17 @@ const OPENAI_COSTS = new Map<string, OpenAIModelSpec>(
       cacheCreationInputTokens: 2.5,
       longContext: LONG_CONTEXT_272K,
     },
+    // GPT-6.1 Terra (2026-10-26 출시): Standard API pricing verified 2026-10-27. GPT-6.1 Sol 의 정확히 절반 단가.
+    // Codex 카탈로그(2026-10-27, client 0.164.0)는 ultra 까지 허용하고 기본 effort 는 low 다.
+    // @see https://developers.openai.com/api/docs/models/gpt-6.1-terra
+    "gpt-6.1-terra": {
+      maxEffort: "ultra",
+      inputTokens: 1,
+      outputTokens: 5,
+      cachedInputTokens: 0.05,
+      cacheCreationInputTokens: 1.25,
+      longContext: LONG_CONTEXT_272K,
+    },
     // GPT-6 Sol, Luna (2026-09-22 출시): Standard API pricing verified 2026-09-23. GPT-5.6 Sol/Luna 의 절반 단가.
     // Codex 카탈로그(2026-09-23)는 Sol 에 ultra, Luna 에 max 까지 허용하고 기본 effort 는 둘 다 medium 이다.
     // @see https://developers.openai.com/api/docs/models/gpt-6-sol
@@ -249,14 +260,16 @@ export function usdFromGrokTicks(ticks: number): number {
   return ticks / GROK_TICKS_PER_USD;
 }
 
-function grokTokenCosts(input: number, cached: number, output: number): ModelCosts {
-  // ticks per token -> USD per 1M tokens.
-  const perMillion = (ticks: number) => (ticks * 1_000_000) / GROK_TICKS_PER_USD;
+// ticks per token -> USD per 1M tokens.
+function usdPerMillionFromGrokTicks(ticks: number): number {
+  return (ticks * 1_000_000) / GROK_TICKS_PER_USD;
+}
 
+function grokTokenCosts(input: number, cached: number, output: number): ModelCosts {
   return {
-    inputTokens: perMillion(input),
-    cachedInputTokens: perMillion(cached),
-    outputTokens: perMillion(output),
+    inputTokens: usdPerMillionFromGrokTicks(input),
+    cachedInputTokens: usdPerMillionFromGrokTicks(cached),
+    outputTokens: usdPerMillionFromGrokTicks(output),
   };
 }
 
@@ -268,13 +281,33 @@ const GROK_COSTS = new Map<string, ModelCosts>(
   }),
 );
 
-// Ticks per generated image at the default 1k resolution (the probe's quality 1k image cost exactly
-// this amount). Unlisted image models have no estimate.
-const GROK_IMAGE_PRICE_TICKS = new Map<string, number>(
-  Object.entries({
-    "grok-imagine-image-quality": 500_000_000,
-  }),
-);
+// Per-image ticks from https://docs.x.ai/developers/pricing (2026-10-25).
+const GROK_IMAGE_PRICE_TICKS = new Map<
+  string,
+  { input: number; output: Readonly<Record<string, number>> }
+>([
+  [
+    "grok-imagine-image",
+    {
+      input: 20_000_000,
+      output: { "1k": 200_000_000, "2k": 200_000_000 },
+    },
+  ],
+  [
+    "grok-imagine-image-2.0",
+    {
+      input: 100_000_000,
+      output: {
+        "1k:low": 400_000_000,
+        "1.5k:low": 500_000_000,
+        "2k:low": 600_000_000,
+        "1k:medium": 600_000_000,
+        "1.5k:medium": 700_000_000,
+        "2k:medium": 800_000_000,
+      },
+    },
+  ],
+]);
 
 export interface GrokMediaCost {
   costUsd: number;
@@ -284,19 +317,32 @@ export interface GrokMediaCost {
 }
 
 /**
- * Image cost: the reported ticks when present, otherwise the per-image catalog price times the
- * image count. Undefined when neither is known, so callers store an unknown cost, not a guess.
+ * Prefer reported ticks; otherwise price output quality/resolution and input images separately.
+ * Unknown models or price combinations have no estimate.
  */
 export function grokImageCost(
   model: string,
   imageCount: number,
   reportedTicks?: number,
+  options: { resolution?: string; quality?: string; inputImageCount?: number } = {},
 ): GrokMediaCost | undefined {
   if (reportedTicks !== undefined) return grokReportedCost(reportedTicks);
-  const perImage = GROK_IMAGE_PRICE_TICKS.get(model.split("/").pop() ?? model);
+  const id = model.split("/").pop() ?? model;
+  const prices = GROK_IMAGE_PRICE_TICKS.get(id);
+
+  if (!prices) return undefined;
+  const inputImageCount = options.inputImageCount ?? 0;
+  const resolution = options.resolution ?? "1k";
+  const defaultQuality = inputImageCount > 0 ? "medium" : "low";
+
+  const quality = options.quality && options.quality !== "auto" ? options.quality : defaultQuality;
+
+  const priceKey = id === "grok-imagine-image-2.0" ? `${resolution}:${quality}` : resolution;
+
+  const perImage = Object.hasOwn(prices.output, priceKey) ? prices.output[priceKey] : undefined;
 
   if (perImage === undefined) return undefined;
-  const ticks = perImage * imageCount;
+  const ticks = perImage * imageCount + prices.input * inputImageCount;
 
   return { costUsd: usdFromGrokTicks(ticks), costSource: "pricing_table", ticks };
 }
@@ -331,6 +377,7 @@ const OPENAI_FAST_MULTIPLIERS = new Map<string, number>(
   Object.entries({
     "gpt-6-astra": 2,
     "gpt-6.1-sol": 2,
+    "gpt-6.1-terra": 2,
     "gpt-6-sol": 2,
     "gpt-6-luna": 2,
     "gpt-5.6-sol": 2,

@@ -100,7 +100,7 @@ If you're already using the google/openai provider directly, **add one line** to
  const { text } = await generateText({
    model: google("gemini-3-flash"),
    prompt: "A complex question",
-+  experimental_telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
++  telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
  });
 ```
 
@@ -128,7 +128,7 @@ For detailed usage, see the [`@cartanova/qgrid-ai-sdk` README](./packages/ai-sdk
 ```typescript
 const { text } = await generateText({
   model: qgrid("openai/gpt-6-luna"),
-  system: "You are an academic paper summarizer.",
+  instructions: "You are an academic paper summarizer.",
   prompt: paperText,
 });
 ```
@@ -175,7 +175,7 @@ const { text } = await generateText({
       execute: async ({ city }) => ({ temperature: 22, condition: "sunny" }),
     }),
   },
-  stopWhen: stepCountIs(3),
+  stopWhen: isStepCount(3),
 });
 ```
 
@@ -274,7 +274,7 @@ QGRID_PROJECT_NAME=my-service   # labels request logs per project
 
 In the dashboard you can filter the whole team's request logs by project — set `QGRID_PROJECT_NAME` in each project so workloads stay distinguishable as traffic grows.
 
-With server and AI SDK 2.10.0+, `generateText` returns the request-log ID at `result.providerMetadata?.qgrid?.requestLogId`. For `streamText`, consume the stream and read `(await result.providerMetadata)?.qgrid?.requestLogId`. Raw query responses and stream `done` events expose top-level `requestLogId`. Logging-disabled requests omit the field.
+With server and AI SDK 2.10.0+, `generateText` returns the request-log ID at `result.finalStep.providerMetadata?.qgrid?.requestLogId`. For `streamText`, consume the stream and read `(await result.finalStep).providerMetadata?.qgrid?.requestLogId`. Raw query responses and stream `done` events expose top-level `requestLogId`. Logging-disabled requests omit the field.
 
 ---
 
@@ -282,7 +282,7 @@ With server and AI SDK 2.10.0+, `generateText` returns the request-log ID at `re
 
 | Provider | Models |
 |---|---|
-| OpenAI | `openai/gpt-6-astra`, `openai/gpt-6.1-sol`, `openai/gpt-6-sol`, `openai/gpt-6-luna`, `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`, `openai/gpt-5.5`, `openai/gpt-5.3-codex-spark` |
+| OpenAI | `openai/gpt-6-astra`, `openai/gpt-6.1-sol`, `openai/gpt-6.1-terra`, `openai/gpt-6-sol`, `openai/gpt-6-luna`, `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`, `openai/gpt-5.5`, `openai/gpt-5.3-codex-spark` |
 | Anthropic | `anthropic/claude-fable-5-1`, `anthropic/claude-fable-5`, `anthropic/claude-opus-5-5`, `anthropic/claude-opus-5`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-sonnet-5`, `anthropic/claude-haiku-5-5`, `anthropic/claude-opus-4-8`, `anthropic/claude-opus-4-7`, `anthropic/claude-opus-4-6`, `anthropic/claude-opus-4-5`, `anthropic/claude-opus-4-1`, `anthropic/claude-opus-4`, `anthropic/claude-sonnet-4-7`, `anthropic/claude-sonnet-4-6`, `anthropic/claude-sonnet-4-5`, `anthropic/claude-sonnet-4`, `anthropic/claude-haiku-4-5` |
 
 > `openai/gpt-5.4`, `openai/gpt-5.4-mini`, `openai/gpt-5.2`, and `openai/gpt-5.3-codex` are still accepted by the SDK type for backward compatibility, but the ChatGPT-subscription Codex route that qgrid uses no longer serves them. `gpt-5.4` and `gpt-5.4-mini` retired on 2026-08-31; use `openai/gpt-5.6-terra` and `openai/gpt-5.6-luna` instead.
@@ -294,11 +294,12 @@ With server and AI SDK 2.10.0+, `generateText` returns the request-log ID at `re
 | Model | Context (Codex catalog) | Max output (public API) | Input / cached input / cache write / output per 1M tokens |
 |---|---:|---:|---:|
 | `openai/gpt-6-astra` | 272K | 128K | $10 / $1 / $12.50 / $50 |
-| `openai/gpt-6.1-sol` | 272K | 128K | $2 / $0.10 / $2.50 / $10 |
+| `openai/gpt-6.1-sol` | 500K | 128K | $2 / $0.10 / $2.50 / $10 |
+| `openai/gpt-6.1-terra` | 500K | 128K | $1 / $0.05 / $1.25 / $5 |
 | `openai/gpt-6-sol` | 272K | 128K | $2 / $0.20 / $2.50 / $10 |
 | `openai/gpt-6-luna` | 272K | 128K | $0.10 / $0.01 / $0.125 / $0.50 |
 
-The Codex catalog fetched on 2026-09-23 advertises a 272K context window for Astra, Sol, and Luna. Astra and Sol support reasoning effort through `ultra`; Luna supports it through `max`. The backend default is `medium` for all three, while qgrid's SDK defaults to `low`; select an effort explicitly to override it. The public API model pages for [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), and [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) separately list a 1.05M context window, 922K maximum input, 128K maximum output, and reasoning effort through `max` (no `ultra`). Those public limits do not establish the subscription route's limits. [Standard API pricing](https://developers.openai.com/api/docs/pricing) is used for qgrid's cost estimate: cache writes cost 1.25x the uncached input rate, and input over 272K tokens applies 2x input/cache and 1.5x output rates to the full request. GPT-6 Sol and Luna (released 2026-09-22) are priced at half of GPT-5.6 Sol and Luna; existing model prices were re-verified on 2026-09-23 and did not change. [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) (released 2026-09-29) keeps GPT-6 Sol's prices except cached input at $0.10; the Codex catalog fetched on 2026-09-30 lists a 272K context window, effort through `ultra`, and a `low` backend default, and a live generation through qgrid's request shape succeeded the same day. `openai/gpt-5.5` retires from the Codex/ChatGPT route on 2026-10-14; migrate to `openai/gpt-6.1-sol` or `openai/gpt-6-luna`.
+The Codex catalog fetched on 2026-09-23 advertises a 272K context window for Astra, Sol, and Luna. Astra and Sol support reasoning effort through `ultra`; Luna supports it through `max`. The backend default is `medium` for all three, while qgrid's SDK defaults to `low`; select an effort explicitly to override it. The public API model pages for [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), and [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) separately list a 1.05M context window, 922K maximum input, 128K maximum output, and reasoning effort through `max` (no `ultra`). Those public limits do not establish the subscription route's limits. [Standard API pricing](https://developers.openai.com/api/docs/pricing) is used for qgrid's cost estimate: cache writes cost 1.25x the uncached input rate, and input over 272K tokens applies 2x input/cache and 1.5x output rates to the full request. GPT-6 Sol and Luna (released 2026-09-22) are priced at half of GPT-5.6 Sol and Luna; existing model prices were re-verified on 2026-09-23 and did not change. [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) (released 2026-09-29) keeps GPT-6 Sol's prices except cached input at $0.10; the Codex catalog fetched on 2026-09-30 lists a 272K context window, effort through `ultra`, and a `low` backend default, and a live generation through qgrid's request shape succeeded the same day. [GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra) (released 2026-10-26) costs exactly half of GPT-6.1 Sol ($1 / $0.05 / $1.25 / $5) with the same 272K multipliers; the Codex catalog fetched on 2026-10-27 lists a 500K context window, effort through `ultra`, and a `low` backend default, and live generation, structured output, and thinking off succeeded through qgrid the same day. The same catalog now lists a 500K context window for GPT-6.1 Sol as well. `openai/gpt-5.5` retires from the Codex/ChatGPT route on 2026-10-14; migrate to `openai/gpt-6.1-sol` or `openai/gpt-6-luna`.
 
 ### GPT-5.6 specifications
 
@@ -342,7 +343,7 @@ Qgrid uses [Standard API pricing](https://developers.openai.com/api/docs/pricing
 
 ```
 packages/
-├── ai-sdk/  ← @cartanova/qgrid-ai-sdk (AI SDK v6 provider + logger)
+├── ai-sdk/  ← @cartanova/qgrid-ai-sdk (AI SDK 7 provider + logger)
 ├── api/     ← Sonamu server (QgridDispatcher, Request Log, OAuth)
 ├── web/     ← Dashboard React app (TanStack Router + Query)
 └── cli/     ← @cartanova/qgrid-cli (bundles the server)
@@ -352,7 +353,7 @@ packages/
 
 ## Prerequisites
 
-- Node.js >= 20
+- Node.js >= 22
 - PostgreSQL
 - Docker (if running PostgreSQL locally as a container)
 - [Claude Code](https://www.anthropic.com/claude-code) (for Anthropic models)

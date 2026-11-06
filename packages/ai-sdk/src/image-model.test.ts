@@ -278,7 +278,7 @@ describe("qgrid.image with Grok models", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     const result = await generateImage({
-      model: qgrid.image("grok/grok-imagine-image-quality", { serverUrl: "https://s.example" }),
+      model: qgrid.image("grok/grok-imagine-image-2.0", { serverUrl: "https://s.example" }),
       prompt: "A square",
       n: 4,
       size: "1024x1024",

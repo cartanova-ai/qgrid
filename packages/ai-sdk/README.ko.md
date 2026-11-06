@@ -2,7 +2,7 @@
 
 [English](./README.md) · **한국어**
 
-AI SDK v6 custom `LanguageModelV3` / `ImageModelV3` provider for [qgrid](https://github.com/cartanova-ai/Qgrid).
+[qgrid](https://github.com/cartanova-ai/Qgrid)용 AI SDK 7 custom provider입니다. AI SDK 7이 받는 `LanguageModelV3` / `ImageModelV3` 명세를 구현합니다.
 
 **기존 AI SDK 코드 변경 없이, `model` 한 줄만 바꾸면 구독 토큰 풀링(토큰 N개 × concurrent permit) + request log 대시보드를 사용할 수 있습니다.**
 
@@ -24,7 +24,7 @@ AI SDK v6 custom `LanguageModelV3` / `ImageModelV3` provider for [qgrid](https:/
  const { text } = await generateText({
    model: google("gemini-3-flash"),
    prompt: "복잡한 질문",
-+  experimental_telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
++  telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
  });
 ```
 
@@ -34,7 +34,7 @@ AI SDK v6 custom `LanguageModelV3` / `ImageModelV3` provider for [qgrid](https:/
 pnpm add @cartanova/qgrid-ai-sdk
 ```
 
-Peer dependencies: `ai@^6.0.0`, `@ai-sdk/provider@^3.0.0`
+Peer dependencies: `ai@^7.0.0`, `@ai-sdk/provider@^4.0.0`
 
 ## 빠른 시작
 
@@ -64,7 +64,7 @@ import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
 const { text } = await generateText({
   model: qgrid("openai/gpt-6-luna"),
-  system: "당신은 학술 논문 요약가입니다.",
+  instructions: "당신은 학술 논문 요약가입니다.",
   prompt: paperText,
 });
 ```
@@ -80,7 +80,7 @@ import { z } from "zod";
 
 const { output } = await generateText({
   model: qgrid("openai/gpt-5.6-terra"),
-  system: "논문 메타데이터를 추출해주세요.",
+  instructions: "논문 메타데이터를 추출해주세요.",
   prompt: paperText,
   output: Output.object({
     schema: z.object({
@@ -118,7 +118,7 @@ for await (const chunk of textStream) {
 ### Tool Calling
 
 ```typescript
-import { generateText, stepCountIs, tool } from "ai";
+import { generateText, isStepCount, tool } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 import { z } from "zod";
 
@@ -134,7 +134,7 @@ const { text } = await generateText({
       },
     }),
   },
-  stopWhen: stepCountIs(3),
+  stopWhen: isStepCount(3),
 });
 ```
 
@@ -146,7 +146,7 @@ tool-call 턴 뒤에도 계속 진행해 모델의 최종 응답을 받습니다
 `tools`와 `Output.object`를 함께 사용할 수도 있습니다.
 
 ```typescript
-import { generateText, Output, stepCountIs, tool } from "ai";
+import { generateText, Output, isStepCount, tool } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 import { z } from "zod";
 
@@ -160,7 +160,7 @@ const { output } = await generateText({
       execute: async ({ city }) => ({ city, temperature: 22 }),
     }),
   },
-  stopWhen: stepCountIs(3),
+  stopWhen: isStepCount(3),
   output: Output.object({
     schema: z.object({
       city: z.string(),
@@ -207,7 +207,7 @@ const { text } = await generateText({
 | `logger` | `boolean` | 공통 | qgrid request log 저장 여부. 기본값은 `true`. `false`로 설정해도 client tool 실행과 multi-step 연결은 계속 동작 |
 | `sessionKey` | `string` | OpenAI 전용 | 전체 history 재전송 시 불투명 prompt-cache affinity를 파생하는 멀티턴 대화 식별자 ([아래](#멀티턴-prompt-cache-sessionkey) 참조) |
 | `thinking` | `boolean` | 공통 | 생략하면 기존 모델별 동작 유지. `true`는 effort로 깊이를 조절하고, `false`는 요청 effort와 config `defaultEffort`를 무시. 모델·실행 경로 미지원 시 오류 |
-| `effort` | OpenAI: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` \| `"ultra"` | OpenAI 전용 (`QgridOpenAIProviderOptions`) | ChatGPT 구독 Codex 경로의 reasoning 깊이. GPT-6 Astra/Sol과 GPT-5.6 Sol/Terra는 `"ultra"`까지, GPT-6 Luna와 GPT-5.6 Luna는 `"max"`까지 지원하며, 모델이 지원하지 않는 값은 서버가 조용히 무시하고 백엔드 기본값을 적용. `"none"`/`"minimal"`은 공개 effort 값이 아니며 thinking 비활성화에는 `thinking: false`를 사용 |
+| `effort` | OpenAI: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` \| `"ultra"` | OpenAI 전용 (`QgridOpenAIProviderOptions`) | ChatGPT 구독 Codex 경로의 reasoning 깊이. GPT-6 Astra, GPT-6/6.1 Sol, GPT-6.1 Terra, GPT-5.6 Sol/Terra는 `"ultra"`까지 지원하되 qgrid는 `"ultra"`를 백엔드에 `"max"`로 보내며(Codex의 ultra는 qgrid가 실행하지 않는 하위 에이전트 위임을 포함), GPT-6 Luna와 GPT-5.6 Luna는 `"max"`까지 지원하며, 모델이 지원하지 않는 값은 서버가 조용히 무시하고 백엔드 기본값을 적용. `"none"`/`"minimal"`은 공개 effort 값이 아니며 thinking 비활성화에는 `thinking: false`를 사용 |
 | `effort` | Anthropic: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` | Anthropic 전용 (`QgridAnthropicProviderOptions`) | Claude Code `--effort` 허용값. 집합 밖의 값은 서버가 조용히 무시하고 qgrid 기본(`"low"`)을 적용. 모델별 상한(예: Sonnet 4.6은 `"xhigh"` 없음)은 Claude Code가 처리 |
 | `verbosity` | `"low"` \| `"medium"` \| `"high"` | OpenAI 전용 | 응답 텍스트의 상세도 |
 | `reasoningSummary` | `"auto"` \| `"concise"` \| `"detailed"` \| `"none"` | OpenAI 전용 | 추론 요약 출력 방식 |
@@ -239,7 +239,7 @@ Thinking 비활성화 정책 스냅샷(2026-10-10, Claude Code 조사 기준 2.1
 
 | Provider | 현재 정책에서 off를 허용하는 모델 ID |
 | --- | --- |
-| OpenAI | `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` |
+| OpenAI | `gpt-6.1-terra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` |
 | Anthropic | `claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-haiku-4-5`, `claude-sonnet-4-5`, `claude-sonnet-4-6`, `claude-sonnet-5`, `claude-opus-4-5`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` |
 
 위 ID에 평소처럼 `openai/` 또는 `anthropic/` prefix를 붙입니다. 백엔드가 명시적으로 거부한 모델은 `gpt-6-astra`, `gpt-6.1-sol`, `claude-fable-5`, `claude-fable-5-1`, `claude-opus-5-5`입니다. Haiku 5.5와 Sonnet 5.5의 네이티브 전달은 Claude Code 2.1.295에서 검증했습니다. off 요청에서 서버는 CLI 버전을 확인하며 2.1.295 미만이거나 확인할 수 없으면 입력 오류를 반환합니다. 나머지 모델도 off 미확인으로 구분하며 모델 접근 실패를 thinking 강제의 근거로 보지 않습니다. 이 제한은 명시적 false에만 적용됩니다.
@@ -345,10 +345,10 @@ qgrid는 `grok/*` 모델을 qgrid 대시보드에 등록한 xAI 구독 토큰(�
 | Factory | 모델 ID | AI SDK 함수 |
 | --- | --- | --- |
 | `qgrid(id)` | `grok/grok-4.7`(카탈로그 기본 모델), `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`, 그 밖의 `grok/<id>` | `generateText`, `streamText` |
-| `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0`, `grok/grok-imagine-image-quality` | `generateImage` |
+| `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0` | `generateImage` |
 | `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
-| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI 구독: `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/gpt-transcribe`, `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`, `openai/whisper-1` | `experimental_transcribe` |
-| `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임); OpenAI 구독: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1`, `openai/gpt-realtime-1.5` | `experimental_generateSpeech` |
+| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI 구독: `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/gpt-transcribe`, `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`, `openai/whisper-1` | `transcribe` |
+| `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임); OpenAI 구독: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1`, `openai/gpt-realtime-1.5` | `generateSpeech` |
 
 qgrid는 카탈로그에 없는 language model ID를 거부하지 않고 그대로 전달합니다(OpenAI와 같음). 판단은
 subscription backend가 하며 다른 모델로 응답할 수 있으므로, 실제로 실행된 모델은 request log의 응답 모델(또는
@@ -403,16 +403,19 @@ Grok language model은 user 이미지 part(https URL 또는 inline bytes)를 버
 
 ### Grok 이미지
 
+생성과 편집에는 `grok-imagine-image-2.0`을 사용합니다. `quality`는 `low`, `medium`, `auto`이며,
+생략하면 `auto`입니다(현재 생성은 low, 편집은 medium).
+
 ```typescript
 import { generateImage } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
 const { images, providerMetadata } = await generateImage({
-  model: qgrid.image("grok/grok-imagine-image"),
+  model: qgrid.image("grok/grok-imagine-image-2.0"),
   prompt: "A lighthouse at dusk, oil painting",
   n: 2,
   aspectRatio: "16:9",
-  providerOptions: { xai: { resolution: "2k", quality: "high", output_format: "jpeg" } },
+  providerOptions: { xai: { resolution: "2k", quality: "low", output_format: "jpeg" } },
 });
 images[0].mediaType; // "image/jpeg"
 providerMetadata.xai?.images[0]; // revisedPrompt와 해당 호출의 costInUsdTicks
@@ -459,8 +462,8 @@ try {
 ```typescript
 import { readFile } from "node:fs/promises";
 import {
-  experimental_generateSpeech as generateSpeech,
-  experimental_transcribe as transcribe,
+  generateSpeech,
+  transcribe,
 } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
@@ -482,7 +485,7 @@ const speech = await generateSpeech({
 speech.audio.uint8Array;
 ```
 
-- `experimental_transcribe`는 bytes로 오디오 형식을 감지하고 실패하면 `audio/wav`를 씁니다. 서버는 `audio/*`가 아닌 값을 거부합니다. transcript에는 segment가 없습니다(`segments: []`).
+- `transcribe`는 bytes로 오디오 형식을 감지하고 실패하면 `audio/wav`를 씁니다. 서버는 `audio/*`가 아닌 값을 거부합니다. transcript에는 segment가 없습니다(`segments: []`).
 - 음성 합성 텍스트는 최대 15,000자입니다. `voice`, `language`, `outputFormat`을 지정하지 않으면 서버 기본값 `ara`, `en`, `mp3`가 쓰이며, live 검증된 조합은 이것뿐입니다. 다른 voice, language(`@ai-sdk/xai`의 `auto` 포함), codec은 그대로 전달되지만 미검증입니다. 서버가 돌려준 오디오 MIME 타입은 `providerMetadata.qgrid.mediaType`에 있고, AI SDK의 `speech.audio.mediaType`은 bytes에서 추정한 값입니다.
 
 ### OpenAI 음성 인식과 합성 (ChatGPT 구독)
@@ -516,9 +519,9 @@ const speech = await generateSpeech({
 
 ## Telemetry Logger
 
-서버와 AI SDK 2.10.0부터 qgrid provider의 `generateText` 결과에서는 `result.providerMetadata?.qgrid?.requestLogId`로 요청 로그 ID를 확인할 수 있습니다. `streamText`는 스트림 소비 후 `(await result.providerMetadata)?.qgrid?.requestLogId`로 확인합니다. 직접 API를 호출하면 `query` 응답과 스트림 `done` 이벤트의 최상위 `requestLogId`에 같은 값이 담깁니다. `logger: false` 또는 구버전 서버에서는 이 필드가 없으며, 툴 호출 후속 단계는 같은 요청 로그 ID를 공유합니다. 이 ID는 후속 요청 연결 상태가 아니며, 아래 telemetry logger를 쓰는 외부 provider에는 이 metadata가 추가되지 않습니다.
+서버와 AI SDK 2.10.0부터 qgrid provider의 `generateText` 결과에서는 `result.finalStep.providerMetadata?.qgrid?.requestLogId`로 요청 로그 ID를 확인할 수 있습니다. `streamText`는 스트림 소비 후 `(await result.finalStep).providerMetadata?.qgrid?.requestLogId`로 확인합니다. 직접 API를 호출하면 `query` 응답과 스트림 `done` 이벤트의 최상위 `requestLogId`에 같은 값이 담깁니다. `logger: false` 또는 구버전 서버에서는 이 필드가 없으며, 툴 호출 후속 단계는 같은 요청 로그 ID를 공유합니다. 이 ID는 후속 요청 연결 상태가 아니며, 아래 telemetry logger를 쓰는 외부 provider에는 이 metadata가 추가되지 않습니다.
 
-qgrid provider가 아닌 모델(google, openai 직접 호출)에서도 같은 request log 대시보드를 사용하려면 `createQgridLogger`를 `experimental_telemetry`에 넣으면 됩니다.
+qgrid provider가 아닌 모델(google, openai 직접 호출)에서도 같은 request log 대시보드를 사용하려면 `createQgridLogger`를 `telemetry`에 넣으면 됩니다.
 
 ```typescript
 import { generateText } from "ai";
@@ -528,7 +531,7 @@ import { createQgridLogger } from "@cartanova/qgrid-ai-sdk";
 const { text } = await generateText({
   model: google("gemini-3-flash"),
   prompt: "안녕하세요",
-  experimental_telemetry: createQgridLogger({
+  telemetry: createQgridLogger({
     serverUrl: "http://localhost:44900",
   }),
 });
@@ -566,7 +569,7 @@ const { text } = await generateText({
   providerOptions: {
     qgrid: { logger: false } satisfies QgridProviderOptions,
   },
-  experimental_telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
+  telemetry: createQgridLogger({ serverUrl: "http://localhost:44900" }),
 });
 ```
 
@@ -587,6 +590,7 @@ type QgridSupportedModel =
   // OpenAI (direct private Codex Responses backend)
   | "openai/gpt-6-astra"
   | "openai/gpt-6.1-sol"
+  | "openai/gpt-6.1-terra"
   | "openai/gpt-6-sol"
   | "openai/gpt-6-luna"
   | "openai/gpt-5.6-sol"
@@ -626,11 +630,12 @@ type QgridSupportedModel =
 | 모델 | Context (Codex 카탈로그) | 최대 출력 (공개 API) | 1M tokens당 input / cached input / cache write / output |
 | --- | ---: | ---: | ---: |
 | `openai/gpt-6-astra` | 272K | 128K | $10 / $1 / $12.50 / $50 |
-| `openai/gpt-6.1-sol` | 272K | 128K | $2 / $0.10 / $2.50 / $10 |
+| `openai/gpt-6.1-sol` | 500K | 128K | $2 / $0.10 / $2.50 / $10 |
+| `openai/gpt-6.1-terra` | 500K | 128K | $1 / $0.05 / $1.25 / $5 |
 | `openai/gpt-6-sol` | 272K | 128K | $2 / $0.20 / $2.50 / $10 |
 | `openai/gpt-6-luna` | 272K | 128K | $0.10 / $0.01 / $0.125 / $0.50 |
 
-2026-09-23에 조회한 Codex 카탈로그는 Astra, Sol, Luna 모두 272K context window를 제공합니다. Astra와 Sol은 `ultra`까지, Luna는 `max`까지 reasoning effort를 지원합니다. 백엔드 기본값은 세 모델 모두 `medium`이며, qgrid SDK의 기본값은 기존대로 `low`이니 다른 깊이가 필요하면 effort를 명시하세요. [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)의 공개 API 문서는 별도로 1.05M context, 최대 입력 922K, 최대 출력 128K와 `max`까지의 effort를 명시하며 `ultra`는 포함하지 않습니다. 이 공개 API 한도를 구독 경로의 한도로 간주하지 않습니다. Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/docs/pricing)를 사용합니다. Cache write는 uncached input 단가의 1.25x이며, 입력이 272K tokens를 넘으면 요청 전체에 input/cache 2x, output 1.5x 단가가 적용됩니다. GPT-6 Sol과 Luna(2026-09-22 출시)는 GPT-5.6 Sol/Luna의 절반 단가이며, 기존 모델 단가는 2026-09-23에 재확인했고 변동이 없습니다. [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)(2026-09-29 출시)은 GPT-6 Sol과 단가가 같고 cached input만 $0.10입니다. 2026-09-30에 조회한 Codex 카탈로그는 272K context window, `ultra`까지의 effort, 백엔드 기본값 `low`를 명시하며, 같은 날 qgrid 요청 형태로 라이브 생성에 성공했습니다. `openai/gpt-5.5`는 2026-10-14에 Codex/ChatGPT 경로에서 은퇴하므로 `openai/gpt-6.1-sol` 또는 `openai/gpt-6-luna`로 옮기세요.
+2026-09-23에 조회한 Codex 카탈로그는 Astra, Sol, Luna 모두 272K context window를 제공합니다. Astra와 Sol은 `ultra`까지, Luna는 `max`까지 reasoning effort를 지원합니다. 백엔드 기본값은 세 모델 모두 `medium`이며, qgrid SDK의 기본값은 기존대로 `low`이니 다른 깊이가 필요하면 effort를 명시하세요. [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)의 공개 API 문서는 별도로 1.05M context, 최대 입력 922K, 최대 출력 128K와 `max`까지의 effort를 명시하며 `ultra`는 포함하지 않습니다. 이 공개 API 한도를 구독 경로의 한도로 간주하지 않습니다. Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/docs/pricing)를 사용합니다. Cache write는 uncached input 단가의 1.25x이며, 입력이 272K tokens를 넘으면 요청 전체에 input/cache 2x, output 1.5x 단가가 적용됩니다. GPT-6 Sol과 Luna(2026-09-22 출시)는 GPT-5.6 Sol/Luna의 절반 단가이며, 기존 모델 단가는 2026-09-23에 재확인했고 변동이 없습니다. [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)(2026-09-29 출시)은 GPT-6 Sol과 단가가 같고 cached input만 $0.10입니다. 2026-09-30에 조회한 Codex 카탈로그는 272K context window, `ultra`까지의 effort, 백엔드 기본값 `low`를 명시하며, 같은 날 qgrid 요청 형태로 라이브 생성에 성공했습니다. [GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra)(2026-10-26 출시)는 GPT-6.1 Sol의 정확히 절반 단가($1 / $0.05 / $1.25 / $5)이며 272K 할증 배율은 같습니다. 2026-10-27에 조회한 Codex 카탈로그는 500K context window, `ultra`까지의 effort, 백엔드 기본값 `low`를 명시하며, 같은 날 qgrid 경로로 라이브 생성, structured output, thinking off에 성공했습니다. 같은 카탈로그에서 GPT-6.1 Sol의 context window도 500K로 바뀌었습니다. `openai/gpt-5.5`는 2026-10-14에 Codex/ChatGPT 경로에서 은퇴하므로 `openai/gpt-6.1-sol` 또는 `openai/gpt-6-luna`로 옮기세요.
 
 ### GPT-5.6 사양
 
@@ -727,6 +732,12 @@ QGRID_REAL_PROVIDER_ACCEPTANCE=1 QGRID_URL=http://localhost:44900 QGRID_MODEL=op
 
 ## 요구사항
 
-- Node.js >= 20
-- AI SDK v6 (`ai@^6.0.0`)
+- Node.js >= 22
+- AI SDK 7 (`ai@^7.0.0`)
 - 실행 중인 qgrid 서버
+
+### AI SDK 7로 업그레이드
+
+- logger는 `experimental_telemetry` 대신 `telemetry: createQgridLogger(...)`로 넘깁니다.
+- `metadata.qgridRunId`는 더 이상 필요 없습니다. logger가 AI SDK의 호출별 `callId`로 run을 구분하므로 logger 하나를 동시 호출에 함께 써도 됩니다.
+- 요청 로그 ID는 `result.finalStep.providerMetadata`에서 읽습니다. AI SDK 7에서 최상위 `providerMetadata`는 deprecated alias로만 남아 있습니다.

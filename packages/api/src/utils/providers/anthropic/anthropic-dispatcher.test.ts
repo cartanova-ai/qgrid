@@ -12,6 +12,7 @@ const {
   runClaudeSessionMock,
   refreshTokenMock,
   readAnthropicQuotaUsageMock,
+  fetchUsageWithMetaMock,
   invalidateAnthropicQuotaUsageMock,
   loggerInfoMock,
   loggerWarnMock,
@@ -19,6 +20,7 @@ const {
   runClaudeSessionMock: vi.fn(),
   refreshTokenMock: vi.fn(),
   readAnthropicQuotaUsageMock: vi.fn(),
+  fetchUsageWithMetaMock: vi.fn(),
   invalidateAnthropicQuotaUsageMock: vi.fn(),
   loggerInfoMock: vi.fn(),
   loggerWarnMock: vi.fn(),
@@ -35,6 +37,11 @@ vi.mock("./claude-session", async (importActual) => {
 
 vi.mock("./anthropic-quota", () => ({
   readAnthropicQuotaUsage: readAnthropicQuotaUsageMock,
+  invalidateAnthropicQuotaUsage: invalidateAnthropicQuotaUsageMock,
+}));
+
+vi.mock("../../../application/qgrid/oauth", () => ({
+  fetchUsageWithMeta: fetchUsageWithMetaMock,
   invalidateAnthropicQuotaUsage: invalidateAnthropicQuotaUsageMock,
 }));
 
@@ -80,7 +87,7 @@ function baseReq(overrides: Partial<GenerateRequest> = {}): GenerateRequest {
 }
 
 function quotaOk(utilizationPct: number, cacheAgeMs = 100): AnthropicQuotaUsageResult {
-  return { kind: "ok", utilizationPct, cacheAgeMs };
+  return { kind: "ok", utilizationPct, weeklyUtilizationPct: null, cacheAgeMs };
 }
 
 function quotaFail(reason = "usage lookup failed"): AnthropicQuotaUsageResult {
@@ -115,6 +122,8 @@ describe("AnthropicDispatcher", () => {
     refreshTokenMock.mockReset();
     refreshTokenMock.mockResolvedValue("sk-ant-oat01-refreshed");
     readAnthropicQuotaUsageMock.mockReset();
+    readAnthropicQuotaUsageMock.mockResolvedValue(quotaOk(0));
+    fetchUsageWithMetaMock.mockReset();
     invalidateAnthropicQuotaUsageMock.mockReset();
     loggerInfoMock.mockReset();
     loggerWarnMock.mockReset();
@@ -266,7 +275,7 @@ describe("AnthropicDispatcher", () => {
 
     expect(names.filter((name) => name === "tok-A")).toHaveLength(3);
     expect(names.filter((name) => name === "tok-B")).toHaveLength(1);
-    expect(readAnthropicQuotaUsageMock).not.toHaveBeenCalled();
+    expect(readAnthropicQuotaUsageMock).toHaveBeenCalledTimes(8);
   });
 
   it("preferredTokenId 가 있으면 가중 선택과 무관하게 그 토큰을 고른다", async () => {
@@ -331,7 +340,7 @@ describe("AnthropicDispatcher", () => {
     d.onTokenAdded(1, "tok-A", creds(), 80, 1);
     d.onTokenAdded(2, "tok-B", creds(), 80, 1);
     readAnthropicQuotaUsageMock
-      .mockResolvedValueOnce(quotaOk(100))
+      .mockResolvedValueOnce({ ...quotaOk(10), weeklyUtilizationPct: 100 })
       .mockResolvedValueOnce(quotaOk(10));
 
     const result = await d.generate(baseReq({ model: "claude-fable-5" }));
@@ -356,6 +365,24 @@ describe("AnthropicDispatcher", () => {
     expect(names.filter((name) => name === "tok-B")).toHaveLength(3);
   });
 
+  it.each([80, null])("allows a keepalive target below weekly exhaustion (threshold=%s)", async (threshold) => {
+    const { readAnthropicQuotaUsage } = await vi.importActual<typeof import("./anthropic-quota")>("./anthropic-quota");
+    readAnthropicQuotaUsageMock.mockImplementation(readAnthropicQuotaUsage);
+    const usage = {
+      five_hour: { utilization: 0, resets_at: null },
+      seven_day: { utilization: 92, resets_at: null },
+    };
+    fetchUsageWithMetaMock.mockImplementation(async () => ({ data: usage, cachedAt: Date.now() }));
+    const d = new AnthropicDispatcher();
+    d.onTokenAdded(1, "anthropic/noa", creds(), threshold);
+    const req = baseReq({ model: "claude-haiku-5-5", preferredTokenId: 1 });
+
+    expect((await d.generate(req)).tokenName).toBe("anthropic/noa");
+    usage.seven_day.utilization = 100;
+    await expect(d.generate(req)).rejects.toBeInstanceOf(QuotaThresholdExceededError);
+    expect(runClaudeSessionMock).toHaveBeenCalledTimes(1);
+  });
+
   it("threshold 초과 토큰은 후보에서 제외하고 미설정 토큰을 선택한다", async () => {
     const d = new AnthropicDispatcher();
     d.onTokenAdded(1, "tok-A", creds(), 80, 1);
@@ -365,7 +392,7 @@ describe("AnthropicDispatcher", () => {
     const result = await d.generate(baseReq());
 
     expect(result.tokenName).toBe("tok-B");
-    expect(readAnthropicQuotaUsageMock).toHaveBeenCalledTimes(1);
+    expect(readAnthropicQuotaUsageMock).toHaveBeenCalledTimes(2);
     expect(loggerInfoMock).toHaveBeenCalledWith(
       expect.stringContaining("over_threshold"),
       expect.objectContaining({

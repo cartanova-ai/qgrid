@@ -1,4 +1,4 @@
-import { experimental_transcribe as transcribe } from "ai";
+import { transcribe } from "ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { qgrid } from "./index";

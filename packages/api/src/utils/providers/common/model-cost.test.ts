@@ -30,17 +30,39 @@ describe("Grok cost", () => {
   );
 
   it("prefers reported image ticks and falls back to the catalog per-image price", () => {
-    expect(grokImageCost("grok/grok-imagine-image-quality", 2, 700_000_000)).toEqual({
+    expect(grokImageCost("grok/grok-imagine-image-2.0", 2, 700_000_000)).toEqual({
       costUsd: 0.07,
       costSource: "provider",
       ticks: 700_000_000,
     });
-    expect(grokImageCost("grok-imagine-image-quality", 2)).toEqual({
-      costUsd: 0.1,
+    expect(grokImageCost("grok-imagine-image-2.0", 2)).toEqual({
+      costUsd: 0.08,
       costSource: "pricing_table",
-      ticks: 1_000_000_000,
+      ticks: 800_000_000,
     });
     expect(grokImageCost("grok-imagine-image-unknown", 1)).toBeUndefined();
+    expect(grokImageCost("grok-imagine-image-quality", 1)).toBeUndefined();
+    expect(grokImageCost("grok-imagine-image-2.0", 1, 0)?.costUsd).toBe(0);
+  });
+
+  it.each([
+    ["1k", "low", 0.04],
+    ["1.5k", "low", 0.05],
+    ["2k", "low", 0.06],
+    ["1k", "medium", 0.06],
+    ["1.5k", "medium", 0.07],
+    ["2k", "medium", 0.08],
+  ])("estimates 2.0 output at %s/%s", (resolution, quality, expected) => {
+    expect(grokImageCost("grok-imagine-image-2.0", 1, undefined, { resolution, quality })?.costUsd).toBe(expected);
+  });
+
+  it("estimates auto edits with medium output and reference-image charges", () => {
+    expect(grokImageCost("grok-imagine-image-2.0", 2, undefined, {
+      resolution: "2k", quality: "auto", inputImageCount: 2,
+    })?.costUsd).toBe(0.18);
+    expect(grokImageCost("grok-imagine-image-2.0", 1, undefined, { inputImageCount: 1 })?.costUsd).toBe(0.07);
+    expect(grokImageCost("grok-imagine-image", 2, undefined, { resolution: "2k", inputImageCount: 1 })?.costUsd).toBe(0.042);
+    expect(grokImageCost("grok-imagine-image-2.0", 1, undefined, { quality: "high" })).toBeUndefined();
   });
 
   it("reports video/voice cost only when xAI reported it", () => {
@@ -53,6 +75,7 @@ describe("calculateCostUsd", () => {
   it.each([
     ["gpt-6-astra", 2.6],
     ["gpt-6.1-sol", 0.5],
+    ["gpt-6.1-terra", 0.25],
     ["gpt-6-sol", 0.52],
     ["gpt-6-luna", 0.026],
     ["gpt-5.6-sol", 1.04],
@@ -108,6 +131,7 @@ describe("calculateCostUsd", () => {
   it.each([
     ["gpt-6-astra", 10, 50, 1, 12.5],
     ["gpt-6.1-sol", 2, 10, 0.1, 2.5],
+    ["gpt-6.1-terra", 1, 5, 0.05, 1.25],
     ["gpt-6-sol", 2, 10, 0.2, 2.5],
     ["gpt-6-luna", 0.1, 0.5, 0.01, 0.125],
     ["gpt-5.6-sol", 4, 20, 0.4, 5],
@@ -195,6 +219,7 @@ describe("calculateCostUsd", () => {
   it.each([
     ["gpt-6-astra", 10, 50, 1, 12.5, 5.6125],
     ["gpt-6.1-sol", 2, 10, 0.1, 2.5, 1.1175],
+    ["gpt-6.1-terra", 1, 5, 0.05, 1.25, 0.55875],
     ["gpt-6-sol", 2, 10, 0.2, 2.5, 1.1225],
     ["gpt-6-luna", 0.1, 0.5, 0.01, 0.125, 0.056125],
     ["gpt-5.6-sol", 4, 20, 0.4, 5, 2.245],
@@ -224,6 +249,7 @@ describe("calculateCostUsd", () => {
   it.each([
     ["gpt-6-astra", 2.475],
     ["gpt-6.1-sol", 0.455],
+    ["gpt-6.1-terra", 0.2275],
     ["gpt-6-sol", 0.495],
     ["gpt-6-luna", 0.02475],
     ["gpt-5.6-sol", 0.99],
@@ -242,6 +268,7 @@ describe("calculateCostUsd", () => {
   it.each([
     ["gpt-6-astra", 2.725],
     ["gpt-6.1-sol", 0.505],
+    ["gpt-6.1-terra", 0.2525],
     ["gpt-6-sol", 0.545],
     ["gpt-6-luna", 0.02725],
     ["gpt-5.6-sol", 1.09],

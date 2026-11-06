@@ -10,18 +10,8 @@ vi.mock("./use-oauth-login-flow", () => ({
 }));
 
 describe("UsageStateNotes", () => {
-  it("labels a ZDR token as unavailable for video next to the on-demand label", () => {
-    const html = renderToStaticMarkup(
-      <UsageStateNotes usage={{ onDemandExcluded: true, zdrVideoExcluded: true }} />,
-    );
+  it("labels an on-demand-excluded token", () => {
+    const html = renderToStaticMarkup(<UsageStateNotes usage={{ onDemandExcluded: true }} />);
     expect(html).toContain("excluded: on-demand billing enabled");
-    expect(html).toContain("video unavailable: zero data retention");
-  });
-
-  it("omits the ZDR label when the flag is false or absent", () => {
-    expect(renderToStaticMarkup(<UsageStateNotes usage={{ zdrVideoExcluded: false }} />)).toBe("");
-    expect(renderToStaticMarkup(<UsageStateNotes usage={{ tier: "Super" }} />)).not.toContain(
-      "zero data retention",
-    );
   });
 });

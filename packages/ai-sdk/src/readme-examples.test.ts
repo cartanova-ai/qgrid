@@ -3,9 +3,9 @@
 import { readFile as readTextFile } from "node:fs/promises";
 
 import {
-  experimental_generateSpeech as generateSpeech,
+  generateSpeech,
   experimental_generateVideo as generateVideo,
-  experimental_transcribe as transcribe,
+  transcribe,
   generateImage,
   generateText,
 } from "ai";
@@ -15,7 +15,9 @@ import { qgrid, QgridVideoTimeoutError, resumeQgridVideo } from "./index";
 
 const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]).toString("base64");
 const mp3 = new Uint8Array([0xff, 0xfb, 0x90, 0x64, 0, 0, 0, 0]);
-const VIDEO_URL = "https://vidgen.x.ai/bucket/video.mp4";
+// AI SDK 7 downloads video URLs through its DNS-pinned transport, not global fetch, and refuses
+// *.localhost before any lookup. The example therefore stops at AI SDK's own download, offline.
+const VIDEO_URL = "https://vidgen.localhost/bucket/video.mp4";
 const seen: string[] = [];
 const sent: RequestInit[] = [];
 
@@ -83,11 +85,11 @@ async function grokTextExample() {
 
 async function grokImageExample() {
   const { images, providerMetadata } = await generateImage({
-    model: qgrid.image("grok/grok-imagine-image"),
+    model: qgrid.image("grok/grok-imagine-image-2.0"),
     prompt: "A lighthouse at dusk, oil painting",
     n: 2,
     aspectRatio: "16:9",
-    providerOptions: { xai: { resolution: "2k", quality: "high", output_format: "jpeg" } },
+    providerOptions: { xai: { resolution: "2k", quality: "low", output_format: "jpeg" } },
   });
   images[0].mediaType; // "image/jpeg"
   providerMetadata.xai?.images[0]; // revisedPrompt and the call's costInUsdTicks
@@ -169,9 +171,11 @@ describe("README Grok examples", () => {
   });
 
   it("runs the video example and downloads the upstream URL outside qgrid", async () => {
-    const result = await grokVideoExample();
-    expect(result?.providerMetadata.xai?.videoUrl).toBe(VIDEO_URL);
-    expect(seen).toEqual(["videoStart", "videoStatus", "video.mp4"]);
+    await expect(grokVideoExample()).rejects.toMatchObject({
+      name: "AI_DownloadError",
+      url: VIDEO_URL,
+    });
+    expect(seen).toEqual(["videoStart", "videoStatus"]);
   });
 
   it("runs the transcription and speech example", async () => {

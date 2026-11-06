@@ -5,6 +5,7 @@ import {
   beforeQuery,
   finishRunAborted,
   finishRunWithError,
+  runProgressRecorder,
 } from "./qgrid-run-lifecycle";
 import { type QueryOutput } from "./qgrid.types";
 
@@ -15,7 +16,9 @@ const {
   createRunMock,
   expireStaleToolWaitingRunsMock,
   continueToolRunMock,
+  recordRunProgressMock,
 } = vi.hoisted(() => ({
+  recordRunProgressMock: vi.fn(),
   appendStepMock: vi.fn(),
   aggregateStepUsageMock: vi.fn(),
   finishRunMock: vi.fn(),
@@ -32,8 +35,42 @@ vi.mock("../request-log/request-log.model", () => ({
     createRun: createRunMock,
     expireStaleToolWaitingRuns: expireStaleToolWaitingRunsMock,
     continueToolRun: continueToolRunMock,
+    recordRunProgress: recordRunProgressMock,
   },
 }));
+
+describe("runProgressRecorder", () => {
+  it("writes token, prefixed serving model, and first-step TTFT in order", async () => {
+    recordRunProgressMock.mockReset().mockResolvedValue(undefined);
+    const record = runProgressRecorder(7, 0, { prompt: "hi", model: "grok/grok-4.7" });
+
+    record({ tokenName: "grok/haze" });
+    record({ model: "grok-4.7-build" });
+    record({ ttftMs: 420 });
+    await vi.waitFor(() => expect(recordRunProgressMock).toHaveBeenCalledTimes(3));
+
+    expect(recordRunProgressMock.mock.calls).toEqual([
+      [7, { token_name: "grok/haze" }],
+      [7, { model_name: "grok/grok-4.7-build" }],
+      [7, { ttft_ms: 420 }],
+    ]);
+  });
+
+  it("keeps a continued run's TTFT and survives a failed write", async () => {
+    recordRunProgressMock.mockReset().mockRejectedValueOnce(new Error("db down"));
+    const record = runProgressRecorder(7, 2, { prompt: "hi", model: "openai/gpt-6-sol" });
+
+    record({ tokenName: "a" });
+    record({ ttftMs: 10 });
+    record({ tokenName: "b" });
+    await vi.waitFor(() => expect(recordRunProgressMock).toHaveBeenCalledTimes(2));
+
+    expect(recordRunProgressMock.mock.calls.map(([, update]) => update)).toEqual([
+      { token_name: "a" },
+      { token_name: "b" },
+    ]);
+  });
+});
 
 function queryOutput(overrides: Partial<QueryOutput> = {}): QueryOutput {
   return {
@@ -507,6 +544,32 @@ describe("qgrid run lifecycle TTFT", () => {
         image_cost_method: "assumed:gpt-image-2:medium:1536x1024:png",
       }),
     );
+  });
+
+  it("records a Grok tool image without a second image cost or OpenAI pricing assumptions", async () => {
+    await afterQuery(
+      10,
+      2,
+      { prompt: "draw an apple", model: "grok/grok-4.7", imageGeneration: "auto" },
+      queryOutput({
+        content: [{ type: "image", data: "/9j/4AAQ", mediaType: "image/jpeg", revisedPrompt: "a red apple" }],
+      }),
+    );
+
+    expect(finishRunMock).toHaveBeenCalledWith(
+      10,
+      expect.objectContaining({
+        image_cost_usd: 0,
+        image_cost_method: "included:grok-provider-cost",
+        is_image_generation: true,
+      }),
+    );
+    const step = appendStepMock.mock.calls.find(([, s]) => s.tool_name === "image_generation")?.[1];
+    expect(JSON.parse(step.tool_args)).toMatchObject({
+      tool: { type: "image_generation", provider: "grok" },
+      driverModel: "grok/grok-4.7",
+    });
+    expect(step.tool_args).not.toContain("gpt-image");
   });
 
   it.each([

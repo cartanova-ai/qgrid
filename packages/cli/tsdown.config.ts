@@ -5,6 +5,6 @@ export default defineConfig({
   format: ["esm"],
   clean: true,
   fixedExtension: false,
-  target: "node20",
+  target: "node22",
   dts: false,
 });

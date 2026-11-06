@@ -1,4 +1,4 @@
-import { experimental_generateSpeech as generateSpeech } from "ai";
+import { generateSpeech } from "ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { qgrid } from "./index";
@@ -62,7 +62,7 @@ describe("qgrid.speech with AI SDK generateSpeech", () => {
     });
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body)).params).toEqual({ model: "grok/grok-tts", text: "Hello", format: "mp3" });
-    expect(result.warnings.map((w) => (w.type === "other" ? w.message : w.feature))).toEqual([
+    expect(result.warnings.map((w) => ("feature" in w ? w.feature : w.message))).toEqual([
       "outputFormat",
       "instructions",
       "speed",

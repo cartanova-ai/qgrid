@@ -393,6 +393,19 @@ export function createQgridVideo(
 
       if (options.seed !== undefined) warnings.push({ type: "unsupported", feature: "seed" });
 
+      // AI SDK 7 standard video options that the qgrid Grok route does not map yet.
+      if (options.frameImages !== undefined) {
+        warnings.push({ type: "unsupported", feature: "frameImages" });
+      }
+
+      if (options.inputReferences !== undefined) {
+        warnings.push({ type: "unsupported", feature: "inputReferences" });
+      }
+
+      if (options.generateAudio !== undefined) {
+        warnings.push({ type: "unsupported", feature: "generateAudio" });
+      }
+
       let resolution = xaiOptions?.resolution ?? undefined;
 
       if (resolution === undefined && options.resolution !== undefined) {

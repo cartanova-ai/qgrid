@@ -30,7 +30,28 @@ describe("readAnthropicQuotaUsage", () => {
     await expect(readAnthropicQuotaUsage("access-token")).resolves.toEqual({
       kind: "ok",
       utilizationPct: 17,
+      weeklyUtilizationPct: null,
       cacheAgeMs: 1_250,
+    });
+  });
+
+  it.each([
+    { fiveHour: 0, sevenDay: 92 },
+    { fiveHour: 80, sevenDay: 20 },
+    { fiveHour: null, sevenDay: 100 },
+  ])("keeps five-hour and weekly usage separate: %j", async ({ fiveHour, sevenDay }) => {
+    fetchUsageWithMetaMock.mockResolvedValueOnce({
+      data: {
+        five_hour: { utilization: fiveHour, resets_at: null },
+        seven_day: { utilization: sevenDay, resets_at: null },
+      },
+      cachedAt: Date.now(),
+    });
+
+    await expect(readAnthropicQuotaUsage("access-token", "claude-opus-5-5")).resolves.toMatchObject({
+      kind: "ok",
+      utilizationPct: fiveHour,
+      weeklyUtilizationPct: sevenDay,
     });
   });
 
@@ -46,19 +67,22 @@ describe("readAnthropicQuotaUsage", () => {
 
     await expect(readAnthropicQuotaUsage("access-token", "claude-fable-5")).resolves.toMatchObject({
       kind: "ok",
-      utilizationPct: 100,
+      utilizationPct: 10,
+      weeklyUtilizationPct: 100,
     });
     await expect(
       readAnthropicQuotaUsage("access-token", "claude-fable-5-1"),
     ).resolves.toMatchObject({
       kind: "ok",
-      utilizationPct: 100,
+      utilizationPct: 10,
+      weeklyUtilizationPct: 100,
     });
     await expect(
       readAnthropicQuotaUsage("access-token", "claude-sonnet-4-6"),
     ).resolves.toMatchObject({
       kind: "ok",
       utilizationPct: 10,
+      weeklyUtilizationPct: null,
     });
   });
 
@@ -104,7 +128,7 @@ describe("readAnthropicQuotaUsage", () => {
     });
   });
 
-  it("treats missing five_hour utilization as lookup_failed", async () => {
+  it("treats missing usage across applicable windows as lookup_failed", async () => {
     fetchUsageWithMetaMock.mockResolvedValueOnce({
       data: { five_hour: { utilization: null, resets_at: null } },
       cachedAt: Date.now(),

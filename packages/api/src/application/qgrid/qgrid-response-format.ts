@@ -61,6 +61,15 @@ export function imageGenerationToolArgs(
 
   if (inputImages.length > 0) toolArgs.inputImages = inputImages;
   toolArgs.driverModel = args.model ?? null;
+
+  if (args.model?.startsWith("grok/")) {
+    // Grok runs its server-side image tool; the turn's provider cost already includes the image.
+    toolArgs.tool = { type: "image_generation", provider: "grok" };
+    toolArgs.cost = "included in the provider-reported turn cost";
+
+    return JSON.stringify(toolArgs);
+  }
+
   const tool: Record<string, JsonValue> = {};
   Object.assign(tool, CODEX_IMAGE_GENERATION_TOOL_CONFIG);
 

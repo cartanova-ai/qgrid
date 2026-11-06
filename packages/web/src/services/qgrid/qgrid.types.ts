@@ -346,9 +346,9 @@ function inlineImageBytes(refs: ReadonlyArray<string | undefined>): number {
   let total = 0;
 
   for (const ref of refs) {
-    const match = ref === undefined ? null : IMAGE_DATA_URL.exec(ref);
+    const base64 = ref === undefined ? undefined : IMAGE_DATA_URL.exec(ref)?.[2];
 
-    if (match) total += base64DecodedBytes(match[2]!);
+    if (base64 !== undefined) total += base64DecodedBytes(base64);
   }
 
   return total;
@@ -371,14 +371,14 @@ export const MediaImageRef = z
   .min(1)
   .superRefine((value, ctx) => {
     if (value.startsWith("data:")) {
-      const match = IMAGE_DATA_URL.exec(value);
+      const base64 = IMAGE_DATA_URL.exec(value)?.[2];
 
-      if (!match || match[2]!.length % 4 !== 0) {
+      if (base64 === undefined || base64.length % 4 !== 0) {
         ctx.addIssue({
           code: "custom",
           message: "image data URLs must be base64 image/png, image/jpeg or image/webp",
         });
-      } else if (base64DecodedBytes(match[2]!) > MEDIA_MAX_INLINE_BYTES) {
+      } else if (base64DecodedBytes(base64) > MEDIA_MAX_INLINE_BYTES) {
         ctx.addIssue({
           code: "custom",
           message: `image data URL exceeds ${MEDIA_MAX_INLINE_LABEL}`,

@@ -179,7 +179,10 @@ function ImageAwareContent({ text, markdown }: { text: string; markdown?: boolea
       {viewerSrc && (
         <div
           className="fixed inset-0 z-50 bg-black/70 p-4 flex items-center justify-center"
-          onClick={() => setViewerSrc(null)}
+          onClick={(e) => {
+            // Only a click on the backdrop closes; clicks on the image keep the viewer open.
+            if (e.target === e.currentTarget) setViewerSrc(null);
+          }}
         >
           <button
             type="button"
@@ -193,7 +196,6 @@ function ImageAwareContent({ text, markdown }: { text: string; markdown?: boolea
             src={viewerSrc}
             alt="generated preview"
             className="max-h-full max-w-full object-contain rounded-md bg-white"
-            onClick={(e) => e.stopPropagation()}
           />
         </div>
       )}
@@ -360,7 +362,7 @@ function HeaderBar({ data }: { data: RequestLog }) {
           fallback ×{data.fallback_count}
         </span>
       )}
-      {!isRunning && data.status !== "succeeded" && (
+      {data.status !== "succeeded" && (
         <span
           className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium uppercase ${STATUS_STYLE.get(data.status) ?? "bg-sand-100 text-sand-500"}`}
         >
@@ -1324,7 +1326,15 @@ function ResponseTypePanel({ id }: { id: number }) {
 }
 
 function RequestDetail({ id }: { id: number }) {
-  const { data, isLoading, error, isError } = RequestLogService.useRequestLog("A", id);
+  const { data, isLoading, error, isError, refresh } = RequestLogService.useRequestLog("A", id);
+  const isRunning = data?.status === "running";
+
+  // Token, serving model, and TTFT are recorded while the request runs; poll until it finishes.
+  useEffect(() => {
+    const timer = isRunning ? setInterval(() => void refresh(), 3_000) : undefined;
+
+    return () => clearInterval(timer);
+  }, [isRunning, refresh]);
 
   const {
     data: stepsData,

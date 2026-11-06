@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { getLogger } from "@logtape/logtape";
 import { type FastifyReply, type FastifyRequest } from "fastify";
@@ -111,6 +112,7 @@ import {
   beforeQuery,
   finishRunAborted,
   finishRunWithError,
+  runProgressRecorder,
 } from "./qgrid-run-lifecycle";
 import {
   buildAndValidateStrictOutputSchema,
@@ -260,6 +262,27 @@ function grokOAuthBadRequest(cause: unknown): never {
   }
 
   throw cause;
+}
+
+// The usage view waits this long for a lookup refresh; a slower one still fills the cache.
+const GROK_USAGE_REFRESH_WAIT_MS = 3_000;
+
+async function refreshGrokUsage(tokenId: number): Promise<void> {
+  const refresh = QgridDispatcher.grokDispatcher?.refreshUsage?.(tokenId);
+
+  if (!refresh) return;
+
+  const settled = (async () => {
+    try {
+      await refresh;
+    } catch (e) {
+      logger.warn(
+        `grok usage refresh failed for token ${tokenId}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  })();
+
+  await Promise.race([settled, sleep(GROK_USAGE_REFRESH_WAIT_MS)]);
 }
 
 function grokTokenSnapshot(tokenId: number): GrokTokenStateSnapshot | undefined {
@@ -1213,7 +1236,13 @@ class QgridFrameClass extends BaseFrameClass {
       let result: QueryOutput;
 
       try {
-        result = await QgridDispatcher.query(resolvedArgs, disconnect.signal);
+        result = await QgridDispatcher.query(
+          {
+            ...resolvedArgs,
+            onProgress: runProgressRecorder(requestLogId, stepIndex, resolvedArgs),
+          },
+          disconnect.signal,
+        );
       } catch (e) {
         const completedDriver = completedDriverFromImageFailure(e, resolvedArgs.serviceTier);
 
@@ -1319,7 +1348,12 @@ class QgridFrameClass extends BaseFrameClass {
 
     try {
       await QgridDispatcher.queryStream(
-        args,
+        runInfo
+          ? {
+              ...args,
+              onProgress: runProgressRecorder(runInfo.requestLogId, runInfo.stepIndex, args),
+            }
+          : args,
         {
           onDelta: (text) => {
             if (!clientClosed && !sse.closed) sse.publish("delta", { text });
@@ -1893,7 +1927,12 @@ class QgridFrameClass extends BaseFrameClass {
         : await media.generateImages(request);
 
       const decoded = decodeGrokImages(dispatched.result);
-      const cost = grokImageCost(id, decoded.images.length, decoded.costInUsdTicks);
+
+      const cost = grokImageCost(id, decoded.images.length, decoded.costInUsdTicks, {
+        resolution: input.resolution,
+        quality: input.quality,
+        inputImageCount: refs.length,
+      });
 
       const output: GenerateImagesOutput = {
         model: route,
@@ -2289,7 +2328,9 @@ class QgridFrameClass extends BaseFrameClass {
     }
 
     if (entry.provider === "grok") {
-      // Cached billing from the dispatcher's prefetch; usage never calls xAI itself.
+      // Refresh stale lookups (60 s cache) so a token without traffic still reports usage.
+      if (entry.active) await refreshGrokUsage(entry.id);
+
       const snapshot = entry.active ? grokTokenSnapshot(entry.id) : undefined;
       const billing = snapshot?.lastBilling;
       const storedTier = StoredGrokCredentials.safeParse(entry.credentials).data?.subscriptionTier;

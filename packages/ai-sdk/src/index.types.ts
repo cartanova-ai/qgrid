@@ -29,8 +29,7 @@ type QgridCommonProviderConfig = {
 export type QgridImageModel =
   | "openai/gpt-image-2"
   | "grok/grok-imagine-image"
-  | "grok/grok-imagine-image-2.0"
-  | "grok/grok-imagine-image-quality";
+  | "grok/grok-imagine-image-2.0";
 
 /** Grok video generation model ids (xAI subscription; not yet wired to a provider factory). */
 export type QgridVideoModel =
@@ -242,6 +241,7 @@ export type QgridXaiProviderOptions = z.infer<typeof qgridXaiProviderOptionsSche
 export type QgridSupportedModel =
   | "openai/gpt-6-astra"
   | "openai/gpt-6.1-sol"
+  | "openai/gpt-6.1-terra"
   | "openai/gpt-6-sol"
   | "openai/gpt-6-luna"
   | "openai/gpt-5.6-sol"
@@ -485,18 +485,16 @@ export type QgridLoggerConfig = {
    */
   tokenName?: string;
   /**
-   * Fallback timeout for runs that receive onStart but never receive onFinish.
-   * AI SDK TelemetryIntegration does not expose an error hook, so provider
-   * failures before a final step can otherwise leave request logs running.
+   * Safety-net timeout for runs that start but never report an end, error, or
+   * abort, for example a streamText result whose stream is never consumed.
    *
    * Set to 0 to disable. Defaults to 30 minutes, or the AI SDK total timeout
    * plus a short grace period when one is provided.
    */
   staleRunTimeoutMs?: number;
   /**
-   * Receives qgrid logging failures. When reusing one logger integration across
-   * overlapping AI SDK calls, pass a unique `metadata.qgridRunId` per call so
-   * lifecycle events can be attributed to the correct run.
+   * Receives qgrid logging failures. One logger can serve concurrent AI SDK
+   * calls; each call is logged as its own run.
    */
   onLogError?: (error: Error) => void;
 };
