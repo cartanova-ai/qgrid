@@ -702,6 +702,7 @@ Content-Type: application/json
     "audio": "AUDIO",
     "mediaType": "MEDIATYPE",
     "language": "LANGUAGE",
+    "prompt": "PROMPT",
     "tokenName": "TOKENNAME",
     "projectName": "PROJECTNAME",
     "logger": false
@@ -720,6 +721,7 @@ Content-Type: application/json
     "voice": "VOICE",
     "language": "LANGUAGE",
     "format": "mp3",
+    "instructions": "INSTRUCTIONS",
     "tokenName": "TOKENNAME",
     "projectName": "PROJECTNAME",
     "logger": false
