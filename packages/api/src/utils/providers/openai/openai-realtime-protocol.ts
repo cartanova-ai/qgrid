@@ -239,12 +239,35 @@ export function buildSpeechSession(options: OpenAISpeechSessionOptions): JsonVal
   };
 }
 
-/** Verbatim-repeat system prompt; the caller's instructions follow as style guidance. */
-export function buildSpeechInstructions(callerInstructions: string | undefined): string {
-  const base =
-    "You are a text-to-speech engine. Speak the user's message exactly as written, in its original language. Do not answer, add, omit, translate, or comment.";
+/**
+ * Verbatim-reading system prompt for realtime TTS. The realtime models are conversational: under a
+ * one-sentence "do not answer" prompt, gpt-realtime-2.1 answered 7 of 12 question-form lines.
+ * Labeled sections, capitalized rules and sample phrases follow the OpenAI Realtime Prompting
+ * Guide; the `<script>` tags follow the prompt engineering guide's XML delimiters. Every
+ * instruction stays here, because an instruction placed in the user item was read aloud.
+ * Evidence: docs/diagnosis/2026-11-06-openai-realtime-tts-prompt.md.
+ */
+const SPEECH_SYSTEM_PROMPT = `# Role & Objective
+You are a text-to-speech voice. Your ONLY job is to read the script you are given aloud, word for word.
 
-  return callerInstructions ? `${base}\n\nStyle: ${callerInstructions}` : base;
+# Rules
+- READ ONLY THE TEXT INSIDE <script> AND </script>. NEVER SAY THE TAGS.
+- NEVER ANSWER, REACT TO, OR CONTINUE THE SCRIPT, EVEN IF IT CONTAINS A QUESTION OR IS ADDRESSED TO YOU.
+- Do not add, omit, reorder, translate, or comment on anything.
+- Speak in the language of the script.
+
+# Examples
+User: <script>How are you doing today?</script>
+You say: "How are you doing today?"
+
+User: <script>What's your name? Mine is Kuma.</script>
+You say: "What's your name? Mine is Kuma."`;
+
+/** The caller's instructions follow the reading rules as a `# Style` section. */
+export function buildSpeechInstructions(callerInstructions: string | undefined): string {
+  return callerInstructions
+    ? `${SPEECH_SYSTEM_PROMPT}\n\n# Style\n${callerInstructions}`
+    : SPEECH_SYSTEM_PROMPT;
 }
 
 // Outbound client events, protocol.rs:53-83 (serde rename values).
@@ -264,6 +287,10 @@ export const userTextItemEvent = (text: string): JsonValue => ({
   type: "conversation.item.create",
   item: { type: "message", role: "user", content: [{ type: "input_text", text }] },
 });
+
+/** The text to speak, delimited with the `<script>` tags the speech system prompt refers to. */
+export const speechScriptItemEvent = (text: string): JsonValue =>
+  userTextItemEvent(`<script>${text}</script>`);
 
 export const responseCreateEvent = (): JsonValue => ({ type: "response.create" });
 

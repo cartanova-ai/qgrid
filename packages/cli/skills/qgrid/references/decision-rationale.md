@@ -138,10 +138,11 @@ Key decisions:
 
 ## OpenAI Realtime Voice
 
-Sources: `docs/plans/2026-10-17-openai-realtime-audio-plan.md`, `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`, `packages/api/src/utils/providers/openai/openai-realtime-protocol.ts`.
+Sources: `docs/plans/2026-10-17-openai-realtime-audio-plan.md`, `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`, `docs/diagnosis/2026-11-06-openai-realtime-tts-prompt.md`, `packages/api/src/utils/providers/openai/openai-realtime-protocol.ts`.
 
 - STT mirrors Codex’s subscription path (`/realtime/calls` + sideband) rather than the simpler ChatGPT-web `/backend-api/transcribe`: the latter was removed from Codex (PR #16114), ignores model/language/prompt, and retains uploads for 30 days.
 - TTS uses the direct realtime socket, which Codex treats as API-key-only, because the `/calls` sideband carries no audio and qgrid has no RTP stack. It is the one deliberate non-Codex path; a 401/403 there means the path is gated and must fail, not fall back.
+- The TTS prompt is a sectioned system prompt (role, capitalized never-answer rules, sample exchanges) with only the text, inside `<script>` tags, as the user item. The realtime models are conversational: the original one-sentence prompt let `gpt-realtime-2.1` answer 7 of 12 question-form lines, and a read-aloud instruction placed in the user item was spoken by both models. The structure follows the OpenAI Realtime Prompting Guide and the prompt engineering guide's XML delimiters; the wording is qgrid's own.
 - No image-model ids were added for GPT-Image-2.5: the subscription Images route ignores the `model` field (a nonsense id returns 200 with identical usage, hosted tools echo `gpt-image-2-codex`). Re-check by sending a nonsense id; a 400 means selection became real.
 - Model ids are candidates pruned by the live matrix, not promises from the catalog: raw probes passed, but only the production client through qgrid decides what ships.
 

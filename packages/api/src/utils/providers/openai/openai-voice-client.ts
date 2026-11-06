@@ -32,10 +32,10 @@ import {
   responseCreateEvent,
   responseDoneEvent,
   sessionUpdateEvent,
+  speechScriptItemEvent,
   transcriptionCompletedEvent,
   transcriptionFailedEvent,
   UnsupportedAudioError,
-  userTextItemEvent,
   wrapPcmAsWav,
 } from "./openai-realtime-protocol";
 
@@ -536,7 +536,7 @@ export class OpenAIVoiceClient {
       });
 
       await sendJson(socket, sessionUpdateEvent(session));
-      await sendJson(socket, userTextItemEvent(request.text));
+      await sendJson(socket, speechScriptItemEvent(request.text));
       await sendJson(socket, responseCreateEvent());
       const result = await this.awaitSpeech(records.next);
       socket.close(1000, "done");

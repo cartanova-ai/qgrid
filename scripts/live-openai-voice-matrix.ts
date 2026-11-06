@@ -48,6 +48,9 @@ const TTS_TEXTS = {
     "큐그리드는 구독 토큰을 여러 공급자에 분배하는 프록시입니다. It routes OpenAI, Anthropic and Grok traffic through one API, logs every request, and tracks quota thresholds so a team never hits a hard limit mid-sprint. 오늘 배포는 오후 3시에 시작합니다.",
   symbols:
     "Build 42 finished in 3.5 seconds; see https://qgrid.dev/docs and the SDK README for the API.",
+  // A conversational model tends to answer a line addressed to the listener instead of reading it.
+  question:
+    "I'm Sasha, really nice to meet you. Son is such an adorable name for a poodle, does it mean something special?",
 };
 
 function words(text: string): string[] {
@@ -249,6 +252,7 @@ async function main(): Promise<void> {
     await ttsCase(model, "short", TTS_TEXTS.short);
     await ttsCase(model, "mixed-ko-en", TTS_TEXTS.mixed);
     await ttsCase(model, "digits-url", TTS_TEXTS.symbols);
+    await ttsCase(model, "question", TTS_TEXTS.question);
 
     for (const voice of OPENAI_REALTIME_VOICES)
       await ttsCase(model, `voice-${voice}`, TTS_TEXTS.short, voice);

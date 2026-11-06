@@ -514,8 +514,8 @@ const speech = await generateSpeech({
 | Speech | `voice`(기본 `marin`; Codex v2 목록 `alloy ash ballad coral echo sage shimmer verse marin cedar`, 그 외는 HTTP 400), `instructions` / `openai.instructions`(원문 그대로 읽기 지시문 뒤에 붙는 스타일 안내) | `outputFormat`은 `wav`(기본, PCM16 24 kHz) 또는 `pcm`; 그 외 값은 `@ai-sdk/openai`가 `mp3`로 되돌리듯 경고와 함께 `wav`로 바뀝니다 | `language`, `speed`, `openai.speed` |
 
 - 음성 인식은 먼저 Codex realtime call에서 25초 예산으로 실행됩니다(call은 생성 약 30초 뒤 정리됨). 그 안에 전사가 오지 않으면 서버가 직접 realtime 전사 소켓으로 1회 재시도합니다(최대 60초). 7 MiB 인라인 제한(24 kHz PCM 약 2.5분)은 보통 첫 경로에서 몇 초 안에 끝납니다.
-- 음성 합성은 TTS 모델이 아니라 텍스트를 반복하는 대화 모델입니다. 원문 그대로 읽는지는 짧은 영어 문장에서만 검증했고, 모델이 실제로 말한 transcript를 요청 로그에 함께 남겨 비교할 수 있습니다.
-- 모델별 동작은 서버 저장소의 `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`에 기록되어 있습니다. 2026-10-17 기준 알려진 한계: `gpt-live-transcribe`, `gpt-realtime-whisper`는 60초 클립의 절반 정도만 반환하므로 짧은 발화에 쓰세요. `gpt-realtime-whisper`는 `openai.prompt`를 거부합니다(서버가 업스트림 호출 전에 HTTP 400). `whisper-1`은 `openai.prompt`를 받지만 무시합니다. 음성 합성은 `gpt-realtime-2.1-mini`가 모든 테스트 문장을 그대로 읽었고(13/13), `gpt-realtime-2.1`은 1회 의역(12/13), `gpt-realtime-1.5`는 텍스트를 읽지 않고 답변하는 경우가 잦았습니다(6/13). 정확성이 중요하면 로그의 transcript를 입력과 비교하세요.
+- 음성 합성은 TTS 모델이 아니라 텍스트를 읽는 대화 모델입니다. qgrid는 `<script>` 태그 안의 텍스트만 읽고 답하지 말라고 지시합니다. 원문 그대로 읽는지는 짧은 영어 문장과 질문형 영어 캐릭터 대사에서 검증했습니다. 모델이 실제로 말한 transcript를 요청 로그에 함께 남겨 비교할 수 있지만, 한영 혼합 텍스트에서는 transcript가 일치해도 영어 음성을 알아듣기 어려운 경우가 있었습니다.
+- 모델별 동작은 서버 저장소의 `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`에 기록되어 있습니다. 2026-10-17 기준 알려진 한계: `gpt-live-transcribe`, `gpt-realtime-whisper`는 60초 클립의 절반 정도만 반환하므로 짧은 발화에 쓰세요. `gpt-realtime-whisper`는 `openai.prompt`를 거부합니다(서버가 업스트림 호출 전에 HTTP 400). `whisper-1`은 `openai.prompt`를 받지만 무시합니다. 음성 합성은 `gpt-realtime-2.1-mini`가 모든 테스트 문장을 그대로 읽었고(13/13), `gpt-realtime-2.1`은 1회 의역(12/13), `gpt-realtime-1.5`는 텍스트를 읽지 않고 답변하는 경우가 잦았습니다(6/13). 2026-11-06에는 현재 프롬프트로 `gpt-realtime-2.1`과 `gpt-realtime-2.1-mini` 모두 질문형 캐릭터 대사 12/12를 그대로 읽었습니다(이전 프롬프트에서는 `gpt-realtime-2.1`이 7/12를 답변). `gpt-realtime-1.5`는 다시 측정하지 않았습니다. 정확성이 중요하면 로그의 transcript를 입력과 비교하세요.
 
 ## Telemetry Logger
 

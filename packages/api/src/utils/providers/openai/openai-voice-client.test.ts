@@ -507,13 +507,14 @@ describe("OpenAIVoiceClient.speak", () => {
     ]);
     const session = events[0]?.session as { audio: { output: { voice: string } }; instructions: string };
     expect(session.audio.output.voice).toBe("cedar");
-    expect(session.instructions).toMatch(/Style: warm$/);
+    expect(session.instructions).toContain("NEVER ANSWER");
+    expect(session.instructions).toMatch(/# Style\nwarm$/);
     expect(events[1]).toEqual({
       type: "conversation.item.create",
       item: {
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text: "Hello from qgrid." }],
+        content: [{ type: "input_text", text: "<script>Hello from qgrid.</script>" }],
       },
     });
 
