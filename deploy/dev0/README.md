@@ -63,6 +63,11 @@ stack during an operator-controlled update; the repository's `stack.yml` is not
 changed by this procedure. Keep one API replica owning the retained sessions,
 the existing host network, and Caddy authentication.
 
+Pi runs inside the API process (official `@ai-sdk/harness-pi`); the sandbox
+container is only its remote shell and filesystem. There is no relay, no
+published container port and no HMAC secret. The API only needs the Docker
+socket and the sandbox image.
+
 The 2026-11-08 dev0 inspection found `/var/run/docker.sock` owned by `root:983`
 with mode 660, while the API runs as `node` (UID 1000). Merge this example into
 `services.api`, preserving its existing volumes, secret, and other settings:
@@ -75,17 +80,14 @@ services:
     group_add: ["983"]
     environment:
       QGRID_AGENTS_ENABLED: "true"
-      QGRID_AGENTS_SECRET: "<STABLE_RANDOM_AGENTS_SECRET>"
       QGRID_AGENTS_SANDBOX_IMAGE: "ghcr.io/cartanova-ai/qgrid-sandbox-pi:<ver>"
 ```
 
-Use the existing secret-management procedure for the real secret value; do not
-commit it in YAML. `/run/secrets/qgrid-env` overrides process environment, and
-stored `qgrid.agents.*` DB settings override environment settings. Resolve any
-conflicting values before restarting. Preserve the same HMAC secret while
-sessions are retained. Verify that the deployed API process actually has socket
-access and supplementary GID 983. Mount the socket only in the API container;
-the provider creates sandboxes without host mounts.
+`/run/secrets/qgrid-env` overrides process environment, and stored
+`qgrid.agents.*` DB settings override environment settings. Resolve any
+conflicting values before restarting. Verify that the deployed API process
+actually has socket access and supplementary GID 983. Mount the socket only in
+the API container; the provider creates sandboxes without host mounts.
 
 Pull the matching published sandbox image on dev0 before startup; the provider
 does not pull it automatically:
@@ -95,20 +97,12 @@ docker pull ghcr.io/cartanova-ai/qgrid-sandbox-pi:<ver>
 ```
 
 The runtime creates the dedicated `qgrid-agents` bridge (`172.30.0.0/24`) with
-interface `br-qgrid-agents`. Relay listens on its gateway `172.30.0.1:44901` and
-loopback. Dev0's existing ufw default deny already blocks incoming traffic from
-this new bridge; add only the relay allow rule:
-
-```sh
-sudo ufw allow in on br-qgrid-agents to 172.30.0.1 port 44901 proto tcp
-```
-
-No extra deny rule is needed under that existing firewall policy. Do not put
-sandboxes on docker0: dev0 permits host access from docker0. Preserve the API's
-`172.19.0.1:44900` binding and block sandbox access to it and other host services.
-Linux host-local traffic traverses INPUT; DOCKER-USER rules alone do not protect
-those services. Internet egress for GitHub and package installation remains
-necessary. If the subnet or relay port changes, update the allow rule to match.
+interface `br-qgrid-agents`. Sandboxes never need to reach the host, and dev0's
+existing ufw default deny already blocks incoming traffic from this bridge, so
+**no ufw rule is required**. Do not put sandboxes on docker0: dev0 permits host
+access from docker0. Preserve the API's `172.19.0.1:44900` binding. Linux
+host-local traffic traverses INPUT; DOCKER-USER rules alone do not protect those
+services. Internet egress for GitHub and package installation remains necessary.
 
 Deploy the prepared stack using the normal operator procedure, then check the
 Agents-specific health result:
@@ -118,14 +112,18 @@ curl -fsS https://qgrid.cartanova.ai/api/qgrid/health | jq '.agents'
 ```
 
 Require `enabled: true` and `ready: true`. Overall API health can be ready even
-when Agents is unavailable. Startup creates a temporary probe container: relay
-TCP must be reachable, while the API port and default blocked ports 5432/6379
-must be unreachable through the host alias, bridge gateway, and configured API
-address. The default `QGRID_AGENTS_ISOLATION_CHECK=enforce` leaves Agents
-unavailable on failure and reports `agents.reason`; fix the reported socket,
-image, configuration, or network problem before retrying. `warn` is for local
-development, not dev0. The probe does not install firewall rules, and the current
-`deploy.sh` does not check Agents firewall configuration.
+when Agents is unavailable. Startup creates a temporary probe container: the API
+port and default blocked ports 5432/6379 must be unreachable through the bridge
+gateway and the configured API address. The default
+`QGRID_AGENTS_ISOLATION_CHECK=enforce` leaves Agents unavailable on failure and
+reports `agents.reason`; fix the reported socket, image, configuration, or
+network problem before retrying. `warn` is for local development, not dev0. The
+probe does not install firewall rules, and `deploy.sh` does not check Agents
+firewall configuration.
+
+Deploying while a turn is running fails that turn with `server_restart` (the
+caller re-prompts; the conversation is kept). Prefer deploying when
+`health().agents.sessions` shows no running work.
 
 Keep the default 20 GiB free-space guard unless an operator deliberately changes
 it. The runner checks Docker data-root space, with a container `df` fallback when

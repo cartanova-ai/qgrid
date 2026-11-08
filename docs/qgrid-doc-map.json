@@ -22,7 +22,6 @@
         "packages/api/src/utils/agents/workspace.ts",
         "packages/api/src/application/setting/setting.constant.ts",
         "deploy/sandbox-pi/Dockerfile",
-        "deploy/sandbox-pi/bridge/bridge.mjs",
         "packages/api/scripts/agents/smoke.ts",
         "packages/api/src/utils/agents/credential-store.ts"
       ],
