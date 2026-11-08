@@ -934,14 +934,15 @@ try {
     );
     const start = Date.now();
 
-    while ((await containerState(id)) !== "exited" && Date.now() - start < 50_000)
+    // The runner's idle sweeper runs every 60 s, so a 30 s TTL stops the container within ~90 s.
+    while ((await containerState(id)) !== "exited" && Date.now() - start < 100_000)
       await sleep(1000);
     metrics.idleMs = Date.now() - start;
     metrics.containerAfterIdle = await containerState(id);
     assert.equal(
       metrics.containerAfterIdle,
       "exited",
-      "Container did not stop after the configured 30 s TTL",
+      "Container did not stop within the 30 s TTL plus the 60 s sweep interval",
     );
 
     const turnId = await startTurn(
