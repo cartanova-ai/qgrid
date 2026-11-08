@@ -23,6 +23,9 @@ RUN set -eu; \
 WORKDIR /opt/qgrid-pi-bridge
 COPY bridge/package*.json ./
 RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
+# node-compile-cache is written to /tmp as root during install; drop it so sandbox /tmp starts clean.
+# Kept as its own layer so the npm layer cache stays valid.
+RUN rm -rf /tmp/node-compile-cache
 COPY bridge/bridge.mjs ./bridge.mjs
 RUN mkdir -p /workspace /home/node/.pi-session && chown node:node /workspace /home/node/.pi-session
 
