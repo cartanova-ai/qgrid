@@ -127,7 +127,7 @@ catalog:
   "@vitest/coverage-v8": ^5.0.5
   "@xyflow/react": ^12.12.0
   agentation: ^3.1.2
-  ai: ^7.0.0
+  ai: 7.0.162
   autoprefixer: ^10.6.1
   axios: ^1.20.0
   bcrypt: ^6.0.0
@@ -251,14 +251,19 @@ allowBuilds:
   "@parcel/watcher": true
   "@swc/core": true
   bcrypt: true
+  cpu-features: false
   esbuild: true
   libpq: true
   msw: false
+  protobufjs: false
   sharp: true
   sodium-native: true
+  ssh2: false
   unrs-resolver: true
 
 overrides:
+  "@ai-sdk/provider": 4.0.35
+  "@ai-sdk/provider-utils": 5.0.74
   axios@<0.30.0: ">=0.30.0"
   axios@<0.30.2: ">=0.30.2"
   axios@>=0.8.1 <0.28.0: ">=0.28.0"

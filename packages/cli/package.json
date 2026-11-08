@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "catalog:",
+    "@ai-sdk/harness": "1.0.173",
     "@ai-sdk/provider": "catalog:",
     "@ai-sdk/provider-utils": "catalog:",
     "@better-auth/core": "catalog:",
@@ -38,6 +39,7 @@
     "ai": "catalog:",
     "better-auth": "catalog:",
     "commander": "^13.0.0",
+    "dockerode": "^5.0.1",
     "dotenv": "catalog:",
     "fastify": "catalog:",
     "ioredis": "catalog:",
@@ -47,12 +49,14 @@
     "pngjs": "^7.0.0",
     "sonamu": "0.13.6",
     "typescript": "catalog:",
-    "ws": "8.20.0",
+    "ws": "8.21.0",
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@types/dockerode": "^4.0.2",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
+    "@types/ws": "catalog:",
     "semver": "catalog:",
     "tsdown": "catalog:",
     "yaml": "^2.8.2"
