@@ -16,7 +16,11 @@ import {
   type AgentSessionRow as AgentSessionBase,
   type AgentTurnRow as AgentTurnBase,
 } from "../../application/agent/agent.model";
-import { type AgentPendingActions, type AgentTools } from "../../application/agent/agent.types";
+import {
+  type AgentPendingActions,
+  type AgentTools,
+  type AgentWorkspace,
+} from "../../application/agent/agent.types";
 import { calculateCostUsd } from "../providers/common/model-cost";
 import { jsonValueSchema, type JsonValue } from "../providers/common/provider-types";
 import { type OpenAIDispatcher } from "../providers/openai/openai-dispatcher";
@@ -33,6 +37,12 @@ import {
   type RelayCallStart,
   type RelaySessionStore,
 } from "./relay";
+import {
+  prepareWorkspace,
+  readWorkspaceDiff,
+  redactAgentValue,
+  WORKSPACE_DIFF_MAX_BYTES,
+} from "./workspace";
 
 const logger = getLogger(["qgrid", "agents", "runner"]);
 
@@ -69,6 +79,8 @@ export type CreateAgentSession = {
   tokenId?: number;
   idleTtlSec?: number;
   retainSec?: number;
+  workspace?: AgentWorkspace;
+  env?: Record<string, string>;
 };
 
 type PiAgent = HarnessAgent<ReturnType<typeof createSandboxPi>, ToolSet>;
@@ -128,12 +140,13 @@ export class AgentSessionRunner implements RelaySessionStore {
   private readonly locks = new Map<string, Promise<void>>();
   private readonly calls = new Map<
     string,
-    { turnId: number; model: string; done: Promise<void>; resolve: () => void }
+    { sessionId: string; turnId: number; model: string; done: Promise<void>; resolve: () => void }
   >();
   private relay?: AgentsRelay;
   private sweeper?: ReturnType<typeof setInterval>;
   private shuttingDown = false;
   private count = 0;
+  private readonly secrets = new Map<string, string[]>();
 
   constructor(private readonly options: AgentSessionRunnerOptions) {}
 
@@ -161,7 +174,8 @@ export class AgentSessionRunner implements RelaySessionStore {
   }
 
   async create(input: CreateAgentSession): Promise<AgentSessionBase> {
-    z.enum(PI_MODELS).parse(input.model);
+    if (!z.enum(PI_MODELS).safeParse(input.model).success)
+      throw new AgentStateError(400, "unsupported_agent_model");
     const names = new Set<string>();
 
     for (const definition of input.tools ?? []) {
@@ -185,6 +199,12 @@ export class AgentSessionRunner implements RelaySessionStore {
       );
 
       const id = randomUUID();
+      this.secrets.set(
+        id,
+        [...new Set([...Object.values(input.env ?? {}), input.workspace?.git?.token ?? ""])]
+          .filter(Boolean)
+          .toSorted((a, b) => b.length - a.length),
+      );
       const now = new Date();
       await AgentModel.createSession({
         id,
@@ -213,7 +233,13 @@ export class AgentSessionRunner implements RelaySessionStore {
 
       try {
         const row = await AgentModel.getSession(id);
-        const sandbox = await this.options.provider.createSession({ sessionId: id });
+
+        const sandbox = await this.options.provider.createSession({
+          sessionId: id,
+          env: input.env,
+        });
+
+        await prepareWorkspace(sandbox, input.workspace);
         const handle = this.newHandle(row, sandbox);
         this.handles.set(id, handle);
         handle.session = await handle.agent.createSession({
@@ -239,6 +265,11 @@ export class AgentSessionRunner implements RelaySessionStore {
       if (this.shuttingDown) throw new AgentStateError(503, "agents_shutting_down");
       let row = await AgentModel.getSession(sessionId);
 
+      if (row.status === "running" || row.status === "waiting_action")
+        throw new AgentStateError(409, "session_busy");
+
+      await this.loadSecrets(row);
+
       if (row.status === "stopped") {
         try {
           await this.attach(row, false);
@@ -254,7 +285,17 @@ export class AgentSessionRunner implements RelaySessionStore {
       }
 
       // Claim before allocating a request log; concurrent prompts fail without creating a run.
-      const turn = await AgentModel.beginTurn(sessionId, prompt);
+      // Mask log content without changing the prompt or tool schemas executed by Pi.
+      const turn = await AgentModel.beginTurn(
+        sessionId,
+        prompt,
+        this.redact(sessionId, {
+          user_prompt: prompt,
+          system_prompt: row.instructions,
+          project_name: row.project_name,
+          tools: row.tools,
+        }),
+      );
 
       try {
         await this.checkDisk();
@@ -269,7 +310,7 @@ export class AgentSessionRunner implements RelaySessionStore {
           sessionId,
           turn.id,
           "failed",
-          error instanceof Error ? error.message : "turn_start_failed",
+          this.redact(sessionId, error instanceof Error ? error.message : "turn_start_failed"),
         );
         throw error;
       }
@@ -297,8 +338,66 @@ export class AgentSessionRunner implements RelaySessionStore {
         await this.resumeTurn(await AgentModel.getSession(sessionId), saved.turn);
       }
 
-      return saved;
+      return { ...saved, turn: await AgentModel.getTurn(saved.turn.id) };
     });
+  }
+
+  private redact<T>(sessionId: string, value: T): T {
+    return redactAgentValue(value, this.secrets.get(sessionId) ?? []);
+  }
+
+  private async loadSecrets(row: AgentSessionBase) {
+    if (this.secrets.has(row.id) || row.status === "destroyed" || row.status === "failed") return;
+    const env = await this.options.provider.callerEnvironment(row.id);
+    this.secrets.set(
+      row.id,
+      [...new Set(Object.values(env))].filter(Boolean).toSorted((a, b) => b.length - a.length),
+    );
+  }
+
+  async get(sessionId: string, includeDiff = false) {
+    const session = await AgentModel.getSession(sessionId);
+    await this.loadSecrets(session);
+    const turn = await AgentModel.latestTurn(sessionId);
+    let workspaceDiff: string | undefined;
+
+    if (includeDiff) {
+      if (["creating", "stopped", "destroyed", "failed"].includes(session.status))
+        throw new AgentStateError(409, "workspace_diff_unavailable");
+
+      const sandbox =
+        this.handles.get(sessionId)?.sandbox ??
+        (await this.options.provider.resumeSession({ sessionId }));
+
+      workspaceDiff = new TextDecoder().decode(
+        Buffer.from(this.redact(sessionId, await readWorkspaceDiff(sandbox))).subarray(
+          0,
+          WORKSPACE_DIFF_MAX_BYTES,
+        ),
+        { stream: true },
+      );
+    }
+
+    return {
+      session: {
+        ...session,
+        project_name: this.redact(sessionId, session.project_name),
+        stop_reason: this.redact(sessionId, session.stop_reason),
+      },
+      turn: turn
+        ? {
+            ...turn,
+            pending_actions: turn.pending_actions.map((action) => ({
+              ...action,
+              input: this.redact(sessionId, action.input),
+            })),
+            result_text: this.redact(sessionId, turn.result_text),
+            error_message: this.redact(sessionId, turn.error_message),
+            usage: this.redact(sessionId, turn.usage),
+          }
+        : null,
+      workspaceDiff,
+    };
   }
 
   async cancel(sessionId: string): Promise<void> {
@@ -326,6 +425,7 @@ export class AgentSessionRunner implements RelaySessionStore {
       await this.options.provider.destroyContainer(sessionId);
       await AgentModel.transition(sessionId, [row.status], "destroyed");
       this.forget(sessionId);
+      this.secrets.delete(sessionId);
       this.count--;
     });
   }
@@ -372,7 +472,13 @@ export class AgentSessionRunner implements RelaySessionStore {
 
     await AgentModel.recordCallStart(turnId, `relay:${record.callId}`, record.model);
     const { promise: done, resolve } = Promise.withResolvers<void>();
-    this.calls.set(record.callId, { turnId, model: record.model, done, resolve });
+    this.calls.set(record.callId, {
+      sessionId: record.sessionId,
+      turnId,
+      model: record.model,
+      done,
+      resolve,
+    });
   }
 
   async onCallEnd(record: RelayCallEnd) {
@@ -405,7 +511,7 @@ export class AgentSessionRunner implements RelaySessionStore {
           cost_source: usage ? "pricing_table" : null,
           duration_ms: record.ms,
           finish_reason: usage ? "stop" : null,
-          error: record.error ?? null,
+          error: this.redact(call.sessionId, record.error ?? null),
         },
         record.responseId ? `response:${record.responseId}` : undefined,
       );
@@ -416,8 +522,8 @@ export class AgentSessionRunner implements RelaySessionStore {
   }
 
   onLimitExceeded(sessionId: string, which: string) {
-    void this.abort(sessionId, { status: "failed", reason: `limit_exceeded:${which}` }).catch(
-      (error: Error) => logger.error("Failed to stop limited agent turn: {error}", { error }),
+    void this.abort(sessionId, { status: "failed", reason: `limit_exceeded:${which}` }).catch(() =>
+      logger.error("Failed to stop limited agent turn"),
     );
   }
 
@@ -497,7 +603,7 @@ export class AgentSessionRunner implements RelaySessionStore {
             row.id,
             turn.id,
             "failed",
-            error instanceof Error ? error.message : "recovery_failed",
+            this.redact(row.id, error instanceof Error ? error.message : "recovery_failed"),
             "failed",
           );
         else if (!["failed", "destroyed"].includes(current.status))
@@ -506,9 +612,7 @@ export class AgentSessionRunner implements RelaySessionStore {
     }
 
     this.sweeper = setInterval(() => {
-      void this.sweep().catch((error: Error) =>
-        logger.error("Agent sweep failed: {error}", { error }),
-      );
+      void this.sweep().catch(() => logger.error("Agent sweep failed"));
     }, 60_000);
     this.sweeper.unref();
   }
@@ -523,11 +627,30 @@ export class AgentSessionRunner implements RelaySessionStore {
           await this.options.provider.destroyContainer(row.id);
           await AgentModel.transition(row.id, [row.status], "destroyed");
           this.forget(row.id);
+          this.secrets.delete(row.id);
           this.count--;
         } else if (row.status === "idle" && age >= row.idle_ttl_sec) {
           await this.park(row, "idle");
         } else if (row.status === "running" || row.status === "waiting_action") {
           const turn = await AgentModel.latestTurn(row.id);
+
+          if (
+            turn?.status === "waiting_action" &&
+            turn.pending_actions.some(
+              (action) =>
+                !action.result &&
+                Date.now() - new Date(action.requestedAt).getTime() >=
+                  (row.tools.find((definition) => definition.name === action.toolName)
+                    ?.timeoutSec ?? 600) *
+                    1000,
+            )
+          ) {
+            void this.abort(row.id, { status: "failed", reason: "action_timeout" }).catch(() =>
+              logger.error("Agent action timeout abort failed"),
+            );
+
+            return;
+          }
 
           if (
             turn &&
@@ -645,6 +768,7 @@ export class AgentSessionRunner implements RelaySessionStore {
     abortSignal?: AbortSignal,
   ): Promise<Handle> {
     const sandbox = await this.options.provider.resumeSession({ sessionId: row.id, abortSignal });
+    await this.loadSecrets(row);
     const handle = this.newHandle(row, sandbox);
 
     const fallback = reconstructContinueState({
@@ -716,7 +840,7 @@ export class AgentSessionRunner implements RelaySessionStore {
         row.id,
         turn.id,
         "failed",
-        error instanceof Error ? error.message : "resume_failed",
+        this.redact(row.id, error instanceof Error ? error.message : "resume_failed"),
         "failed",
       );
       throw error;
@@ -741,9 +865,7 @@ export class AgentSessionRunner implements RelaySessionStore {
     handle.timer.unref();
     handle.task = this.consume(row, handle, continuing);
     // API callers get the persisted turn immediately; background failure is persisted below.
-    void handle.task.catch((error: Error) =>
-      logger.error("Agent turn persistence failed: {error}", { error }),
-    );
+    void handle.task.catch(() => logger.error("Agent turn persistence failed"));
   }
 
   private async consume(row: AgentSessionBase, handle: Handle, continuing: boolean) {
@@ -801,14 +923,17 @@ export class AgentSessionRunner implements RelaySessionStore {
               type: "tool_call",
               tool_call_id: part.toolCallId,
               tool_name: part.toolName,
-              tool_args: JSON.stringify(part.input),
+              tool_args: JSON.stringify(this.redact(row.id, part.input)),
             },
           });
         } else if (part.type === "tool-result" || part.type === "tool-error") {
           await AgentModel.recordToolResult(turn.id, {
             toolCallId: part.toolCallId,
-            output: part.type === "tool-result" ? jsonValueSchema.parse(part.output) : undefined,
-            error: part.type === "tool-error" ? String(part.error) : undefined,
+            output:
+              part.type === "tool-result"
+                ? this.redact(row.id, jsonValueSchema.parse(part.output))
+                : undefined,
+            error: part.type === "tool-error" ? this.redact(row.id, String(part.error)) : undefined,
             seq: handle.pendingBoundary ? undefined : seq,
             truncate: !row.tools.some((definition) => definition.name === part.toolName),
           });
@@ -821,7 +946,9 @@ export class AgentSessionRunner implements RelaySessionStore {
           handle.text += part.text;
 
           if (seq !== undefined && !handle.pendingBoundary)
-            await AgentModel.recordEvent(turn.id, seq, { result_text: handle.text });
+            await AgentModel.recordEvent(turn.id, seq, {
+              result_text: this.redact(row.id, handle.text),
+            });
         } else if (part.type === "error") {
           throw new Error("agent_stream_failed", { cause: part.error });
         } else if (seq !== undefined && !handle.pendingBoundary) {
@@ -842,7 +969,9 @@ export class AgentSessionRunner implements RelaySessionStore {
           const state = await session.suspendTurn();
           handle.session = undefined;
           const pending = this.pendingActions(row, state);
-          await AgentModel.recordEvent(turn.id, undefined, { result_text: handle.text });
+          await AgentModel.recordEvent(turn.id, undefined, {
+            result_text: this.redact(row.id, handle.text),
+          });
           await AgentModel.suspend(
             row.id,
             turn.id,
@@ -863,7 +992,10 @@ export class AgentSessionRunner implements RelaySessionStore {
         if (handle.suspending || handle.ended || handle.stop) return;
         await this.finish(row.id, handle, {
           status: "failed",
-          reason: error instanceof Error ? error.message : "agent_stream_failed",
+          reason: this.redact(
+            row.id,
+            error instanceof Error ? error.message : "agent_stream_failed",
+          ),
         });
       });
     }
@@ -885,7 +1017,7 @@ export class AgentSessionRunner implements RelaySessionStore {
     return (state.pendingToolResults ?? []).map((action) => ({
       toolCallId: action.toolCallId,
       toolName: action.toolName,
-      input: jsonValueSchema.parse(JSON.parse(action.input)),
+      input: this.redact(row.id, jsonValueSchema.parse(JSON.parse(action.input))),
       gate: row.tools.find((definition) => definition.name === action.toolName)?.gate ?? "auto",
       requestedAt: new Date().toISOString(),
     }));
@@ -896,8 +1028,10 @@ export class AgentSessionRunner implements RelaySessionStore {
       if (handle.ended) return;
       await AgentModel.recordToolResult(handle.turn!.id, {
         toolCallId: event.toolCallId,
-        output: event.result,
-        error: event.isError ? JSON.stringify(event.result) : undefined,
+        output: this.redact(handle.turn!.session_id, event.result),
+        error: event.isError
+          ? JSON.stringify(this.redact(handle.turn!.session_id, event.result))
+          : undefined,
         // fullStream may filter this echo. Persist delivery before any following cursor.
         truncate: !handle.turn!.pending_actions.some(
           (action) => action.toolCallId === event.toolCallId,
@@ -918,10 +1052,10 @@ export class AgentSessionRunner implements RelaySessionStore {
         handle.checkpoint = {
           lifecycleState: state,
           seq: bridgeCursor.parse(state.data).bridge.lastSeenEventId,
-          resultText: handle.text,
+          resultText: this.redact(id, handle.text),
         };
-      } catch (error) {
-        logger.warn("Could not detach completed agent session: {error}", { error });
+      } catch {
+        logger.warn("Could not detach completed agent session");
       }
 
       handle.session = undefined;

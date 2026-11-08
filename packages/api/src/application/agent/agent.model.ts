@@ -9,7 +9,7 @@ import {
   type AgentTurnSubsetA,
   type AgentTurnStatus,
 } from "../sonamu.generated";
-import { type AgentLifecycleState, type AgentPendingActions } from "./agent.types";
+import { type AgentLifecycleState, type AgentPendingActions, type AgentTools } from "./agent.types";
 
 export type AgentSessionRow = AgentSessionSubsetA;
 
@@ -117,7 +117,16 @@ class AgentModelClass extends BaseModelClass {
   }
 
   @transactional({ dbPreset: "w" })
-  async beginTurn(sessionId: string, prompt: string): Promise<AgentTurnRow> {
+  async beginTurn(
+    sessionId: string,
+    prompt: string,
+    redactedLog?: {
+      user_prompt: string;
+      system_prompt: string;
+      project_name: string | null;
+      tools: AgentTools;
+    },
+  ): Promise<AgentTurnRow> {
     const session = await this.transition(sessionId, ["idle"], "running", {
       last_turn_at: new Date(),
       stop_reason: null,
@@ -131,6 +140,7 @@ class AgentModelClass extends BaseModelClass {
       requested_model_name: session.model,
       project_name: session.project_name,
       tools: session.tools,
+      ...redactedLog,
     });
 
     await RequestLogModel.recordRunProgress(requestLogId, { token_name: session.token_name });

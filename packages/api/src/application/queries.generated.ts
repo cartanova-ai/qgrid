@@ -17,6 +17,7 @@ function createSSRQuery(
   return { modelName, methodName, params, serviceKey, __brand: "SSRQuery" } as SSRQuery;
 }
 
+import { AgentSessionGetInput } from "./agent/agent.types";
 import { RequestLogStepListParams } from "./request-log-step/request-log-step.types";
 import { RequestLogListParams } from "./request-log/request-log.types";
 import { SettingListParams } from "./setting/setting.types";
@@ -131,4 +132,9 @@ export namespace MonitService {
 
   export const monitStats = (): SSRQuery =>
     createSSRQuery("MonitFrame", "monitStats", [], ["Monit", "monitStats"]);
+}
+
+export namespace AgentService {
+  export const sessionGet = (params: AgentSessionGetInput): SSRQuery =>
+    createSSRQuery("AgentFrame", "sessionGet", [params], ["Agent", "sessionGet"]);
 }

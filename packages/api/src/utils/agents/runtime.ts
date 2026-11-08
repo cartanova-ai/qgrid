@@ -5,6 +5,7 @@ import { getLogger } from "@logtape/logtape";
 import Docker from "dockerode";
 import { z } from "zod";
 
+import { AgentStateError } from "../../application/agent/agent.model";
 import { findSettingDef, validateSettingValue } from "../../application/setting/setting.constant";
 import { getSetting } from "../../application/setting/setting.store";
 import { type OpenAIDispatcher } from "../providers/openai/openai-dispatcher";
@@ -132,6 +133,12 @@ type AgentsHealth = {
 
 let health: AgentsHealth = { enabled: false, ready: false, sessions: 0 };
 let runtime: { runner: AgentSessionRunner; relay: AgentsRelay } | undefined;
+
+export function getAgentRunner(): AgentSessionRunner {
+  if (!runtime) throw new AgentStateError(503, "agents_unavailable");
+
+  return runtime.runner;
+}
 
 export async function agentsHealth(): Promise<AgentsHealth> {
   return { ...health, sessions: runtime ? await runtime.runner.sessionCount() : 0 };

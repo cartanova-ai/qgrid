@@ -93,6 +93,21 @@ function mockExec(
 }
 
 describe("DockerSandboxProvider", () => {
+  it("passes caller env to the container and recovers only those values for redaction", async () => {
+    const { provider, docker, container, info } = fixture();
+    const env = { DB_PASSWORD: "private=secret", GH_TOKEN: "git-secret" };
+    await provider.createSession({ sessionId: "one", env });
+    expect(docker.createContainer).toHaveBeenCalledWith(expect.objectContaining({
+      Env: ["DB_PASSWORD=private=secret", "GH_TOKEN=git-secret"],
+      Labels: { "qgrid.agents.session": "one", "qgrid.agents.env-keys": '["DB_PASSWORD","GH_TOKEN"]' },
+    }));
+    container.inspect.mockResolvedValue({ ...info, Config: { ...info.Config,
+      Labels: { ...info.Config.Labels, "qgrid.agents.env-keys": '["DB_PASSWORD","GH_TOKEN"]' },
+      Env: ["PATH=/usr/bin", "DB_PASSWORD=private=secret", "GH_TOKEN=git-secret"],
+    } });
+    expect(await provider.callerEnvironment("one")).toEqual(env);
+  });
+
   it("creates the dedicated bridge and applies the sandbox isolation options", async () => {
     const { provider, docker, container, network, options } = fixture();
     network.inspect.mockRejectedValueOnce(Object.assign(new Error("missing"), { statusCode: 404 }));
@@ -110,8 +125,9 @@ describe("DockerSandboxProvider", () => {
       name: "qgrid-agents-one",
       Image: options.image,
       User: "node",
+      Env: [],
       ExposedPorts: { "8787/tcp": {} },
-      Labels: { "qgrid.agents.session": "one" },
+      Labels: { "qgrid.agents.session": "one", "qgrid.agents.env-keys": "[]" },
       HostConfig: {
         NetworkMode: "qgrid-agents",
         ExtraHosts: ["host.docker.internal:172.30.0.1"],

@@ -71,6 +71,18 @@ describe("AgentModel PostgreSQL lifecycle", () => {
     if (tokens.length) await wdb.from("tokens").whereIn("id", tokens.splice(0)).delete();
   });
 
+  it("writes redacted request-log content without changing the executable prompt", async () => {
+    const session = await fixture();
+    const turn = await AgentModel.beginTurn(session.id, "Use secret-value", {
+      user_prompt: "Use [REDACTED]", system_prompt: "[REDACTED]", project_name: "redacted-project", tools: [],
+    });
+    logs.push(turn.request_log_id!);
+    expect(turn.prompt).toBe("Use secret-value");
+    const log = await AgentModel.getPuri("w").from("request_logs").selectAll().where("id", turn.request_log_id!).first();
+    expect(log).toMatchObject({ user_prompt: "Use [REDACTED]", system_prompt: "[REDACTED]", project_name: "redacted-project" });
+    expect(JSON.stringify(log)).not.toContain("secret-value");
+  });
+
   it("claims only one concurrent prompt and creates no log for the rejected transition", async () => {
     const session = await fixture();
     const outcomes = await Promise.allSettled([

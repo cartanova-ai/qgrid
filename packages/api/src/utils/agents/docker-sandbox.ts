@@ -146,7 +146,9 @@ export class DockerSandboxProvider implements HarnessV1SandboxProvider {
   }
 
   async createSession(
-    options: Parameters<HarnessV1SandboxProvider["createSession"]>[0] = {},
+    options: Parameters<HarnessV1SandboxProvider["createSession"]>[0] & {
+      env?: Record<string, string>;
+    } = {},
   ): Promise<DockerSandboxSession> {
     const { sessionId = randomUUID(), abortSignal } = options;
     const name = containerName(sessionId);
@@ -158,8 +160,12 @@ export class DockerSandboxProvider implements HarnessV1SandboxProvider {
       name,
       Image: this.options.image,
       User: "node",
+      Env: Object.entries(options.env ?? {}).map(([key, value]) => `${key}=${value}`),
       ExposedPorts: { [`${BRIDGE_PORT}/tcp`]: {} },
-      Labels: { [SESSION_LABEL]: sessionId },
+      Labels: {
+        [SESSION_LABEL]: sessionId,
+        "qgrid.agents.env-keys": JSON.stringify(Object.keys(options.env ?? {})),
+      },
       HostConfig: {
         NetworkMode: NETWORK,
         ExtraHosts: [`host.docker.internal:${gateway}`],
@@ -231,6 +237,20 @@ export class DockerSandboxProvider implements HarnessV1SandboxProvider {
     } catch (error) {
       if (!hasStatus(error, 404)) throw error;
     }
+  }
+
+  async callerEnvironment(sessionId: string): Promise<Record<string, string>> {
+    const info = await this.docker.getContainer(containerName(sessionId)).inspect();
+    const keys: string[] = JSON.parse(info.Config.Labels["qgrid.agents.env-keys"] ?? "[]");
+
+    return Object.fromEntries(
+      (info.Config.Env ?? []).flatMap((entry) => {
+        const separator = entry.indexOf("=");
+        const key = entry.slice(0, separator);
+
+        return keys.includes(key) ? [[key, entry.slice(separator + 1)]] : [];
+      }),
+    );
   }
 
   async inspectIp(sessionId: string): Promise<string> {

@@ -8,6 +8,7 @@ import { CachePresets, defineConfig } from "sonamu";
 import { drivers as cacheDrivers, store } from "sonamu/cache";
 import { z } from "zod";
 
+import { sanitizeAgentApiError } from "./application/agent/agent.frame";
 import { monitLogSink } from "./application/monit/log-buffer";
 import {
   rescheduleExpiredTokenReminder,
@@ -302,8 +303,14 @@ export default defineConfig({
 
         log.info("graceful shutdown");
       },
-      onError: (error, _request, reply) => {
-        handleServerError(mapRequestBodyTooLarge(error), reply);
+      onError: (error, request, reply) => {
+        const mapped = mapRequestBodyTooLarge(error);
+        handleServerError(
+          request.url.split("?")[0]?.startsWith("/api/agent/")
+            ? sanitizeAgentApiError(mapped)
+            : mapped,
+          reply,
+        );
       },
     },
   },

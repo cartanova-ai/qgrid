@@ -87,6 +87,7 @@ function fixture(overrides: Partial<AgentSessionRunnerOptions> = {}) {
   const run = vi.fn().mockResolvedValue({ exitCode: 0, stdout: "Filesystem 1024-blocks Used Available Capacity Mounted on\noverlay 104857600 1048576 103809024 1% /\n", stderr: "" });
   const sandbox = { run } as unknown as DockerSandboxSession;
   const provider = {
+    callerEnvironment: vi.fn().mockResolvedValue({}),
     dataRootFreeBytes: vi.fn().mockResolvedValue(100 * 1024 ** 3),
     createSession: vi.fn().mockResolvedValue(sandbox),
     resumeSession: vi.fn().mockResolvedValue(sandbox),
@@ -242,6 +243,75 @@ describe("agent runner recovery", () => {
 });
 
 describe("agent runner turn ownership", () => {
+  it.each(["running", "waiting_action"] as const)("rejects %s prompts before accessing Docker", async (status) => {
+    const db = modelFixture(session({ status }));
+    const { runner, provider } = fixture();
+    provider.callerEnvironment.mockRejectedValue(new Error("Docker unavailable"));
+    await expect(runner.prompt(db.row.id, "Go")).rejects.toMatchObject({ status: 409, code: "session_busy" });
+    expect(provider.callerEnvironment).not.toHaveBeenCalled();
+    expect(db.begin).not.toHaveBeenCalled();
+  });
+
+  it("expires unresolved actions using the tool timeout (600 seconds by default)", async () => {
+    const { result: _result, ...action } = pending();
+    const db = modelFixture(session({ status: "waiting_action" }), turn({ status: "waiting_action", pending_actions: [{ ...action, requestedAt: new Date(Date.now() - 601_000).toISOString() }] }));
+    const { runner } = fixture();
+    harness({ hold: true });
+    await runner.sweep();
+    await vi.waitFor(() => expect(db.finish).toHaveBeenCalled());
+    expect(db.finish).toHaveBeenCalledWith(db.row.id, db.active.id, "failed", "action_timeout", "idle", undefined, expect.anything());
+  });
+
+  it("redacts caller env from prompt logs, tool arguments/results and final text after recovery", async () => {
+    const db = modelFixture();
+    const { runner, provider } = fixture();
+    provider.callerEnvironment.mockResolvedValue({ PASSWORD: "secret-value" });
+    const agent = harness();
+    const events = vi.spyOn(AgentModel, "recordEvent").mockResolvedValue(undefined);
+    const steps = vi.spyOn(AgentModel, "recordStep").mockResolvedValue(22);
+    const results = vi.spyOn(AgentModel, "recordToolResult").mockResolvedValue(undefined);
+    agent.stream.mockResolvedValue({ fullStream: {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "tool-call", toolCallId: "shell-1", toolName: "bash", input: { command: "echo secret-value" }, providerMetadata: { qgrid: { seq: 8 } } };
+        yield { type: "tool-result", toolCallId: "shell-1", toolName: "bash", output: "secret-value", providerMetadata: { qgrid: { seq: 9 } } };
+        yield { type: "text-delta", id: "answer", text: "Result: secret-value", providerMetadata: { qgrid: { seq: 10 } } };
+      },
+    } } as Awaited<ReturnType<HarnessAgent["stream"]>>);
+    await runner.prompt(db.row.id, "Inspect secret-value");
+    await vi.waitFor(() => expect(db.finish).toHaveBeenCalled());
+    expect(db.begin).toHaveBeenCalledWith(db.row.id, "Inspect secret-value", expect.objectContaining({ user_prompt: "Inspect [REDACTED]" }));
+    const written = JSON.stringify([events.mock.calls, steps.mock.calls, results.mock.calls, db.finish.mock.calls]);
+    expect(written).not.toContain("secret-value");
+    expect(written).toContain("[REDACTED]");
+    expect((await runner.get(db.row.id)).turn?.result_text).toBe("Result: [REDACTED]");
+  });
+
+  it("prepares git before starting the bridge and never persists create credentials", async () => {
+    const db = modelFixture();
+    const { runner, provider, run } = fixture({ dispatcher: { selectToken: vi.fn().mockResolvedValue({ tokenId: 9, metadata: { name: "fixture-account" } }) } });
+    const created = vi.spyOn(AgentModel, "createSession").mockImplementation(async (row) => { Object.assign(db.row, row); return db.row; });
+    const agent = harness();
+    const input = { model: db.row.model, instructions: "Use PASSWORD", tools: db.row.tools, env: { PASSWORD: "env-secret" }, workspace: { git: { url: "https://example.com/repo.git", ref: "main", token: "git-secret" } } };
+    const result = await runner.create(input);
+    expect(result.status).toBe("idle");
+    expect(provider.createSession).toHaveBeenCalledWith({ sessionId: result.id, env: input.env });
+    expect(run.mock.invocationCallOrder[0]).toBeLessThan(agent.create.mock.invocationCallOrder[0]!);
+    expect(JSON.stringify(created.mock.calls)).not.toMatch(/env-secret|git-secret/);
+  });
+
+  it("only executes diff on demand and masks it even after a host restart", async () => {
+    const db = modelFixture();
+    const { runner, provider, run } = fixture();
+    provider.callerEnvironment.mockResolvedValue({ PASSWORD: "secret-value" });
+    run.mockResolvedValue({ exitCode: 0, stdout: "+secret-value", stderr: "" });
+    await runner.get(db.row.id);
+    expect(run).not.toHaveBeenCalled();
+    expect((await runner.get(db.row.id, true)).workspaceDiff).toBe("+[REDACTED]");
+    db.row.status = "stopped";
+    await expect(runner.get(db.row.id, true)).rejects.toMatchObject({ status: 409 });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores duplicate text events before appending the next unique delta", async () => {
     const db = modelFixture();
     const { runner } = fixture();

@@ -17,6 +17,19 @@ import {
 import { type AxiosProgressEvent } from "axios";
 import qs from "qs";
 
+import {
+  AgentSessionCreateInput,
+  AgentSessionCreateOutput,
+  AgentSessionPromptInput,
+  AgentSessionPromptOutput,
+  AgentSessionGetInput,
+  AgentSessionGetOutput,
+  AgentActionResultInput,
+  AgentActionResultOutput,
+  AgentSessionInput,
+  AgentSessionStopOutput,
+  AgentSessionDestroyOutput,
+} from "./agent/agent.types";
 import { MonitLogChunk, MonitServerInfo, MonitStats } from "./monit/monit.types";
 import {
   QueryInput,
@@ -1319,6 +1332,107 @@ export namespace MonitService {
         ...options,
       }),
     );
+}
+
+export namespace AgentService {
+  export async function sessionCreate(
+    params: AgentSessionCreateInput,
+  ): Promise<AgentSessionCreateOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/agent/sessionCreate`,
+      data: { params },
+    });
+  }
+
+  export const useSessionCreateMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: AgentSessionCreateInput }) =>
+        AgentService.sessionCreate(params.params),
+    });
+
+  export async function sessionPrompt(
+    params: AgentSessionPromptInput,
+  ): Promise<AgentSessionPromptOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/agent/sessionPrompt`,
+      data: { params },
+    });
+  }
+
+  export const useSessionPromptMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: AgentSessionPromptInput }) =>
+        AgentService.sessionPrompt(params.params),
+    });
+
+  export async function sessionGet(params: AgentSessionGetInput): Promise<AgentSessionGetOutput> {
+    return fetch({
+      method: "GET",
+      url: `/api/agent/sessionGet?${qs.stringify({ params })}`,
+    });
+  }
+
+  export const sessionGetQueryOptions = (params: AgentSessionGetInput) =>
+    queryOptions({
+      queryKey: ["Agent", "sessionGet", params],
+      queryFn: () => sessionGet(params),
+    });
+
+  export const useSessionGet = (params: AgentSessionGetInput, options?: { enabled?: boolean }) =>
+    useRefreshable(
+      useQuery({
+        ...sessionGetQueryOptions(params),
+        ...options,
+      }),
+    );
+
+  export async function actionResult(
+    params: AgentActionResultInput,
+  ): Promise<AgentActionResultOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/agent/actionResult`,
+      data: { params },
+    });
+  }
+
+  export const useActionResultMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: AgentActionResultInput }) =>
+        AgentService.actionResult(params.params),
+    });
+
+  export async function sessionStop(params: AgentSessionInput): Promise<AgentSessionStopOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/agent/sessionStop`,
+      data: { params },
+    });
+  }
+
+  export const useSessionStopMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: AgentSessionInput }) =>
+        AgentService.sessionStop(params.params),
+    });
+
+  export async function sessionDestroy(
+    params: AgentSessionInput,
+  ): Promise<AgentSessionDestroyOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/agent/sessionDestroy`,
+      data: { params },
+    });
+  }
+
+  export const useSessionDestroyMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: AgentSessionInput }) =>
+        AgentService.sessionDestroy(params.params),
+    });
 }
 
 // AsyncIdConfig: RequestLog

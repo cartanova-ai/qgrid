@@ -757,3 +757,96 @@ Content-Type: application/json
 GET {{baseUrl}}/api/monit/monitStats
 	?
 Content-Type: application/json
+
+###
+
+POST {{baseUrl}}/api/agent/sessionCreate
+Content-Type: application/json
+
+{
+  "params": {
+    "model": "MODEL",
+    "instructions": "INSTRUCTIONS",
+    "tools": [
+      {
+        "name": "NAME",
+        "description": "DESCRIPTION",
+        "inputSchema": {
+          "type": "object"
+        },
+        "gate": "auto",
+        "timeoutSec": 0
+      }
+    ],
+    "projectName": "PROJECTNAME",
+    "workspace": {
+      "git": {
+        "url": "URL",
+        "ref": "REF",
+        "token": "TOKEN"
+      },
+      "archive": "ARCHIVE"
+    },
+    "env": {
+      "ENV": "ENV"
+    },
+    "idleTtlSec": 0,
+    "retainSec": 0,
+    "imageProfile": "default"
+  }
+}
+
+###
+
+POST {{baseUrl}}/api/agent/sessionPrompt
+Content-Type: application/json
+
+{
+  "params": {
+    "sessionId": "SESSIONID",
+    "prompt": "PROMPT"
+  }
+}
+
+###
+
+GET {{baseUrl}}/api/agent/sessionGet
+	?params[sessionId]=SESSIONID
+	&params[includeDiff]=false
+Content-Type: application/json
+
+###
+
+POST {{baseUrl}}/api/agent/actionResult
+Content-Type: application/json
+
+{
+  "params": {
+    "sessionId": "SESSIONID",
+    "toolCallId": "TOOLCALLID",
+    "output": "unknown-lazy",
+    "error": "ERROR"
+  }
+}
+
+###
+
+POST {{baseUrl}}/api/agent/sessionStop
+Content-Type: application/json
+
+{
+  "params": {
+    "sessionId": "SESSIONID"
+  }
+}
+
+###
+
+POST {{baseUrl}}/api/agent/sessionDestroy
+Content-Type: application/json
+
+{
+  "params": {
+    "sessionId": "SESSIONID"
+  }
+}
