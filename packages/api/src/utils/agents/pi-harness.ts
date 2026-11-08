@@ -107,6 +107,8 @@ export type SandboxPiSettings = {
   model?: string;
   reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max";
   startupTimeoutMs?: number;
+  /** Observe durable bridge acknowledgments before HarnessAgent filters replayed host results. */
+  onBridgeEvent?: (event: HarnessV1StreamPart & { seq: number }) => void;
 };
 
 /** Shared with the runner's relay registration; never persist these values in lifecycle data. */
@@ -417,6 +419,7 @@ export function createSandboxPi(settings: SandboxPiSettings): HarnessV1<typeof P
             };
 
             try {
+              settings.onBridgeEvent?.({ ...event, seq: event.seq });
               turnOptions.emit(
                 Object.assign(event, { providerMetadata: metadata, harnessMetadata: metadata }),
               );

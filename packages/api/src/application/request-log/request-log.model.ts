@@ -643,7 +643,7 @@ class RequestLogModelClass extends BaseModelClass<
     for (const key of fields) copyDefined(update, params, key);
 
     if (params.history !== undefined) update.history = params.history;
-    update.ttft_ms = (await this.firstGenerateStepTtft(requestLogId)) ?? 0;
+    update.ttft_ms = (await this.firstGenerateStepTtft(requestLogId, "w")) ?? 0;
 
     // 서버 run 경로는 step 에서 확정한 exact cost 와 출처를 넘긴다. 출처 없이 끝난 외부/legacy
     // run 은 저장된 모델+usage 로 여기서 확정해, 읽기 경로가 다시 계산하지 않게 한다.
@@ -680,8 +680,11 @@ class RequestLogModelClass extends BaseModelClass<
     });
   }
 
-  async firstGenerateStepTtft(requestLogId: number): Promise<number | null> {
-    const row = await this.getPuri("r")
+  async firstGenerateStepTtft(
+    requestLogId: number,
+    preset: "r" | "w" = "r",
+  ): Promise<number | null> {
+    const row = await this.getPuri(preset)
       .from("request_log_steps")
       .select({ ttft_ms: "ttft_ms" })
       .where("request_log_id", requestLogId)
@@ -694,8 +697,11 @@ class RequestLogModelClass extends BaseModelClass<
     return row?.ttft_ms ?? null;
   }
 
-  async aggregateStepUsage(requestLogId: number): Promise<RequestLogStepAggregate> {
-    const rows = await this.getPuri("r")
+  async aggregateStepUsage(
+    requestLogId: number,
+    preset: "r" | "w" = "r",
+  ): Promise<RequestLogStepAggregate> {
+    const rows = await this.getPuri(preset)
       .from("request_log_steps")
       .select(STEP_AGGREGATE_SELECT)
       .where("request_log_id", requestLogId)
@@ -738,6 +744,10 @@ class RequestLogModelClass extends BaseModelClass<
       .where("request_log_steps.created_at", "<", threshold)
       .where("request_log_steps.tool_result", null)
       .where("request_log_steps.error", null)
+      // Agent sessions own their waiting-action timeout and terminal state.
+      .whereRaw(
+        "NOT EXISTS (SELECT 1 FROM agent_turns WHERE agent_turns.request_log_id = request_log_steps.request_log_id)",
+      )
       .limit(limit);
 
     return rows.map(({ id }) => id);
@@ -768,6 +778,9 @@ class RequestLogModelClass extends BaseModelClass<
       .where("created_at", "<", threshold)
       .where("tool_result", null)
       .where("error", null)
+      .whereRaw(
+        "NOT EXISTS (SELECT 1 FROM agent_turns WHERE agent_turns.request_log_id = request_log_steps.request_log_id)",
+      )
       .first();
 
     if (!unresolved) return false;

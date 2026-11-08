@@ -1,0 +1,100 @@
+{
+  "id": "AgentSession",
+  "table": "agent_sessions",
+  "title": "AgentSession",
+  "props": [
+    { "name": "id", "type": "string", "length": 36, "desc": "Session UUID" },
+    { "name": "status", "type": "enum", "id": "AgentSessionStatus", "desc": "Session status" },
+    { "name": "harness", "type": "string", "length": 20, "desc": "Harness" },
+    { "name": "model", "type": "string", "length": 255, "desc": "Requested model" },
+    {
+      "name": "token",
+      "type": "relation",
+      "with": "Token",
+      "relationType": "BelongsToOne",
+      "onUpdate": "CASCADE",
+      "onDelete": "RESTRICT",
+      "desc": "Fixed subscription token"
+    },
+    { "name": "token_name", "type": "string", "desc": "Token name snapshot" },
+    { "name": "project_name", "type": "string", "nullable": true, "desc": "Project name" },
+    { "name": "instructions", "type": "string", "desc": "System instructions" },
+    { "name": "tools", "type": "json", "id": "AgentTools", "desc": "Caller tool definitions" },
+    { "name": "webhook_url", "type": "string", "nullable": true, "desc": "Webhook URL" },
+    { "name": "webhook_secret", "type": "string", "nullable": true, "desc": "Webhook secret" },
+    {
+      "name": "lifecycle_state",
+      "type": "json",
+      "id": "AgentLifecycleState",
+      "nullable": true,
+      "desc": "Complete lifecycle envelope"
+    },
+    { "name": "container_name", "type": "string", "length": 100, "desc": "Sandbox container name" },
+    { "name": "container_ip", "type": "string", "length": 45, "desc": "Sandbox container IP" },
+    { "name": "idle_ttl_sec", "type": "integer", "desc": "Idle stop TTL in seconds" },
+    { "name": "retain_sec", "type": "integer", "desc": "Retention in seconds" },
+    {
+      "name": "stop_reason",
+      "type": "string",
+      "length": 50,
+      "nullable": true,
+      "desc": "Stop reason"
+    },
+    {
+      "name": "last_turn_at",
+      "type": "date",
+      "dbDefault": "CURRENT_TIMESTAMP",
+      "desc": "Last turn time"
+    },
+    {
+      "name": "created_at",
+      "type": "date",
+      "dbDefault": "CURRENT_TIMESTAMP",
+      "desc": "Creation time"
+    },
+    {
+      "name": "updated_at",
+      "type": "date",
+      "dbDefault": "CURRENT_TIMESTAMP",
+      "desc": "Last update time"
+    }
+  ],
+  "indexes": [],
+  "subsets": {
+    "A": [
+      "id",
+      "status",
+      "harness",
+      "model",
+      "token.id",
+      "token_name",
+      "project_name",
+      "instructions",
+      "tools",
+      "webhook_url",
+      "webhook_secret",
+      "lifecycle_state",
+      "container_name",
+      "container_ip",
+      "idle_ttl_sec",
+      "retain_sec",
+      "stop_reason",
+      "last_turn_at",
+      "created_at",
+      "updated_at"
+    ]
+  },
+  "enums": {
+    "AgentSessionStatus": {
+      "creating": "Creating",
+      "idle": "Idle",
+      "running": "Running",
+      "waiting_action": "Waiting for action",
+      "stopped": "Stopped",
+      "failed": "Failed",
+      "destroyed": "Destroyed"
+    },
+    "AgentSessionOrderBy": { "created_at-desc": "Newest first" },
+    "AgentSessionSearchField": { "id": "ID" }
+  }
+}

@@ -33,6 +33,7 @@ function fixture(overrides: Partial<AgentsRelayOptions> = {}) {
     resolveSession: vi.fn((key: string) => key === "session-key" ? session : undefined),
     onCallStart: vi.fn(),
     onCallEnd: vi.fn((record: RelayCallEnd) => { records.push(record); }),
+    onLimitExceeded: vi.fn(),
   };
   const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => new Response(sse, { headers: { "content-type": "text/event-stream" } }));
   const createServer = vi.spyOn(http, "createServer");
@@ -114,6 +115,7 @@ describe("AgentsRelay header gates", () => {
     expect(r.read).not.toHaveBeenCalled();
     expect(f.fetch).not.toHaveBeenCalled();
     expect(f.sessions.onCallStart).not.toHaveBeenCalled();
+    if (gate === "count" || gate === "time") expect(f.sessions.onLimitExceeded).toHaveBeenCalledWith("session-1", gate === "time" ? "time" : "model_calls");
     if (gate !== "quota") expect(f.dispatcher.isQuotaEligible).not.toHaveBeenCalled();
   });
 

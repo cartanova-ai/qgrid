@@ -7,6 +7,13 @@
 
 import { z } from "zod";
 
+import {
+  AgentLifecycleState,
+  AgentLoggedSteps,
+  AgentPendingActions,
+  AgentTools,
+  AgentTurnUsage,
+} from "./agent/agent.types";
 import { zArrayable, SonamuQueryMode, ApplySonamuFilter } from "./sonamu.shared";
 
 // CustomScalar: HistoryItems
@@ -76,6 +83,46 @@ const ToolDefinitions = z.array(
   }),
 );
 type ToolDefinitions = z.infer<typeof ToolDefinitions>;
+
+// Enums: AgentSession
+export const AgentSessionStatus = z
+  .enum(["creating", "idle", "running", "waiting_action", "stopped", "failed", "destroyed"])
+  .describe("AgentSessionStatus");
+export type AgentSessionStatus = z.infer<typeof AgentSessionStatus>;
+export const AgentSessionStatusLabel = {
+  creating: "Creating",
+  idle: "Idle",
+  running: "Running",
+  waiting_action: "Waiting for action",
+  stopped: "Stopped",
+  failed: "Failed",
+  destroyed: "Destroyed",
+};
+export const AgentSessionOrderBy = z.enum(["created_at-desc"]).describe("AgentSessionOrderBy");
+export type AgentSessionOrderBy = z.infer<typeof AgentSessionOrderBy>;
+export const AgentSessionOrderByLabel = { "created_at-desc": "Newest first" };
+export const AgentSessionSearchField = z.enum(["id"]).describe("AgentSessionSearchField");
+export type AgentSessionSearchField = z.infer<typeof AgentSessionSearchField>;
+export const AgentSessionSearchFieldLabel = { id: "ID" };
+
+// Enums: AgentTurn
+export const AgentTurnStatus = z
+  .enum(["running", "waiting_action", "succeeded", "failed", "aborted"])
+  .describe("AgentTurnStatus");
+export type AgentTurnStatus = z.infer<typeof AgentTurnStatus>;
+export const AgentTurnStatusLabel = {
+  running: "Running",
+  waiting_action: "Waiting for action",
+  succeeded: "Succeeded",
+  failed: "Failed",
+  aborted: "Aborted",
+};
+export const AgentTurnOrderBy = z.enum(["index-asc"]).describe("AgentTurnOrderBy");
+export type AgentTurnOrderBy = z.infer<typeof AgentTurnOrderBy>;
+export const AgentTurnOrderByLabel = { "index-asc": "Turn order" };
+export const AgentTurnSearchField = z.enum(["id"]).describe("AgentTurnSearchField");
+export type AgentTurnSearchField = z.infer<typeof AgentTurnSearchField>;
+export const AgentTurnSearchFieldLabel = { id: "ID" };
 
 // Enums: RequestLog
 export const RequestLogOrderBy = z
@@ -167,6 +214,77 @@ export const TokenOrderByLabel = { "id-desc": "ID최신순", "ord-asc": "순서�
 export const TokenSearchField = z.enum(["id", "name"]).describe("TokenSearchField");
 export type TokenSearchField = z.infer<typeof TokenSearchField>;
 export const TokenSearchFieldLabel = { id: "ID", name: "이름" };
+
+// BaseSchema: AgentSession
+export const AgentSessionBaseSchema = z.object({
+  id: z.string().max(36),
+  status: AgentSessionStatus,
+  harness: z.string().max(20),
+  model: z.string().max(255),
+  token_id: z.int(),
+  token_name: z.string(),
+  project_name: z.string().nullable(),
+  instructions: z.string(),
+  tools: AgentTools,
+  webhook_url: z.string().nullable(),
+  webhook_secret: z.string().nullable(),
+  lifecycle_state: AgentLifecycleState.nullable(),
+  container_name: z.string().max(100),
+  container_ip: z.string().max(45),
+  idle_ttl_sec: z.int(),
+  retain_sec: z.int(),
+  stop_reason: z.string().max(50).nullable(),
+  last_turn_at: z.date(),
+  created_at: z.date(),
+  updated_at: z.date(),
+});
+export type AgentSessionBaseSchema = z.infer<typeof AgentSessionBaseSchema> & {
+  readonly __hasDefault__: readonly [
+    "project_name",
+    "webhook_url",
+    "webhook_secret",
+    "lifecycle_state",
+    "stop_reason",
+    "last_turn_at",
+    "created_at",
+    "updated_at",
+    "id",
+  ];
+  readonly __json__: readonly ["tools", "lifecycle_state"];
+};
+
+// BaseSchema: AgentTurn
+export const AgentTurnBaseSchema = z.object({
+  id: z.int(),
+  session_id: z.string(),
+  index: z.int(),
+  prompt: z.string(),
+  status: AgentTurnStatus,
+  request_log_id: z.int().nullable(),
+  pending_actions: AgentPendingActions,
+  logged_steps: AgentLoggedSteps,
+  last_logged_event_seq: z.int(),
+  model_call_count: z.int(),
+  started_at: z.date(),
+  finished_at: z.date().nullable(),
+  result_text: z.string().nullable(),
+  error_message: z.string().nullable(),
+  usage: AgentTurnUsage.nullable(),
+});
+export type AgentTurnBaseSchema = z.infer<typeof AgentTurnBaseSchema> & {
+  readonly __hasDefault__: readonly [
+    "request_log_id",
+    "last_logged_event_seq",
+    "model_call_count",
+    "started_at",
+    "finished_at",
+    "result_text",
+    "error_message",
+    "usage",
+    "id",
+  ];
+  readonly __json__: readonly ["pending_actions", "logged_steps", "usage"];
+};
 
 // BaseSchema: RequestLog
 export const RequestLogBaseSchema = z.object({
@@ -346,6 +464,36 @@ export type TokenBaseSchema = z.infer<typeof TokenBaseSchema> & {
   readonly __json__: readonly ["credentials"];
 };
 
+// BaseListParams: AgentSession
+export const AgentSessionBaseListParams = z
+  .object({
+    num: z.number().int().nonnegative(),
+    page: z.number().int().min(1),
+    search: AgentSessionSearchField,
+    keyword: z.string(),
+    orderBy: AgentSessionOrderBy,
+    queryMode: SonamuQueryMode,
+    id: zArrayable(z.string()),
+    sonamuFilter: z.custom<ApplySonamuFilter<AgentSessionBaseSchema, never, never>>(),
+  })
+  .partial();
+export type AgentSessionBaseListParams = z.infer<typeof AgentSessionBaseListParams>;
+
+// BaseListParams: AgentTurn
+export const AgentTurnBaseListParams = z
+  .object({
+    num: z.number().int().nonnegative(),
+    page: z.number().int().min(1),
+    search: AgentTurnSearchField,
+    keyword: z.string(),
+    orderBy: AgentTurnOrderBy,
+    queryMode: SonamuQueryMode,
+    id: zArrayable(z.number().int().positive()),
+    sonamuFilter: z.custom<ApplySonamuFilter<AgentTurnBaseSchema, never, never>>(),
+  })
+  .partial();
+export type AgentTurnBaseListParams = z.infer<typeof AgentTurnBaseListParams>;
+
 // BaseListParams: RequestLog
 export const RequestLogBaseListParams = z
   .object({
@@ -410,6 +558,61 @@ export const TokenBaseListParams = z
   })
   .partial();
 export type TokenBaseListParams = z.infer<typeof TokenBaseListParams>;
+
+// Subsets: AgentSession
+export const AgentSessionSubsetA = z.object({
+  id: z.string().max(36),
+  status: AgentSessionStatus,
+  harness: z.string().max(20),
+  model: z.string().max(255),
+  token_name: z.string(),
+  project_name: z.string().nullable(),
+  instructions: z.string(),
+  tools: AgentTools,
+  webhook_url: z.string().nullable(),
+  webhook_secret: z.string().nullable(),
+  lifecycle_state: AgentLifecycleState.nullable(),
+  container_name: z.string().max(100),
+  container_ip: z.string().max(45),
+  idle_ttl_sec: z.int(),
+  retain_sec: z.int(),
+  stop_reason: z.string().max(50).nullable(),
+  last_turn_at: z.date(),
+  created_at: z.date(),
+  updated_at: z.date(),
+  token_id: z.int(),
+});
+export type AgentSessionSubsetA = z.infer<typeof AgentSessionSubsetA>;
+export type AgentSessionSubsetMapping = {
+  A: AgentSessionSubsetA;
+};
+export const AgentSessionSubsetKey = z.enum(["A"]);
+export type AgentSessionSubsetKey = z.infer<typeof AgentSessionSubsetKey>;
+
+// Subsets: AgentTurn
+export const AgentTurnSubsetA = z.object({
+  id: z.int(),
+  index: z.int(),
+  prompt: z.string(),
+  status: AgentTurnStatus,
+  pending_actions: AgentPendingActions,
+  logged_steps: AgentLoggedSteps,
+  last_logged_event_seq: z.int(),
+  model_call_count: z.int(),
+  started_at: z.date(),
+  finished_at: z.date().nullable(),
+  result_text: z.string().nullable(),
+  error_message: z.string().nullable(),
+  usage: AgentTurnUsage.nullable(),
+  session_id: z.string().max(36),
+  request_log_id: z.int().nullable(),
+});
+export type AgentTurnSubsetA = z.infer<typeof AgentTurnSubsetA>;
+export type AgentTurnSubsetMapping = {
+  A: AgentTurnSubsetA;
+};
+export const AgentTurnSubsetKey = z.enum(["A"]);
+export type AgentTurnSubsetKey = z.infer<typeof AgentTurnSubsetKey>;
 
 // Subsets: RequestLog
 export const RequestLogSubsetA = z.object({

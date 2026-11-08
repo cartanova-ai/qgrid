@@ -1,0 +1,113 @@
+{
+  "id": "AgentTurn",
+  "table": "agent_turns",
+  "title": "AgentTurn",
+  "props": [
+    { "name": "id", "type": "integer", "desc": "ID" },
+    {
+      "name": "session",
+      "type": "relation",
+      "with": "AgentSession",
+      "relationType": "BelongsToOne",
+      "onUpdate": "CASCADE",
+      "onDelete": "CASCADE",
+      "desc": "Parent session"
+    },
+    { "name": "index", "type": "integer", "desc": "Turn index within the session" },
+    { "name": "prompt", "type": "string", "desc": "User prompt" },
+    { "name": "status", "type": "enum", "id": "AgentTurnStatus", "desc": "Turn status" },
+    {
+      "name": "request_log",
+      "type": "relation",
+      "with": "RequestLog",
+      "relationType": "BelongsToOne",
+      "nullable": true,
+      "onUpdate": "CASCADE",
+      "onDelete": "SET NULL",
+      "desc": "Parent request log"
+    },
+    {
+      "name": "pending_actions",
+      "type": "json",
+      "id": "AgentPendingActions",
+      "desc": "Pending caller tool results"
+    },
+    {
+      "name": "logged_steps",
+      "type": "json",
+      "id": "AgentLoggedSteps",
+      "desc": "Stable event identities mapped to step IDs"
+    },
+    {
+      "name": "last_logged_event_seq",
+      "type": "integer",
+      "dbDefault": "0",
+      "desc": "Persisted bridge event cursor"
+    },
+    {
+      "name": "model_call_count",
+      "type": "integer",
+      "dbDefault": "0",
+      "desc": "Model calls in the turn"
+    },
+    {
+      "name": "started_at",
+      "type": "date",
+      "dbDefault": "CURRENT_TIMESTAMP",
+      "desc": "Turn start time"
+    },
+    { "name": "finished_at", "type": "date", "nullable": true, "desc": "Turn finish time" },
+    {
+      "name": "result_text",
+      "type": "string",
+      "nullable": true,
+      "desc": "Final assistant response"
+    },
+    { "name": "error_message", "type": "string", "nullable": true, "desc": "Turn failure reason" },
+    {
+      "name": "usage",
+      "type": "json",
+      "id": "AgentTurnUsage",
+      "nullable": true,
+      "desc": "Aggregate turn usage"
+    }
+  ],
+  "indexes": [
+    {
+      "type": "unique",
+      "name": "agent_turns_session_id_index_unique",
+      "columns": [{ "name": "session_id" }, { "name": "index" }],
+      "using": "btree"
+    }
+  ],
+  "subsets": {
+    "A": [
+      "id",
+      "session.id",
+      "index",
+      "prompt",
+      "status",
+      "request_log.id",
+      "pending_actions",
+      "logged_steps",
+      "last_logged_event_seq",
+      "model_call_count",
+      "started_at",
+      "finished_at",
+      "result_text",
+      "error_message",
+      "usage"
+    ]
+  },
+  "enums": {
+    "AgentTurnStatus": {
+      "running": "Running",
+      "waiting_action": "Waiting for action",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "aborted": "Aborted"
+    },
+    "AgentTurnOrderBy": { "index-asc": "Turn order" },
+    "AgentTurnSearchField": { "id": "ID" }
+  }
+}

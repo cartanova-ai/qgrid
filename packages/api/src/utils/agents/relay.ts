@@ -65,6 +65,7 @@ export type RelaySessionStore = {
   resolveSession(sessionKey: string): RelaySession | undefined | Promise<RelaySession | undefined>;
   onCallStart(record: RelayCallStart): void | Promise<void>;
   onCallEnd(record: RelayCallEnd): void | Promise<void>;
+  onLimitExceeded?(sessionId: string, which: "model_calls" | "time"): void;
 };
 
 export type AgentsRelayOptions = {
@@ -209,7 +210,7 @@ function bodyModel(body: Buffer, encoding: string | undefined): string | undefin
   }
 }
 
-/** U6 owns lifecycle wiring and persistence; this server only brokers model calls. */
+/** The runner owns lifecycle and persistence; this server brokers model calls. */
 export class AgentsRelay {
   private readonly servers: Server[] = [];
   private readonly rules = new Map<string, readonly HarnessV1RequestTransformation[]>();
@@ -411,8 +412,14 @@ export class AgentsRelay {
       count.started = Math.max(count.started, turn.modelCallCount);
       const remaining = turn.startedAt + this.options.limits.maxTurnMs - Date.now();
 
-      if (count.started + count.pending >= this.options.limits.maxModelCalls || remaining <= 0)
+      if (count.started + count.pending >= this.options.limits.maxModelCalls || remaining <= 0) {
+        this.options.sessions.onLimitExceeded?.(
+          session.sessionId,
+          remaining <= 0 ? "time" : "model_calls",
+        );
         throw new RelayError(429, "limit_exceeded");
+      }
+
       count.pending++;
       reserved = true;
       const controllers = this.turns.get(turnId) ?? new Set<AbortController>();
@@ -420,6 +427,7 @@ export class AgentsRelay {
       this.turns.set(turnId, controllers);
       timer = setTimeout(() => {
         timedOut = true;
+        this.options.sessions.onLimitExceeded?.(session.sessionId, "time");
         controller.abort();
       }, remaining);
       signal.throwIfAborted();

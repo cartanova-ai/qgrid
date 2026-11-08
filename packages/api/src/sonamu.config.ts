@@ -30,6 +30,7 @@ import {
 } from "./application/qgrid/token-window-keepalive";
 import { loadSettings, setSettingChangeHandler } from "./application/setting/setting.store";
 import { handleServerError } from "./server-error-handler";
+import { startAgentsRuntime, stopAgentsRuntime } from "./utils/agents/runtime";
 import { AnthropicDispatcher } from "./utils/providers/anthropic/anthropic-dispatcher";
 import { GrokDispatcher, GrokRefreshCoordinator } from "./utils/providers/grok";
 import { GrokMediaClient } from "./utils/providers/grok/grok-media-client";
@@ -249,6 +250,12 @@ export default defineConfig({
           void rescheduleTokenWindowKeepalive();
         };
 
+        await startAgentsRuntime({
+          dispatcher: QgridDispatcher.openaiDispatcher,
+          apiHost: host,
+          apiPort: port,
+        });
+
         startExpiredTokenReminder();
         void startTokenWindowKeepalive();
 
@@ -270,6 +277,10 @@ export default defineConfig({
         setSettingChangeHandler(null);
 
         if (QgridDispatcher.subscriber) QgridDispatcher.subscriber.tokenChangeHandler = null;
+
+        await stopAgentsRuntime().catch((error: Error) => {
+          log.error("agents shutdown failed: {error}", { error });
+        });
 
         if (QgridDispatcher.openaiDispatcher) {
           await QgridDispatcher.openaiDispatcher.stop();

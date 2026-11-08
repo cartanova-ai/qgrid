@@ -380,12 +380,14 @@ describe("RequestLogModel run lifecycle", () => {
       join: vi.fn(),
       select: vi.fn(),
       where: vi.fn(),
+      whereRaw: vi.fn(),
       limit: vi.fn(async () => [{ id: 7 }]),
     };
     candidateChain.distinct.mockReturnValue(candidateChain);
     candidateChain.join.mockReturnValue(candidateChain);
     candidateChain.select.mockReturnValue(candidateChain);
     candidateChain.where.mockReturnValue(candidateChain);
+    candidateChain.whereRaw.mockReturnValue(candidateChain);
     const from = vi.fn(() => candidateChain);
     vi.spyOn(
       RequestLogModel as unknown as { getPuri: () => { from: typeof from } },
@@ -438,10 +440,12 @@ describe("RequestLogModel run lifecycle", () => {
     const unresolvedChain = {
       select: vi.fn(),
       where: vi.fn(),
+      whereRaw: vi.fn(),
       first: vi.fn(async () => ({ id: 101 })),
     };
     unresolvedChain.select.mockReturnValue(unresolvedChain);
     unresolvedChain.where.mockReturnValue(unresolvedChain);
+    unresolvedChain.whereRaw.mockReturnValue(unresolvedChain);
 
     const aggregateChain = {
       select: vi.fn(),

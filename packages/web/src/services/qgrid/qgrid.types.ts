@@ -736,6 +736,12 @@ export const HealthResponse = z.object({
     anthropic: ProviderStartupState,
     grok: ProviderStartupState.optional(),
   }),
+  agents: z.object({
+    enabled: z.boolean(),
+    ready: z.boolean(),
+    reason: z.string().optional(),
+    sessions: z.number(),
+  }),
 });
 
 export type HealthResponse = z.infer<typeof HealthResponse>;
