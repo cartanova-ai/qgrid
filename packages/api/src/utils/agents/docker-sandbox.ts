@@ -5,11 +5,6 @@ import { posix } from "node:path";
 import { PassThrough, Readable, Transform, Writable } from "node:stream";
 
 import {
-  type HarnessV1NetworkSandboxSession,
-  type HarnessV1RequestTransformation,
-  type HarnessV1SandboxProvider,
-} from "@ai-sdk/harness";
-import {
   type Experimental_SandboxProcess as SandboxProcess,
   type Experimental_SandboxSession as SandboxSession,
   type Experimental_SandboxSpawnOptions as SpawnOptions,
@@ -23,22 +18,21 @@ import { type default as Docker } from "dockerode";
 const logger = getLogger(["qgrid", "agents"]);
 const NETWORK = "qgrid-agents";
 const SESSION_LABEL = "qgrid.agents.session";
-const BRIDGE_PORT = 8787;
 
 export type DockerSandboxOptions = {
   image: string;
   subnet?: string;
-  hostAlias: { kind: "gateway" } | { kind: "host-gateway" };
   memory: number;
   nanoCpus: number;
   pidsLimit: number;
-  onRequestTransformations: (
-    sessionId: string,
-    rules: ReadonlyArray<HarnessV1RequestTransformation>,
-  ) => void | PromiseLike<void>;
 };
 
-export type DockerSandboxSession = HarnessV1NetworkSandboxSession & {
+/** Pi runs on the host; the sandbox is a remote filesystem and shell, nothing listens inside. */
+export type DockerSandboxSession = SandboxSession & {
+  id: string;
+  defaultWorkingDirectory: string;
+  stop(): Promise<void>;
+  destroy(): Promise<void>;
   putArchive(path: string, tarStream: NodeJS.ReadableStream): Promise<void>;
 };
 
@@ -88,8 +82,7 @@ async function collect(process: SandboxProcess) {
   return { ...result, stdout: Buffer.from(stdout), stderr: Buffer.from(stderr) };
 }
 
-export class DockerSandboxProvider implements HarnessV1SandboxProvider {
-  readonly specificationVersion = "harness-sandbox-v1";
+export class DockerSandboxProvider {
   readonly providerId = "qgrid-docker";
   private networkGateway?: string;
 
@@ -98,7 +91,7 @@ export class DockerSandboxProvider implements HarnessV1SandboxProvider {
     private readonly options: DockerSandboxOptions,
   ) {}
 
-  /** Also used by the runner to bind the relay before creating its first session. */
+  /** Creates the dedicated network once; returns its gateway for the isolation probe. */
   async ensureNetwork(): Promise<string> {
     const network = this.docker.getNetwork(NETWORK);
     let info: Docker.NetworkInspectInfo;
@@ -114,7 +107,7 @@ export class DockerSandboxProvider implements HarnessV1SandboxProvider {
           Name: NETWORK,
           Driver: "bridge",
           // Docker may defer allocating an implicit gateway until the first endpoint.
-          // Declare it so inspect can supply the relay address before container creation.
+          // Declare it so inspect can report the gateway for the isolation probe.
           IPAM: { Config: [{ Subnet: subnet, Gateway: subnetGateway(subnet) }] },
           Options: { "com.docker.network.bridge.name": "br-qgrid-agents" },
         });
@@ -147,14 +140,16 @@ export class DockerSandboxProvider implements HarnessV1SandboxProvider {
   }
 
   async createSession(
-    options: Parameters<HarnessV1SandboxProvider["createSession"]>[0] & {
+    options: {
+      sessionId?: string;
+      abortSignal?: AbortSignal;
       env?: Record<string, string>;
     } = {},
   ): Promise<DockerSandboxSession> {
     const { sessionId = randomUUID(), abortSignal } = options;
     const name = containerName(sessionId);
     abortSignal?.throwIfAborted();
-    const gateway = await this.ensureNetwork();
+    await this.ensureNetwork();
     abortSignal?.throwIfAborted();
 
     const container = await this.docker.createContainer({
@@ -162,17 +157,12 @@ export class DockerSandboxProvider implements HarnessV1SandboxProvider {
       Image: this.options.image,
       User: "node",
       Env: Object.entries(options.env ?? {}).map(([key, value]) => `${key}=${value}`),
-      ExposedPorts: { [`${BRIDGE_PORT}/tcp`]: {} },
       Labels: {
         [SESSION_LABEL]: sessionId,
         "qgrid.agents.env-keys": JSON.stringify(Object.keys(options.env ?? {})),
       },
       HostConfig: {
         NetworkMode: NETWORK,
-        ExtraHosts: [
-          `host.docker.internal:${this.options.hostAlias.kind === "gateway" ? gateway : "host-gateway"}`,
-        ],
-        PortBindings: { [`${BRIDGE_PORT}/tcp`]: [{ HostIp: "127.0.0.1", HostPort: "0" }] },
         Memory: this.options.memory,
         NanoCpus: this.options.nanoCpus,
         PidsLimit: this.options.pidsLimit,
@@ -184,8 +174,6 @@ export class DockerSandboxProvider implements HarnessV1SandboxProvider {
       abortSignal?.throwIfAborted();
       await container.start();
       const session = await this.attach(sessionId, container);
-      await options.onFirstCreate?.(session.restricted(), { abortSignal });
-      abortSignal?.throwIfAborted();
       logger.info("Created sandbox {sessionId}", { sessionId });
 
       return session;
@@ -458,34 +446,12 @@ export class DockerSandboxProvider implements HarnessV1SandboxProvider {
       },
     };
 
-    const getPortEndpoint: HarnessV1NetworkSandboxSession["getPortEndpoint"] = async ({
-      port,
-      protocol = "ws",
-    }) => {
-      const current = await container.inspect();
-
-      const binding = current.NetworkSettings.Ports[`${port}/tcp`]?.find(
-        (item) => item.HostIp === "127.0.0.1",
-      );
-
-      if (!binding?.HostPort) throw new Error(`Port ${port} is not published for ${sessionId}`);
-
-      return { url: `${protocol}://127.0.0.1:${binding.HostPort}` };
-    };
-
     return {
       ...files,
       id: sessionId,
       defaultWorkingDirectory: base,
-      ports: [BRIDGE_PORT],
-      getPortEndpoint,
-      getPortUrl: async (options) => (await getPortEndpoint(options)).url,
       stop: () => this.stopContainer(sessionId),
       destroy: () => this.destroyContainer(sessionId),
-      addRequestTransformations: async (rules) => {
-        await this.options.onRequestTransformations(sessionId, rules);
-      },
-      restricted: () => files,
       putArchive: async (path, tarStream) => {
         await container.putArchive(tarStream, { path: posix.resolve(base, path) });
       },
@@ -518,7 +484,16 @@ export class DockerSandboxProvider implements HarnessV1SandboxProvider {
     // Docker exposes a host PID and has no exec-kill API. A private first stdout line gives
     // us the container PID; setsid lets kill/abort terminate the command's process group.
     const exec = await container.exec({
-      Cmd: ["setsid", "--wait", "sh", "-c", 'printf "%s\\n" "$$"; exec sh -c "$1"', "sh", command],
+      // harness-pi's path resolution uses bash features (pipefail, $'\n'); dash rejects them (D27).
+      Cmd: [
+        "setsid",
+        "--wait",
+        "bash",
+        "-c",
+        'printf "%s\\n" "$$"; exec bash -c "$1"',
+        "bash",
+        command,
+      ],
       WorkingDir: posix.resolve(base, workingDirectory ?? "."),
       Env: Object.entries(env ?? {}).map(([key, value]) => `${key}=${value}`),
       AttachStdin: stdin,

@@ -61,12 +61,11 @@ describe("maskSecret", () => {
 });
 
 describe("SETTING_DEFS", () => {
-  it("agents 설정의 기본값과 secret 환경변수를 등록한다", () => {
+  it("agents 설정의 기본값을 등록하고 relay 시대 키는 없다", () => {
     const defaults = {
       enabled: "false",
       sandboxImage: "",
       subnet: "172.30.0.0/24",
-      relayPort: "44901",
       maxSessions: "4",
       idleTtlSec: "1800",
       retainSec: "86400",
@@ -75,7 +74,6 @@ describe("SETTING_DEFS", () => {
       minFreeDiskGb: "20",
       isolationCheck: "enforce",
       isolationPorts: "5432,6379",
-      secret: "",
     };
 
     for (const [key, fallback] of Object.entries(defaults)) {
@@ -86,10 +84,8 @@ describe("SETTING_DEFS", () => {
       });
     }
 
-    expect(findSettingDef("qgrid.agents.secret")).toMatchObject({
-      kind: "secret",
-      envKey: "QGRID_AGENTS_SECRET",
-    });
+    for (const removed of ["secret", "relayPort", "hostMode"])
+      expect(findSettingDef(`qgrid.agents.${removed}`)).toBeUndefined();
     expect(validateSettingValue(findSettingDef("qgrid.agents.isolationCheck")!, "warn").ok).toBe(true);
     expect(validateSettingValue(findSettingDef("qgrid.agents.isolationCheck")!, "skip").ok).toBe(false);
     expect(validateSettingValue(findSettingDef("qgrid.agents.isolationPorts")!, "5432, 6379")).toEqual({

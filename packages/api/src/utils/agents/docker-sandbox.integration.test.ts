@@ -19,11 +19,9 @@ it.skipIf(process.env.QGRID_AGENTS_IT !== "1")(
     const docker = new Docker();
     const provider = new DockerSandboxProvider(docker, {
       image: process.env.QGRID_AGENTS_IT_IMAGE ?? "qgrid-sandbox-pi:dev",
-      hostAlias: { kind: "gateway" },
       memory: 512 * 1024 * 1024,
       nanoCpus: 1_000_000_000,
       pidsLimit: 128,
-      onRequestTransformations: () => {},
     });
     const sessionId = `it-${randomUUID()}`;
     const temporary = await mkdtemp(join(tmpdir(), "qgrid-sandbox-it-"));
@@ -98,20 +96,9 @@ it.skipIf(process.env.QGRID_AGENTS_IT !== "1")(
       );
       expect(await session.readTextFile({ path: "archived.txt" })).toBe("archive content");
 
-      const server = await session.spawn({
-        command:
-          'node -e \'require("http").createServer((q,s)=>s.end("ready")).listen(8787,"0.0.0.0",()=>console.log("listening"))\'',
-      });
-      const reader = server.stdout.getReader();
-      expect(new TextDecoder().decode((await reader.read()).value)).toContain("listening");
-      const endpoint = await session.getPortEndpoint({ port: 8787, protocol: "http" });
-      expect(endpoint.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-      expect(await (await fetch(endpoint.url)).text()).toBe("ready");
       expect(await provider.inspectIp(sessionId)).toMatch(/^172\.30\.0\./);
-      await server.kill();
-      expect((await server.wait()).exitCode).not.toBe(0);
-      await server.kill();
-      reader.releaseLock();
+      // bash semantics inside the sandbox (D27).
+      expect(await session.run({ command: "set -o pipefail && echo ok" })).toMatchObject({ stdout: "ok\n", exitCode: 0 });
 
       const controller = new AbortController();
       const sleeper = await session.spawn({

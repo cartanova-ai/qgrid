@@ -1,14 +1,12 @@
-import { type HarnessV1ContinueTurnOptions, type HarnessV1StreamPart } from "@ai-sdk/harness";
+import { type HarnessV1LifecycleState } from "@ai-sdk/harness";
 import { HarnessAgent, type HarnessAgentSession } from "@ai-sdk/harness/agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentModel, AgentStateError, type AgentSessionRow, type AgentTurnRow } from "../../application/agent/agent.model";
 import { QuotaThresholdExceededError } from "../../application/qgrid/qgrid.types";
+import { AgentTokenError } from "./credential-store";
 import { type DockerSandboxProvider, type DockerSandboxSession } from "./docker-sandbox";
-import * as piHarness from "./pi-harness";
-import { derivePiSessionSecrets, reconstructContinueState } from "./pi-harness";
-import { type AgentsRelay } from "./relay";
-import { AgentSessionRunner, type AgentSessionRunnerOptions } from "./session-runner";
+import { AgentSessionRunner, type AgentSessionRunnerOptions, toPiModelId } from "./session-runner";
 
 const cleanup: (() => Promise<void>)[] = [];
 
@@ -17,6 +15,14 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+const resumeState: HarnessV1LifecycleState = {
+  type: "resume-session", harnessId: "pi", specificationVersion: "harness-v1", data: { session: "saved" },
+};
+
+function continueState(pendingToolResults = [{ toolCallId: "tool-1", toolName: "lookup", input: '{"id":1}' }]): HarnessV1LifecycleState {
+  return { type: "continue-turn", harnessId: "pi", specificationVersion: "harness-v1", data: { session: "saved" }, pendingToolResults };
+}
 
 function session(patch: Partial<AgentSessionRow> = {}): AgentSessionRow {
   return {
@@ -33,7 +39,7 @@ function session(patch: Partial<AgentSessionRow> = {}): AgentSessionRow {
 function turn(patch: Partial<AgentTurnRow> = {}): AgentTurnRow {
   return {
     id: 12, session_id: "test-agent", index: 0, prompt: "Do the task", status: "running",
-    request_log_id: 30, pending_actions: [], logged_steps: {}, last_logged_event_seq: 7,
+    request_log_id: 30, pending_actions: [], logged_steps: {}, last_logged_event_seq: 0,
     model_call_count: 0, started_at: new Date(), finished_at: null,
     result_text: null, error_message: null, usage: null, ...patch,
   };
@@ -69,7 +75,6 @@ function modelFixture(row = session(), active = turn()) {
     row.status = next;
     if (checkpoint) {
       row.lifecycle_state = checkpoint.lifecycleState;
-      active.last_logged_event_seq = checkpoint.seq;
       active.result_text = checkpoint.resultText;
     }
     return { ...active };
@@ -79,14 +84,27 @@ function modelFixture(row = session(), active = turn()) {
     active.status = "running";
     return { ...active };
   });
-  vi.spyOn(AgentModel, "checkpoint").mockResolvedValue(undefined);
+  const checkpoint = vi.spyOn(AgentModel, "checkpoint").mockResolvedValue(undefined);
   vi.spyOn(AgentModel, "recoverCalls").mockResolvedValue(undefined);
-  return { row, active, update, transition, begin, finish, claim };
+  const callStart = vi.spyOn(AgentModel, "recordCallStart").mockResolvedValue(41);
+  const stepUpdate = vi.spyOn(AgentModel, "updateStep").mockResolvedValue(undefined);
+  const events = vi.spyOn(AgentModel, "recordEvent").mockImplementation(async (_id, _seq, patch) => {
+    if (patch?.result_text !== undefined) active.result_text = patch.result_text;
+  });
+  const steps = vi.spyOn(AgentModel, "recordStep").mockResolvedValue(22);
+  const results = vi.spyOn(AgentModel, "recordToolResult").mockResolvedValue(undefined);
+  const suspend = vi.spyOn(AgentModel, "suspend").mockImplementation(async (_id, _turn, envelope, actions) => {
+    row.status = "waiting_action";
+    row.lifecycle_state = envelope;
+    active.status = "waiting_action";
+    active.pending_actions = actions;
+  });
+  return { row, active, update, transition, begin, finish, claim, checkpoint, callStart, stepUpdate, events, steps, results, suspend };
 }
 
 function fixture(overrides: Partial<AgentSessionRunnerOptions> = {}) {
   const run = vi.fn().mockResolvedValue({ exitCode: 0, stdout: "Filesystem 1024-blocks Used Available Capacity Mounted on\noverlay 104857600 1048576 103809024 1% /\n", stderr: "" });
-  const sandbox = { run } as unknown as DockerSandboxSession;
+  const sandbox = { id: "test-agent", run, defaultWorkingDirectory: "/workspace" } as unknown as DockerSandboxSession;
   const provider = {
     callerEnvironment: vi.fn().mockResolvedValue({}),
     dataRootFreeBytes: vi.fn().mockResolvedValue(100 * 1024 ** 3),
@@ -97,61 +115,68 @@ function fixture(overrides: Partial<AgentSessionRunnerOptions> = {}) {
     stopContainer: vi.fn().mockResolvedValue(undefined),
     pruneOrphans: vi.fn().mockResolvedValue(undefined),
   };
-  const relay = { abortTurn: vi.fn(), removeRules: vi.fn() };
+  const dispatcher = {
+    selectToken: vi.fn(),
+    tokenMetadata: new Map(),
+    refreshCredentials: vi.fn(),
+    isQuotaEligible: vi.fn().mockResolvedValue(true),
+  };
   const runner = new AgentSessionRunner({
     provider: provider as unknown as DockerSandboxProvider,
-    dispatcher: { selectToken: vi.fn() }, secret: "runner-test-secret",
-    relayBaseUrl: "http://host.docker.internal:44901/backend-api/codex",
+    dispatcher: { ...dispatcher, ...overrides.dispatcher } as AgentSessionRunnerOptions["dispatcher"],
     maxSessions: 4, idleTtlSec: 1800, retainSec: 86400,
     maxModelCallsPerTurn: 60, maxTurnSeconds: 1200, minFreeDiskGb: 20, ...overrides,
   });
-  runner.setRelay(relay as unknown as AgentsRelay);
   cleanup.push(() => runner.shutdown());
-  return { runner, provider, sandbox, run, relay };
+  return { runner, provider, sandbox, run };
 }
 
-function harness(config: { hold?: boolean; abortCloses?: boolean } = {}) {
+type Part = Record<string, unknown> & { type: string };
+
+/** Replace the in-process Pi harness with a scripted stream; abort ends the stream like Pi does. */
+function harness(config: { hold?: boolean; parts?: Part[]; abortCloses?: boolean } = {}) {
   const end = Promise.withResolvers<void>();
   if (!config.hold) end.resolve();
   let signal: AbortSignal | undefined;
-  let onBridgeEvent: piHarness.SandboxPiSettings["onBridgeEvent"];
-  const originalPi = piHarness.createSandboxPi;
-  vi.spyOn(piHarness, "createSandboxPi").mockImplementation((settings) => {
-    onBridgeEvent = settings.onBridgeEvent;
-    return originalPi(settings);
-  });
-  const acknowledgeAbort = () => onBridgeEvent?.({
-    type: "finish", seq: 10, finishReason: { unified: "other", raw: "aborted" },
-    totalUsage: {
-      inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
-      outputTokens: { total: 0, text: 0, reasoning: 0 },
-    },
-  });
-  const state = reconstructContinueState({ sessionId: "test-agent", lastSeenEventId: 9 });
   const live = {
     hasUnfinishedTurn: vi.fn(() => false),
-    detach: vi.fn(async () => ({ ...state, type: "resume-session" as const })),
-    suspendTurn: vi.fn(async () => { end.resolve(); return state; }),
+    detach: vi.fn(async () => resumeState),
+    suspendTurn: vi.fn(async () => { end.resolve(); return continueState(); }),
   };
   const create = vi.spyOn(HarnessAgent.prototype, "createSession").mockResolvedValue(live as unknown as HarnessAgentSession);
   const result = (options: { abortSignal?: AbortSignal }) => {
     signal = options.abortSignal;
-    if (options.abortSignal && options.abortSignal.aborted) end.resolve();
+    if (options.abortSignal?.aborted) end.resolve();
     if (options.abortSignal && config.abortCloses !== false)
-      options.abortSignal.addEventListener("abort", () => { acknowledgeAbort(); end.resolve(); }, { once: true });
-    return Promise.resolve({ fullStream: { async *[Symbol.asyncIterator]() { await end.promise; } } }) as unknown as ReturnType<HarnessAgent["stream"]>;
+      options.abortSignal.addEventListener("abort", () => end.resolve(), { once: true });
+    return Promise.resolve({ fullStream: { async *[Symbol.asyncIterator]() {
+      for (const part of config.parts ?? []) yield part;
+      await end.promise;
+    } } }) as unknown as ReturnType<HarnessAgent["stream"]>;
   };
   const stream = vi.spyOn(HarnessAgent.prototype, "stream").mockImplementation(result);
   const continued = vi.spyOn(HarnessAgent.prototype, "continueStream").mockImplementation(result);
   cleanup.push(async () => { end.resolve(); await Promise.resolve(); });
-  return { create, stream, continued, live, end, acknowledgeAbort, signal: () => signal };
+  return { create, stream, continued, live, end, signal: () => signal };
 }
+
+const usage = { inputTokens: 100, outputTokens: 10, inputTokenDetails: { cacheReadTokens: 40, noCacheTokens: 60, cacheWriteTokens: 0 } };
+
+describe("agent runner model ids and tools", () => {
+  it("maps qgrid model ids onto Pi's Codex provider and rejects built-in tool names", async () => {
+    expect(toPiModelId("openai/gpt-6-astra")).toBe("openai-codex/gpt-6-astra");
+    const { runner } = fixture();
+    await expect(runner.create({ model: "openai/gpt-6-astra", tools: [{ name: "bash", description: "x", inputSchema: { type: "object" }, gate: "auto" }] }))
+      .rejects.toMatchObject({ status: 400, code: "invalid_tool_name" });
+    await expect(runner.create({ model: "anthropic/claude" })).rejects.toMatchObject({ status: 400, code: "unsupported_agent_model" });
+  });
+});
 
 describe("agent runner token selection", () => {
   it.each(["creating", "idle", "running", "waiting_action", "stopped", "failed", "destroyed"] as const)("counts only live sessions toward maxSessions: %s", async (status) => {
     const db = modelFixture(session({ status }));
     const selectToken = vi.fn().mockResolvedValue({ tokenId: 9, metadata: { name: "fixture-account" } });
-    const { runner, provider } = fixture({ maxSessions: 1, dispatcher: { selectToken } });
+    const { runner, provider } = fixture({ maxSessions: 1, dispatcher: { selectToken } as never });
     vi.spyOn(AgentModel, "createSession").mockImplementation(async (row) => { Object.assign(db.row, row); return db.row; });
     harness();
     const result = runner.create({ model: db.row.model });
@@ -171,7 +196,7 @@ describe("agent runner token selection", () => {
     const selectToken = vi.fn()
       .mockRejectedValueOnce(new QuotaThresholdExceededError("quota_threshold gate: all_exceeded"))
       .mockResolvedValue({ tokenId: 9, metadata: { name: "fixture-account" } });
-    const { runner, provider } = fixture({ dispatcher: { selectToken } });
+    const { runner, provider } = fixture({ dispatcher: { selectToken } as never });
     vi.spyOn(AgentModel, "createSession").mockImplementation(async (row) => { Object.assign(db.row, row); return db.row; });
     harness();
     const result = runner.create({ model: db.row.model, tokenId: 9 });
@@ -195,13 +220,12 @@ describe("agent runner token selection", () => {
     vi.useFakeTimers();
     const db = modelFixture();
     const selectToken = vi.fn().mockRejectedValueOnce(new Error("transient")).mockRejectedValue(error);
-    const { runner, provider } = fixture({ dispatcher: { selectToken } });
+    const { runner, provider } = fixture({ dispatcher: { selectToken } as never });
     const create = vi.spyOn(AgentModel, "createSession");
     const result = runner.create({ model: db.row.model }).catch((caught: Error) => caught);
     await vi.advanceTimersByTimeAsync(250);
     expect(await result).toMatchObject(expected);
     expect(selectToken).toHaveBeenCalledTimes(2);
-    expect(selectToken.mock.calls[1]).toEqual([undefined, false, expect.any(AbortSignal)]);
     expect(create).not.toHaveBeenCalled();
     expect(provider.createSession).not.toHaveBeenCalled();
   });
@@ -232,74 +256,61 @@ describe("agent runner disk guard", () => {
     await expect(runner.checkDisk()).rejects.toThrow("agents_disk_check_failed");
     expect(provider.destroyContainer).toHaveBeenCalledTimes(1);
   });
-
-  it("reuses an existing session container for df without stopping it", async () => {
-    const db = modelFixture();
-    const { runner, provider, run } = fixture();
-    harness();
-    await runner.prompt(db.row.id, "hello");
-    await vi.waitFor(() => expect(db.finish).toHaveBeenCalled());
-    provider.dataRootFreeBytes.mockRejectedValue(new Error("ENOENT"));
-    await runner.checkDisk();
-    expect(run).toHaveBeenCalledWith(expect.objectContaining({ command: "df -P /" }));
-    expect(provider.createSession).not.toHaveBeenCalled();
-    expect(provider.destroyContainer).not.toHaveBeenCalled();
-  });
 });
 
 describe("agent runner recovery", () => {
-  it("keeps unresolved waiting actions in the DB without replaying the bridge", async () => {
-    const action = pending();
-    const { result: _result, ...unresolved } = action;
-    const db = modelFixture(session({ status: "waiting_action" }), turn({ status: "waiting_action", pending_actions: [unresolved] }));
+  it("keeps unresolved waiting actions in the DB without restoring Pi", async () => {
+    const { result: _result, ...unresolved } = pending();
+    const db = modelFixture(session({ status: "waiting_action", lifecycle_state: continueState() }), turn({ status: "waiting_action", pending_actions: [unresolved] }));
     const { runner, provider } = fixture();
     const agent = harness();
     await runner.start();
     expect(agent.create).not.toHaveBeenCalled();
     expect(db.claim).not.toHaveBeenCalled();
     expect(provider.pruneOrphans).toHaveBeenCalledWith(new Set([db.row.id]));
-    expect((await AgentModel.latestTurn(db.row.id))?.pending_actions).toEqual([unresolved]);
   });
 
-  it("replays a saved result after a crash between saving it and continuation", async () => {
-    const db = modelFixture(session({ status: "waiting_action" }), turn({ status: "waiting_action", pending_actions: [pending()] }));
+  it("replays a saved result from the persisted continuation after a crash", async () => {
+    const db = modelFixture(session({ status: "waiting_action", lifecycle_state: continueState() }), turn({ status: "waiting_action", pending_actions: [pending()] }));
     const { runner } = fixture();
     const agent = harness();
     await runner.start();
     await vi.waitFor(() => expect(db.finish).toHaveBeenCalled());
     expect(db.claim).toHaveBeenCalledWith(db.row.id);
+    expect(agent.create).toHaveBeenCalledWith(expect.objectContaining({ continueFrom: expect.objectContaining({ type: "continue-turn", pendingToolResults: [expect.objectContaining({ toolCallId: "tool-1" })] }) }));
     expect(agent.continued).toHaveBeenCalledWith(expect.objectContaining({ toolResultContinuations: [{
       type: "tool-result", toolCallId: "tool-1", toolName: "lookup", output: { type: "json", value: { found: true } },
     }] }));
   });
 
-  it("redelivers undelivered results for a running turn", async () => {
-    modelFixture(session({ status: "running" }), turn({ pending_actions: [pending()] }));
-    const { runner } = fixture();
+  it("fails an in-flight turn after a restart, stops the container and keeps the session usable", async () => {
+    const db = modelFixture(session({ status: "running", lifecycle_state: resumeState }), turn());
+    const { runner, provider } = fixture();
     const agent = harness();
     await runner.start();
-    expect(agent.continued).toHaveBeenCalledWith(expect.objectContaining({ toolResultContinuations: [expect.objectContaining({ toolCallId: "tool-1" })] }));
-    expect(agent.stream).not.toHaveBeenCalled();
+    expect(agent.create).not.toHaveBeenCalled();
+    expect(provider.stopContainer).toHaveBeenCalledWith(db.row.id);
+    expect(db.finish).toHaveBeenCalledWith(db.row.id, 12, "failed", "server_restart", "idle");
+    expect(db.row.status).toBe("idle");
   });
 
-  it("reconnects a running turn with its persisted bridge cursor and no new prompt", async () => {
-    modelFixture(session({ status: "running" }), turn({ last_logged_event_seq: 42 }));
-    const { runner } = fixture();
-    const agent = harness();
+  it("destroys sessions persisted by the previous adapter format", async () => {
+    const db = modelFixture(session({ status: "stopped", lifecycle_state: { type: "resume-session", harnessId: "qgrid-pi", specificationVersion: "harness-v1", data: {} } }));
+    const { runner, provider } = fixture();
     await runner.start();
-    expect(agent.create).toHaveBeenCalledWith(expect.objectContaining({ continueFrom: expect.objectContaining({
-      type: "continue-turn", data: expect.objectContaining({ bridge: { port: 8787, lastSeenEventId: 42 } }),
-    }) }));
-    expect(agent.continued).toHaveBeenCalledWith(expect.objectContaining({ toolResultContinuations: [] }));
-    expect(agent.stream).not.toHaveBeenCalled();
+    expect(provider.destroyContainer).toHaveBeenCalledWith(db.row.id);
+    expect(db.row).toMatchObject({ status: "destroyed", stop_reason: "format_change" });
+    expect(runner.sessionCount()).toBe(0);
   });
 
-  it("does not submit a result again after delivery was persisted", async () => {
-    modelFixture(session({ status: "running" }), turn({ pending_actions: [pending(true)] }));
+  it("resumes a stopped session from its saved state and reports an unfinished turn", async () => {
+    const db = modelFixture(session({ status: "stopped", lifecycle_state: resumeState }));
     const { runner } = fixture();
     const agent = harness();
-    await runner.start();
-    expect(agent.continued).toHaveBeenCalledWith(expect.objectContaining({ toolResultContinuations: [] }));
+    agent.live.hasUnfinishedTurn.mockReturnValue(true);
+    await expect(runner.prompt(db.row.id, "again")).rejects.toMatchObject({ status: 409, code: "unfinished_turn" });
+    expect(agent.create).toHaveBeenCalledWith(expect.objectContaining({ resumeFrom: expect.objectContaining({ type: "resume-session" }) }));
+    expect(db.finish).toHaveBeenCalledWith(db.row.id, 12, "failed", "unfinished_turn");
   });
 });
 
@@ -311,12 +322,8 @@ describe("agent runner turn ownership", () => {
     provider.callerEnvironment.mockResolvedValue({ PASSWORD: "secret-value" });
     const result = { output: { nested: ["secret-value"] }, error: "Failed: secret-value" };
     const save = vi.spyOn(AgentModel, "saveActionResult").mockResolvedValue({ turn: db.active, duplicate: false });
-
     await runner.actionResult(db.row.id, action.toolCallId, result);
-
-    expect(save).toHaveBeenCalledWith(db.row.id, action.toolCallId, result, {
-      output: { nested: ["[REDACTED]"] }, error: "Failed: [REDACTED]",
-    });
+    expect(save).toHaveBeenCalledWith(db.row.id, action.toolCallId, result, { output: { nested: ["[REDACTED]"] }, error: "Failed: [REDACTED]" });
     expect(result).toEqual({ output: { nested: ["secret-value"] }, error: "Failed: secret-value" });
   });
 
@@ -329,60 +336,80 @@ describe("agent runner turn ownership", () => {
     expect(db.begin).not.toHaveBeenCalled();
   });
 
-  it("expires unresolved actions using the tool timeout (600 seconds by default)", async () => {
-    const { result: _result, ...action } = pending();
-    const db = modelFixture(session({ status: "waiting_action" }), turn({ status: "waiting_action", pending_actions: [{ ...action, requestedAt: new Date(Date.now() - 601_000).toISOString() }] }));
-    const { runner } = fixture();
-    harness({ hold: true });
-    await runner.sweep();
+  it("records one generate step per Pi model call with usage, served model and limits", async () => {
+    const db = modelFixture();
+    const { runner } = fixture({ maxModelCallsPerTurn: 1 });
+    const second = Promise.withResolvers<void>();
+    const agent = harness({ hold: true });
+    agent.stream.mockImplementation(async (options) => {
+      options.abortSignal?.addEventListener("abort", () => second.resolve(), { once: true });
+      return { fullStream: { async *[Symbol.asyncIterator]() {
+        yield { type: "start-step", request: {}, warnings: [] };
+        yield { type: "text-start", id: "a" };
+        yield { type: "text-delta", id: "a", text: "answer" };
+        yield { type: "text-end", id: "a" };
+        yield { type: "finish-step", finishReason: "stop", usage, response: { id: "resp-1", modelId: "gpt-6-astra" } };
+        yield { type: "start-step", request: {}, warnings: [] };
+        await second.promise;
+      } } } as Awaited<ReturnType<HarnessAgent["stream"]>>;
+    });
+    await runner.prompt(db.row.id, "count");
     await vi.waitFor(() => expect(db.finish).toHaveBeenCalled());
-    expect(db.finish).toHaveBeenCalledWith(db.row.id, db.active.id, "failed", "action_timeout", "idle", undefined, expect.anything());
+    expect(db.callStart).toHaveBeenNthCalledWith(1, 12, "call:12:1", "openai/gpt-6.1-sol");
+    expect(db.stepUpdate).toHaveBeenCalledWith(12, "call:12:1", expect.objectContaining({
+      model_name: "openai/gpt-6-astra", input_tokens: 100, output_tokens: 10, cache_read_tokens: 40, finish_reason: "stop", cost_source: "pricing_table",
+    }), "response:resp-1");
+    expect(db.events).toHaveBeenCalledWith(12, undefined, { result_text: "answer" });
+    expect(db.callStart).toHaveBeenNthCalledWith(2, 12, "call:12:2", "openai/gpt-6.1-sol");
+    expect(db.finish).toHaveBeenLastCalledWith(db.row.id, 12, "failed", "limit_exceeded:calls", "idle", undefined, expect.objectContaining({ lifecycleState: resumeState }));
+    expect(db.stepUpdate).toHaveBeenCalledWith(12, "call:12:2", expect.objectContaining({ error: "limit_exceeded:calls" }));
   });
 
-  it("redacts caller env from prompt logs, tool arguments/results and final text after recovery", async () => {
+  it("maps a credential store rejection to the turn error code", async () => {
+    const db = modelFixture();
+    const { runner } = fixture();
+    harness({ parts: [{ type: "error", error: new Error("Credential store read failed for openai-codex", { cause: new AgentTokenError("quota_exceeded") }) }] });
+    await runner.prompt(db.row.id, "go");
+    await vi.waitFor(() => expect(db.finish).toHaveBeenCalled());
+    expect(db.finish).toHaveBeenLastCalledWith(db.row.id, 12, "failed", "quota_exceeded", "idle", undefined, expect.anything());
+  });
+
+  it("redacts caller env from prompt logs, tool arguments/results and final text", async () => {
     const db = modelFixture();
     const { runner, provider } = fixture();
     provider.callerEnvironment.mockResolvedValue({ PASSWORD: "secret-value" });
-    const agent = harness();
-    const events = vi.spyOn(AgentModel, "recordEvent").mockResolvedValue(undefined);
-    const steps = vi.spyOn(AgentModel, "recordStep").mockResolvedValue(22);
-    const results = vi.spyOn(AgentModel, "recordToolResult").mockResolvedValue(undefined);
-    agent.stream.mockResolvedValue({ fullStream: {
-      async *[Symbol.asyncIterator]() {
-        yield { type: "tool-call", toolCallId: "shell-1", toolName: "bash", input: { command: "echo secret-value" }, providerMetadata: { qgrid: { seq: 8 } } };
-        yield { type: "tool-result", toolCallId: "shell-1", toolName: "bash", output: "secret-value", providerMetadata: { qgrid: { seq: 9 } } };
-        yield { type: "text-delta", id: "answer", text: "Result: secret-value", providerMetadata: { qgrid: { seq: 10 } } };
-      },
-    } } as Awaited<ReturnType<HarnessAgent["stream"]>>);
+    harness({ parts: [
+      { type: "tool-call", toolCallId: "shell-1", toolName: "bash", input: { command: "echo secret-value" } },
+      { type: "tool-result", toolCallId: "shell-1", toolName: "bash", output: "secret-value" },
+      { type: "text-start", id: "answer" },
+      { type: "text-delta", id: "answer", text: "Result: secret-value" },
+      { type: "text-end", id: "answer" },
+    ] });
     await runner.prompt(db.row.id, "Inspect secret-value");
     await vi.waitFor(() => expect(db.finish).toHaveBeenCalled());
     expect(db.begin).toHaveBeenCalledWith(db.row.id, "Inspect secret-value", expect.objectContaining({ user_prompt: "Inspect [REDACTED]" }));
-    const written = JSON.stringify([events.mock.calls, steps.mock.calls, results.mock.calls, db.finish.mock.calls]);
+    const written = JSON.stringify([db.events.mock.calls, db.steps.mock.calls, db.results.mock.calls, db.finish.mock.calls]);
     expect(written).not.toContain("secret-value");
     expect(written).toContain("[REDACTED]");
+    expect(db.results).toHaveBeenCalledWith(12, expect.objectContaining({ toolCallId: "shell-1", truncate: true }));
     expect((await runner.get(db.row.id)).turn?.result_text).toBe("Result: [REDACTED]");
   });
 
-  it("prepares git before starting the bridge and never persists create credentials", async () => {
+  it("prepares git before creating the Pi session and never persists create credentials", async () => {
     const db = modelFixture();
-    let elapsed = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-    const { runner, provider, sandbox, run } = fixture({ dispatcher: { selectToken: vi.fn().mockResolvedValue({ tokenId: 9, metadata: { name: "fixture-account" } }) } });
-    const created = vi.spyOn(AgentModel, "createSession").mockImplementation(async (row) => { elapsed += 100; Object.assign(db.row, row); return db.row; });
+    const { runner, provider, sandbox, run } = fixture({ dispatcher: { selectToken: vi.fn().mockResolvedValue({ tokenId: 9, metadata: { name: "fixture-account" } }) } as never });
+    const created = vi.spyOn(AgentModel, "createSession").mockImplementation(async (row) => { Object.assign(db.row, row); return db.row; });
     const agent = harness();
-    provider.createSession.mockImplementation(async () => { elapsed += 40; return sandbox; });
-    agent.create.mockImplementation(async () => { elapsed += 60; return agent.live as unknown as HarnessAgentSession; });
-    provider.inspectIp.mockImplementation(async () => { elapsed += 500; return "172.30.0.2"; });
+    provider.createSession.mockResolvedValue(sandbox);
     const input = { model: db.row.model, instructions: "Use PASSWORD", tools: db.row.tools, env: { PASSWORD: "env-secret" }, workspace: { git: { url: "https://example.com/repo.git", ref: "main", token: "git-secret" } } };
     const result = await runner.create(input);
     expect(result.status).toBe("idle");
-    expect(result.readyMs).toBe(100);
     expect(provider.createSession).toHaveBeenCalledWith({ sessionId: result.id, env: input.env });
     expect(run.mock.invocationCallOrder[0]).toBeLessThan(agent.create.mock.invocationCallOrder[0]!);
     expect(JSON.stringify(created.mock.calls)).not.toMatch(/env-secret|git-secret/);
   });
 
-  it("only executes diff on demand and masks it even after a host restart", async () => {
+  it("only executes diff on demand and masks it", async () => {
     const db = modelFixture();
     const { runner, provider, run } = fixture();
     provider.callerEnvironment.mockResolvedValue({ PASSWORD: "secret-value" });
@@ -395,63 +422,58 @@ describe("agent runner turn ownership", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores duplicate text events before appending the next unique delta", async () => {
+  it("suspends a caller-tool pause with its pending actions and resumes from the saved continuation", async () => {
     const db = modelFixture();
     const { runner } = fixture();
-    const agent = harness();
-    const record = vi.spyOn(AgentModel, "recordEvent").mockResolvedValue(undefined);
-    agent.stream.mockResolvedValue({ fullStream: {
-      async *[Symbol.asyncIterator]() {
-        yield { type: "text-delta", id: "answer", text: "hello", providerMetadata: { qgrid: { seq: 8 } } };
-        yield { type: "text-delta", id: "answer", text: "hello", providerMetadata: { qgrid: { seq: 8 } } };
-        yield { type: "text-delta", id: "answer", text: " world", providerMetadata: { qgrid: { seq: 9 } } };
-      },
-    } } as Awaited<ReturnType<HarnessAgent["stream"]>>);
-    await runner.prompt(db.row.id, "hello");
-    await vi.waitFor(() => expect(db.finish).toHaveBeenCalled());
-    expect(record.mock.calls.filter(([, seq]) => seq === 8)).toHaveLength(1);
-    expect(record).toHaveBeenCalledWith(12, 9, { result_text: "hello world" });
-  });
-
-  it("defers the host-tool cursor until envelope and pending actions are suspended together", async () => {
-    const db = modelFixture();
-    const { runner } = fixture();
-    const agent = harness();
-    const record = vi.spyOn(AgentModel, "recordStep").mockResolvedValue(22);
-    const event = vi.spyOn(AgentModel, "recordEvent").mockResolvedValue(undefined);
-    const suspend = vi.spyOn(AgentModel, "suspend").mockResolvedValue(undefined);
-    const state = {
-      ...reconstructContinueState({ sessionId: db.row.id, lastSeenEventId: 9 }),
-      pendingToolResults: [{ toolCallId: "tool-1", toolName: "lookup", input: '{"id":1}' }],
-    };
-    agent.live.hasUnfinishedTurn.mockReturnValue(true);
-    agent.live.suspendTurn.mockResolvedValue(state);
-    agent.stream.mockResolvedValue({ fullStream: {
-      async *[Symbol.asyncIterator]() {
-        yield { type: "tool-call", toolCallId: "tool-1", toolName: "lookup", input: { id: 1 }, providerMetadata: { qgrid: { seq: 8 } } };
-        yield { type: "finish-step", finishReason: "tool-calls", providerMetadata: { qgrid: { seq: 9 } } };
-      },
-    } } as Awaited<ReturnType<HarnessAgent["stream"]>>);
+    const agent = harness({ parts: [
+      { type: "start-step", request: {}, warnings: [] },
+      { type: "tool-call", toolCallId: "tool-1", toolName: "lookup", input: { id: 1 } },
+      { type: "finish-step", finishReason: "tool-calls", usage, response: { id: "resp-1", modelId: "gpt-6.1-sol" } },
+    ] });
+    // Fresh session before the prompt; paused on the caller tool once the stream drained.
+    agent.live.hasUnfinishedTurn.mockReturnValueOnce(false).mockReturnValue(true);
     await runner.prompt(db.row.id, "look it up");
-    await vi.waitFor(() => expect(suspend).toHaveBeenCalled());
-    expect(record).toHaveBeenCalledWith(12, expect.objectContaining({ key: "tool:tool-1", seq: undefined }));
-    expect(event.mock.calls.every(([, seq]) => seq === undefined)).toBe(true);
-    expect(suspend).toHaveBeenCalledWith(db.row.id, 12, state, [expect.objectContaining({
+    await vi.waitFor(() => expect(db.suspend).toHaveBeenCalled());
+    expect(db.steps).toHaveBeenCalledWith(12, expect.objectContaining({ key: "tool:tool-1" }));
+    expect(db.suspend).toHaveBeenCalledWith(db.row.id, 12, expect.objectContaining({ type: "continue-turn" }), [expect.objectContaining({
       toolCallId: "tool-1", toolName: "lookup", input: { id: 1 }, gate: "auto",
-    })], 9);
+    })], 0);
+    expect(db.row.status).toBe("waiting_action");
     expect(db.finish).not.toHaveBeenCalled();
+
+    agent.live.hasUnfinishedTurn.mockReturnValue(false);
+    vi.spyOn(AgentModel, "saveActionResult").mockImplementation(async (_id, toolCallId, result) => {
+      const action = db.active.pending_actions.find((item) => item.toolCallId === toolCallId)!;
+      action.result = { ...result, receivedAt: new Date().toISOString() };
+      return { turn: { ...db.active }, duplicate: false };
+    });
+    await runner.actionResult(db.row.id, "tool-1", { output: { found: true } });
+    await vi.waitFor(() => expect(db.finish).toHaveBeenCalledTimes(1));
+    expect(agent.create).toHaveBeenLastCalledWith(expect.objectContaining({ continueFrom: expect.objectContaining({ type: "continue-turn" }) }));
+    expect(agent.continued).toHaveBeenCalledWith(expect.objectContaining({ toolResultContinuations: [expect.objectContaining({ toolCallId: "tool-1", output: { type: "json", value: { found: true } } })] }));
+    expect(db.finish).toHaveBeenLastCalledWith(db.row.id, 12, "succeeded", undefined, "idle", undefined, expect.objectContaining({ lifecycleState: resumeState }));
+    expect(db.row.status).toBe("idle");
   });
 
-  it("suspends an in-flight turn and persists the shutdown checkpoint after its stream drains", async () => {
+  it("expires unresolved actions using the tool timeout (600 seconds by default)", async () => {
+    const { result: _result, ...action } = pending();
+    const db = modelFixture(session({ status: "waiting_action", lifecycle_state: continueState() }), turn({ status: "waiting_action", pending_actions: [{ ...action, requestedAt: new Date(Date.now() - 601_000).toISOString() }] }));
+    const { runner } = fixture();
+    harness({ hold: true });
+    await runner.sweep();
+    await vi.waitFor(() => expect(db.finish).toHaveBeenCalled());
+    expect(db.finish).toHaveBeenCalledWith(db.row.id, db.active.id, "failed", "action_timeout", "idle", undefined, expect.anything());
+  });
+
+  it("fails an in-flight turn on shutdown and checkpoints idle sessions", async () => {
     const db = modelFixture();
     const { runner } = fixture();
     const agent = harness({ hold: true });
-    agent.live.hasUnfinishedTurn.mockReturnValue(true);
     await runner.prompt(db.row.id, "keep working");
     await runner.shutdown();
-    expect(agent.live.suspendTurn).toHaveBeenCalledTimes(1);
-    expect(AgentModel.checkpoint).toHaveBeenCalledWith(db.row.id, 12, expect.objectContaining({ type: "continue-turn" }), 9);
-    expect(db.finish).not.toHaveBeenCalled();
+    expect(agent.signal()?.aborted).toBe(true);
+    expect(db.finish).toHaveBeenCalledWith(db.row.id, 12, "failed", "server_restart", "idle", undefined, expect.objectContaining({ lifecycleState: resumeState }));
+    expect(agent.live.suspendTurn).not.toHaveBeenCalled();
   });
 
   it("serializes same-session prompts and rejects the second before starting a second stream", async () => {
@@ -466,30 +488,29 @@ describe("agent runner turn ownership", () => {
     await vi.waitFor(() => expect(db.finish).toHaveBeenCalled());
   });
 
-  it("distinguishes caller cancellation from model-call limit exhaustion", async () => {
+  it("distinguishes caller cancellation from a time limit and persists the detached state", async () => {
     const db = modelFixture();
-    const { runner, relay } = fixture();
+    const { runner } = fixture();
     const agent = harness({ hold: true });
     await runner.prompt(db.row.id, "cancel me");
     await runner.cancel(db.row.id);
     expect(agent.signal()?.aborted).toBe(true);
-    expect(db.finish).toHaveBeenLastCalledWith(db.row.id, 12, "aborted", "cancelled", "idle", undefined, expect.objectContaining({ lifecycleState: expect.objectContaining({ type: "resume-session" }) }));
-    expect(relay.abortTurn).toHaveBeenCalledWith("12");
+    expect(db.finish).toHaveBeenLastCalledWith(db.row.id, 12, "aborted", "cancelled", "idle", undefined, expect.objectContaining({ lifecycleState: resumeState }));
 
     db.active.status = "running";
     db.finish.mockClear();
     const held = Promise.withResolvers<void>();
     agent.stream.mockImplementation(async (options) => {
-      options.abortSignal?.addEventListener("abort", () => { agent.acknowledgeAbort(); held.resolve(); }, { once: true });
+      options.abortSignal?.addEventListener("abort", () => held.resolve(), { once: true });
       return { fullStream: { async *[Symbol.asyncIterator]() { await held.promise; } } } as Awaited<ReturnType<HarnessAgent["stream"]>>;
     });
     await runner.prompt(db.row.id, "limited");
-    runner.onLimitExceeded(db.row.id, "model_calls");
+    runner.onLimitExceeded(db.row.id, "time");
     await vi.waitFor(() => expect(db.finish).toHaveBeenCalled());
-    expect(db.finish).toHaveBeenLastCalledWith(db.row.id, 12, "failed", "limit_exceeded:model_calls", "idle", undefined, expect.objectContaining({ lifecycleState: expect.objectContaining({ type: "resume-session" }) }));
+    expect(db.finish).toHaveBeenLastCalledWith(db.row.id, 12, "failed", "limit_exceeded:time", "idle", undefined, expect.objectContaining({ lifecycleState: resumeState }));
   });
 
-  it("stops the container after 10 seconds without the bridge abort completion", async () => {
+  it("stops the container after 10 seconds when Pi does not honor the abort", async () => {
     vi.useFakeTimers();
     const db = modelFixture();
     const { runner, provider } = fixture();
@@ -505,149 +526,18 @@ describe("agent runner turn ownership", () => {
     agent.end.resolve();
   });
 
-  it("resolves relay sessions to their pinned token and active persisted turn", async () => {
-    const db = modelFixture(session({ status: "running" }), turn({ model_call_count: 3 }));
-    const { runner } = fixture();
-    const key = derivePiSessionSecrets("runner-test-secret", db.row.id).sessionKey;
-    await expect(runner.resolveSession(key)).resolves.toMatchObject({
-      tokenId: 9, containerIp: "172.30.0.2", status: "running",
-      activeTurn: { turnId: "12", modelCallCount: 3 },
-    });
-  });
-});
-
-describe("agent runner with the real HarnessAgent", () => {
-  it("suspends a caller tool and records its bridge delivery echo after actionResult resumes it", async () => {
-    const db = modelFixture();
-    const { runner, sandbox } = fixture();
-    Object.assign(sandbox, { defaultWorkingDirectory: "/workspace" });
-    let seq = 7;
-    let prompts = 0;
-    const submitted = vi.fn();
-    const starts = vi.fn();
-    const originalPi = piHarness.createSandboxPi;
-    const usage = {
-      inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
-      outputTokens: { total: 0, text: 0, reasoning: 0 },
-    };
-    vi.spyOn(piHarness, "createSandboxPi").mockImplementation((settings) => ({
-      ...originalPi(settings),
-      getBootstrap: undefined,
-      doStart: async (start) => {
-        starts(start);
-        let done = Promise.withResolvers<void>();
-        let options: HarnessV1ContinueTurnOptions;
-        const state = () => reconstructContinueState({ sessionId: start.sessionId, lastSeenEventId: seq });
-        const emit = (event: HarnessV1StreamPart) => {
-          const frame = Object.assign(event, {
-            seq: ++seq, providerMetadata: { qgrid: { seq } }, harnessMetadata: { qgrid: { seq } },
-          });
-          settings.onBridgeEvent?.(frame);
-          options.emit(frame);
-        };
-        const control = () => ({
-          done: done.promise,
-          submitToolResult: async (result: { toolCallId: string; output: unknown }) => {
-            submitted(result);
-            setTimeout(() => {
-              emit({ type: "tool-result", toolCallId: result.toolCallId, toolName: "lookup", result: { found: true } });
-              emit({ type: "text-start", id: "answer" });
-              emit({ type: "text-delta", id: "answer", delta: "done" });
-              emit({ type: "text-end", id: "answer" });
-              emit({ type: "finish-step", finishReason: { unified: "stop", raw: "stop" }, usage });
-              emit({ type: "finish", finishReason: { unified: "stop", raw: "stop" }, totalUsage: usage });
-              done.resolve();
-            }, 0);
-          },
-        });
-        return {
-          sessionId: start.sessionId, isResume: Boolean(start.continueFrom || start.resumeFrom),
-          doPromptTurn: async (input) => {
-            options = input;
-            prompts++;
-            setTimeout(() => {
-              emit({ type: "stream-start", warnings: [] });
-              if (prompts === 1) {
-                emit({ type: "tool-call", toolCallId: "tool-1", toolName: "lookup", input: '{"id":1}' });
-                emit({ type: "finish-step", finishReason: { unified: "tool-calls", raw: "host-input" }, usage });
-              } else {
-                emit({ type: "text-start", id: "second" });
-                emit({ type: "text-delta", id: "second", delta: "new answer" });
-                emit({ type: "text-end", id: "second" });
-                emit({ type: "finish-step", finishReason: { unified: "stop", raw: "stop" }, usage });
-                emit({ type: "finish", finishReason: { unified: "stop", raw: "stop" }, totalUsage: usage });
-                done.resolve();
-              }
-            }, 0);
-            return control();
-          },
-          doContinueTurn: async (input) => { options = input; done = Promise.withResolvers<void>(); return control(); },
-          doCompact: async () => { throw new Error("Test adapter does not compact"); },
-          doSuspendTurn: async () => { done.resolve(); return state(); },
-          doDetach: async () => ({ ...state(), type: "resume-session" as const }),
-          doStop: async () => ({ ...state(), type: "resume-session" as const }),
-          doDestroy: async () => { done.resolve(); },
-        };
-      },
-    }));
-    const step = vi.spyOn(AgentModel, "recordStep").mockResolvedValue(22);
-    vi.spyOn(AgentModel, "recordEvent").mockImplementation(async (_id, nextSeq, patch) => {
-      if (nextSeq !== undefined) db.active.last_logged_event_seq = nextSeq;
-      if (patch?.result_text !== undefined) db.active.result_text = patch.result_text;
-    });
-    const suspend = vi.spyOn(AgentModel, "suspend").mockImplementation(async (_id, _turn, envelope, actions, cursor) => {
-      db.row.status = "waiting_action";
-      db.row.lifecycle_state = envelope;
-      db.active.status = "waiting_action";
-      db.active.pending_actions = actions;
-      db.active.last_logged_event_seq = cursor;
-    });
-    const delivery = vi.spyOn(AgentModel, "recordToolResult").mockImplementation(async (_id, result) => {
-      const action = db.active.pending_actions.find((item) => item.toolCallId === result.toolCallId);
-      if (action) action.deliveredAt = new Date().toISOString();
-    });
-    vi.spyOn(AgentModel, "saveActionResult").mockImplementation(async (_id, toolCallId, result) => {
-      const action = db.active.pending_actions.find((item) => item.toolCallId === toolCallId)!;
-      action.result = { ...result, receivedAt: new Date().toISOString() };
-      return { turn: { ...db.active }, duplicate: false };
-    });
-
-    await runner.prompt(db.row.id, "look it up");
-    await vi.waitFor(() => expect(suspend).toHaveBeenCalledTimes(1));
-    expect(db.row.status).toBe("waiting_action");
-    expect(db.row.lifecycle_state).toMatchObject({
-      type: "continue-turn", pendingToolResults: [expect.objectContaining({ toolCallId: "tool-1" })],
-      turnSettings: expect.objectContaining({ model: db.row.model }),
-    });
-    expect(step).toHaveBeenCalledTimes(1);
-    expect(db.finish).not.toHaveBeenCalled();
-
-    await runner.actionResult(db.row.id, "tool-1", { output: { found: true } });
-    await vi.waitFor(() => expect(db.finish).toHaveBeenCalledTimes(1));
-    expect(submitted).toHaveBeenCalledTimes(1);
-    expect(delivery).toHaveBeenCalledTimes(1);
-    expect(delivery).toHaveBeenCalledWith(12, expect.objectContaining({ toolCallId: "tool-1", output: { found: true } }));
-    expect(db.active.pending_actions[0]?.deliveredAt).toEqual(expect.any(String));
-    expect(db.active.result_text).toBe("done");
-    expect(db.active.status).toBe("succeeded");
-    const completedCursor = seq;
-    expect(db.row.lifecycle_state).toMatchObject({ type: "resume-session", data: { bridge: { lastSeenEventId: completedCursor } } });
-    expect(db.active.last_logged_event_seq).toBe(completedCursor);
-    expect(db.finish).toHaveBeenLastCalledWith(db.row.id, 12, "succeeded", undefined, "idle", undefined, expect.objectContaining({ seq: completedCursor, resultText: "done" }));
-
-    db.begin.mockImplementation(async () => {
-      db.row.status = "running";
-      Object.assign(db.active, { id: 13, index: 1, status: "running", pending_actions: [], result_text: null });
-      return { ...db.active };
-    });
-    await runner.prompt(db.row.id, "a new question");
-    await vi.waitFor(() => expect(db.finish).toHaveBeenCalledTimes(2));
-    const nextStart = starts.mock.calls[2]![0];
-    expect(nextStart.continueFrom).toBeUndefined();
-    expect(nextStart.resumeFrom).toMatchObject({ type: "resume-session", data: { bridge: { lastSeenEventId: completedCursor } } });
-    expect(nextStart.resumeFrom.continueFrom).toBeUndefined();
-    expect(nextStart.resumeFrom.pendingToolResults).toBeUndefined();
-    expect(submitted).toHaveBeenCalledTimes(1);
-    expect(db.active.result_text).toBe("new answer");
+  it("parks idle sessions with their detached state and restores them on the next prompt", async () => {
+    const db = modelFixture(session({ last_turn_at: new Date(Date.now() - 1_801_000) }));
+    const { runner, provider } = fixture();
+    const agent = harness();
+    await runner.prompt(db.row.id, "first");
+    await vi.waitFor(() => expect(db.finish).toHaveBeenCalled());
+    await runner.sweep();
+    expect(provider.stopContainer).toHaveBeenCalledWith(db.row.id);
+    expect(db.row).toMatchObject({ status: "stopped", stop_reason: "idle", lifecycle_state: resumeState });
+    db.finish.mockClear();
+    await runner.prompt(db.row.id, "second");
+    expect(agent.create).toHaveBeenLastCalledWith(expect.objectContaining({ resumeFrom: resumeState }));
+    await vi.waitFor(() => expect(db.finish).toHaveBeenCalled());
   });
 });

@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
 
-import {
-  type HarnessV1ContinueTurnState,
-  type HarnessV1LifecycleState,
-  type HarnessV1StreamPart,
-} from "@ai-sdk/harness";
+import { type HarnessV1ContinueTurnState, type HarnessV1LifecycleState } from "@ai-sdk/harness";
+import { createPi } from "@ai-sdk/harness-pi";
 import { HarnessAgent, type HarnessAgentSession } from "@ai-sdk/harness/agent";
 import { getLogger } from "@logtape/logtape";
 import { jsonSchema, tool, type ToolSet, type ToolResultPart } from "ai";
@@ -25,19 +22,8 @@ import { QuotaThresholdExceededError } from "../../application/qgrid/qgrid.types
 import { calculateCostUsd } from "../providers/common/model-cost";
 import { jsonValueSchema, type JsonValue } from "../providers/common/provider-types";
 import { type OpenAIDispatcher } from "../providers/openai/openai-dispatcher";
+import { AgentCredentialStores, findAgentTokenError } from "./credential-store";
 import { type DockerSandboxProvider, type DockerSandboxSession } from "./docker-sandbox";
-import {
-  createSandboxPi,
-  derivePiSessionSecrets,
-  reconstructContinueState,
-  PI_BUILTIN_TOOLS,
-} from "./pi-harness";
-import {
-  type AgentsRelay,
-  type RelayCallEnd,
-  type RelayCallStart,
-  type RelaySessionStore,
-} from "./relay";
 import {
   prepareWorkspace,
   readWorkspaceDiff,
@@ -47,7 +33,7 @@ import {
 
 const logger = getLogger(["qgrid", "agents", "runner"]);
 
-// The catalog shipped in the pinned Pi sandbox image, not the wider qgrid catalog.
+/** Pi's `openai-codex` catalog (pi-ai providers/data/openai-codex.json), under qgrid's prefix. */
 export const PI_MODELS = [
   "openai/gpt-6-astra",
   "openai/gpt-6-sol",
@@ -59,11 +45,20 @@ export const PI_MODELS = [
   "openai/gpt-5.6-luna",
 ] as const;
 
+/** Pi built-in tool names; caller tools may not shadow them. */
+export const PI_BUILTIN_TOOLS = ["read", "write", "edit", "bash", "grep", "glob", "find", "ls"];
+
+/** API model ids keep the qgrid `openai/` prefix; Pi routes them through its Codex provider (D28). */
+export function toPiModelId(model: string): string {
+  return model.replace(/^openai\//, "openai-codex/");
+}
+
 export type AgentSessionRunnerOptions = {
   provider: DockerSandboxProvider;
-  dispatcher: Pick<OpenAIDispatcher, "selectToken">;
-  secret: string;
-  relayBaseUrl: string;
+  dispatcher: Pick<
+    OpenAIDispatcher,
+    "selectToken" | "tokenMetadata" | "refreshCredentials" | "isQuotaEligible"
+  >;
   maxSessions: number;
   idleTtlSec: number;
   retainSec: number;
@@ -84,7 +79,7 @@ export type CreateAgentSession = {
   env?: Record<string, string>;
 };
 
-type PiAgent = HarnessAgent<ReturnType<typeof createSandboxPi>, ToolSet>;
+type PiAgent = HarnessAgent<ReturnType<typeof createPi>, ToolSet>;
 
 type Stop = { status: "aborted" | "failed"; reason: string };
 
@@ -99,27 +94,17 @@ type Handle = {
   stop?: Stop;
   suspending?: boolean;
   ended?: boolean;
-  seq: number;
   text: string;
-  pendingBoundary: boolean;
-  bridgeResults: Array<Extract<HarnessV1StreamPart, { type: "tool-result" }> & { seq: number }>;
-  abortFinish: ReturnType<typeof Promise.withResolvers<void>>;
-  checkpoint?: { lifecycleState: HarnessV1LifecycleState; seq: number; resultText: string };
+  calls: number;
 };
 
-const eventSequence = z.object({
-  providerMetadata: z.object({ qgrid: z.object({ seq: z.number().int().nonnegative() }) }),
+const stepUsage = z.object({
+  inputTokens: z.number().optional(),
+  outputTokens: z.number().optional(),
+  inputTokenDetails: z.object({ cacheReadTokens: z.number().optional() }).partial().optional(),
 });
 
-const bridgeCursor = z.object({
-  bridge: z.object({ lastSeenEventId: z.number().int().nonnegative() }),
-});
-
-const responseUsage = z.object({
-  input_tokens: z.number(),
-  output_tokens: z.number(),
-  input_tokens_details: z.object({ cached_tokens: z.number().optional() }).optional(),
-});
+const stepResponse = z.object({ id: z.string().optional(), modelId: z.string().optional() });
 
 // The framework validates adapter data on createSession; preserve its complete opaque envelope.
 const lifecycleSchema = z.custom<HarnessV1LifecycleState>(
@@ -127,33 +112,31 @@ const lifecycleSchema = z.custom<HarnessV1LifecycleState>(
     z
       .object({
         type: z.enum(["continue-turn", "resume-session"]),
-        harnessId: z.literal("qgrid-pi"),
+        harnessId: z.literal("pi"),
         specificationVersion: z.literal("harness-v1"),
         data: z.json(),
       })
       .safeParse(value).success,
 );
 
-/** Runner owns Docker lifecycle; HarnessAgent only owns its local bridge connection. */
-export class AgentSessionRunner implements RelaySessionStore {
+/**
+ * Pi runs inside this process (official harness-pi); the runner owns the Docker sandbox, the DB
+ * state machine and the pool token. Turn state is persisted at every turn boundary (D17) and
+ * whenever a caller tool pauses the turn (D24).
+ */
+export class AgentSessionRunner {
   private readonly handles = new Map<string, Handle>();
-  private readonly keys = new Map<string, string>();
   private readonly locks = new Map<string, Promise<void>>();
-  private readonly calls = new Map<
-    string,
-    { sessionId: string; turnId: number; model: string; done: Promise<void>; resolve: () => void }
-  >();
-  private relay?: AgentsRelay;
+  private readonly secrets = new Map<string, string[]>();
+  private readonly stores: AgentCredentialStores;
   private sweeper?: ReturnType<typeof setInterval>;
   private shuttingDown = false;
   private count = 0;
-  private readonly secrets = new Map<string, string[]>();
 
-  constructor(private readonly options: AgentSessionRunnerOptions) {}
-
-  setRelay(relay: AgentsRelay) {
-    this.relay = relay;
+  constructor(private readonly options: AgentSessionRunnerOptions) {
+    this.stores = new AgentCredentialStores(options.dispatcher);
   }
+
   sessionCount() {
     return this.count;
   }
@@ -180,7 +163,7 @@ export class AgentSessionRunner implements RelaySessionStore {
     const names = new Set<string>();
 
     for (const definition of input.tools ?? []) {
-      if (definition.name in PI_BUILTIN_TOOLS || names.has(definition.name))
+      if (PI_BUILTIN_TOOLS.includes(definition.name) || names.has(definition.name))
         throw new AgentStateError(400, "invalid_tool_name");
       names.add(definition.name);
     }
@@ -248,7 +231,6 @@ export class AgentSessionRunner implements RelaySessionStore {
         created_at: now,
         updated_at: now,
       });
-      this.register(id);
       this.count++;
 
       try {
@@ -325,6 +307,10 @@ export class AgentSessionRunner implements RelaySessionStore {
         const handle = this.handles.get(sessionId)?.session
           ? this.handles.get(sessionId)!
           : await this.attach(row, false);
+
+        // An aborted caller-tool turn can leave Pi waiting for tool results. Prompting through
+        // it is not possible; the caller recreates the session (documented limitation).
+        if (handle.session!.hasUnfinishedTurn()) throw new AgentStateError(409, "unfinished_turn");
 
         this.launch(row, turn, handle, false);
       } catch (error) {
@@ -464,97 +450,6 @@ export class AgentSessionRunner implements RelaySessionStore {
     });
   }
 
-  async resolveSession(sessionKey: string) {
-    let id = this.keys.get(sessionKey);
-
-    if (!id) {
-      for (const row of await AgentModel.listSessions()) this.register(row.id);
-      id = this.keys.get(sessionKey);
-    }
-
-    if (!id) return undefined;
-    const row = await AgentModel.getSession(id);
-    const turn = row.status === "running" ? await AgentModel.latestTurn(id) : null;
-
-    return {
-      sessionId: id,
-      tokenId: row.token_id,
-      model: row.model,
-      status: row.status,
-      containerIp: row.container_ip,
-      activeTurn:
-        turn?.status === "running"
-          ? {
-              turnId: String(turn.id),
-              modelCallCount: turn.model_call_count,
-              startedAt: new Date(turn.started_at).getTime(),
-            }
-          : undefined,
-    };
-  }
-
-  async onCallStart(record: RelayCallStart) {
-    const turnId = Number(record.turnId);
-
-    try {
-      await this.checkDisk();
-    } catch (error) {
-      if (error instanceof AgentStateError && error.code === "limit_exceeded:disk")
-        this.onLimitExceeded(record.sessionId, "disk");
-      throw error;
-    }
-
-    await AgentModel.recordCallStart(turnId, `relay:${record.callId}`, record.model);
-    const { promise: done, resolve } = Promise.withResolvers<void>();
-    this.calls.set(record.callId, {
-      sessionId: record.sessionId,
-      turnId,
-      model: record.model,
-      done,
-      resolve,
-    });
-  }
-
-  async onCallEnd(record: RelayCallEnd) {
-    const call = this.calls.get(record.callId);
-
-    if (!call) return;
-
-    try {
-      const usage = responseUsage.safeParse(record.usage).data;
-      const model = record.model ? `openai/${record.model.replace(/^openai\//, "")}` : call.model;
-      const cached = usage?.input_tokens_details?.cached_tokens ?? 0;
-      await AgentModel.updateStep(
-        call.turnId,
-        `relay:${record.callId}`,
-        {
-          model_name: record.model ? model : null,
-          input_tokens: usage?.input_tokens ?? null,
-          output_tokens: usage?.output_tokens ?? null,
-          cache_read_tokens: usage ? cached : null,
-          cache_creation_tokens: usage ? 0 : null,
-          cost_usd: usage
-            ? Math.round(
-                calculateCostUsd(model, {
-                  inputTokens: usage.input_tokens,
-                  outputTokens: usage.output_tokens,
-                  cachedInputTokens: cached,
-                }) * 1_000_000,
-              )
-            : null,
-          cost_source: usage ? "pricing_table" : null,
-          duration_ms: record.ms,
-          finish_reason: usage ? "stop" : null,
-          error: this.redact(call.sessionId, record.error ?? null),
-        },
-        record.responseId ? `response:${record.responseId}` : undefined,
-      );
-    } finally {
-      call.resolve();
-      this.calls.delete(record.callId);
-    }
-  }
-
   onLimitExceeded(sessionId: string, which: string) {
     void this.abort(sessionId, { status: "failed", reason: `limit_exceeded:${which}` }).catch(() =>
       logger.error("Failed to stop limited agent turn"),
@@ -600,9 +495,17 @@ export class AgentSessionRunner implements RelaySessionStore {
     await this.options.provider.pruneOrphans(new Set(retained.map((row) => row.id)));
 
     for (const row of retained) {
-      this.register(row.id);
-
       try {
+        // Sessions persisted by an earlier adapter cannot be resumed by harness-pi.
+        if (row.lifecycle_state && !lifecycleSchema.safeParse(row.lifecycle_state).success) {
+          await this.options.provider.destroyContainer(row.id);
+          await AgentModel.transition(row.id, [row.status], "destroyed", {
+            stop_reason: "format_change",
+          });
+          this.count--;
+          continue;
+        }
+
         if (row.status === "creating") {
           await AgentModel.transition(row.id, ["creating"], "failed");
           continue;
@@ -620,13 +523,24 @@ export class AgentSessionRunner implements RelaySessionStore {
             await AgentModel.claimContinuation(row.id);
             await this.resumeTurn(await AgentModel.getSession(row.id), turn);
           }
-          // Persisted pending actions remain available without connecting to the bridge.
+          // Otherwise the persisted pending actions wait for the caller; nothing to restore yet.
         } else if (row.status === "running") {
           const turn = await AgentModel.latestTurn(row.id);
 
           if (!turn) throw new Error("missing_active_turn");
           await AgentModel.recoverCalls(turn.id);
-          await this.resumeTurn(row, turn);
+
+          const continuation = this.continuation(row);
+
+          if (continuation && turn.pending_actions.every((action) => action.result)) {
+            // Died between claiming a continuation and launching it; the state is complete.
+            await this.resumeTurn(row, turn);
+          } else {
+            // Pi ran inside the dead process; the in-flight turn cannot continue (D18 b).
+            // Stop the container so a long-running command does not outlive the turn.
+            await this.options.provider.stopContainer(row.id);
+            await AgentModel.finish(row.id, turn.id, "failed", "server_restart", "idle");
+          }
         }
       } catch (error) {
         const turn = await AgentModel.latestTurn(row.id);
@@ -700,99 +614,62 @@ export class AgentSessionRunner implements RelaySessionStore {
     this.shuttingDown = true;
     clearInterval(this.sweeper);
 
-    for (const [id, handle] of this.handles) {
-      let state: HarnessV1LifecycleState | undefined;
+    // Copy: abort() and finish() remove entries while this loop runs.
+    // oxlint-disable-next-line unicorn/no-useless-spread
+    for (const [id, handle] of [...this.handles]) {
+      // An in-flight turn runs inside this process and dies with it (D18 b).
+      if (handle.task && !handle.ended)
+        await this.abort(id, { status: "failed", reason: "server_restart" });
+
       await this.locked(id, async () => {
         clearTimeout(handle.timer);
 
         if (!handle.session) return;
         handle.suspending = true;
-        state = handle.session.hasUnfinishedTurn()
-          ? await handle.session.suspendTurn()
-          : await handle.session.detach();
+        const state = await handle.session.detach();
         handle.session = undefined;
-      });
-      // Release the session mutex so a consumer already at its final boundary can drain.
-      await handle.task;
-      const savedState = state;
-
-      if (!savedState) continue;
-      await this.locked(id, async () => {
-        const cursor = bridgeCursor.parse(savedState.data).bridge.lastSeenEventId;
-        const row = await AgentModel.getSession(id);
-
-        const continuation =
-          savedState.type === "continue-turn" ? savedState : savedState.continueFrom;
-
-        if (handle.turn && continuation?.pendingToolResults?.length) {
-          await AgentModel.suspend(
-            id,
-            handle.turn.id,
-            continuation,
-            this.pendingActions(row, continuation),
-            cursor,
-          );
-        } else await AgentModel.checkpoint(id, handle.turn?.id ?? null, savedState, cursor);
+        await AgentModel.checkpoint(id, null, state, 0);
       });
     }
-  }
-
-  private register(id: string) {
-    this.keys.set(derivePiSessionSecrets(this.options.secret, id).sessionKey, id);
   }
 
   private forget(id: string) {
     clearTimeout(this.handles.get(id)?.timer);
     this.handles.delete(id);
-    this.keys.delete(derivePiSessionSecrets(this.options.secret, id).sessionKey);
-    this.relay?.removeRules(id);
   }
 
   private newHandle(row: AgentSessionBase, sandbox: DockerSandboxSession): Handle {
     const tools: ToolSet = {};
 
     for (const definition of row.tools) {
+      // No execute: the framework pauses the turn and reports the call for the caller (D24).
       tools[definition.name] = tool({
         description: definition.description,
         inputSchema: jsonSchema(definition.inputSchema),
       });
     }
 
-    let handle: Handle;
-
     const agent = new HarnessAgent({
-      harness: createSandboxPi({
-        secret: this.options.secret,
-        relayBaseUrl: this.options.relayBaseUrl,
-        model: row.model,
-        onBridgeEvent: (event) => {
-          if (event.type === "finish" && event.finishReason.raw === "aborted")
-            handle.abortFinish.resolve();
-
-          if (
-            event.type === "tool-result" &&
-            row.tools.some((definition) => definition.name === event.toolName)
-          )
-            handle.bridgeResults.push(event);
-        },
+      harness: createPi({
+        credentials: this.stores.get(row.token_id),
+        reattachInProcess: false,
+        thinkingLevel: "medium",
       }),
-      model: row.model,
+      model: toPiModelId(row.model),
       instructions: row.instructions,
       tools,
+      permissionMode: "allow-all",
       sandboxConfig: { workDir: "." },
     });
 
-    handle = {
-      agent,
-      sandbox,
-      seq: 0,
-      text: "",
-      pendingBoundary: false,
-      bridgeResults: [],
-      abortFinish: Promise.withResolvers<void>(),
-    };
+    return { agent, sandbox, text: "", calls: 0 };
+  }
 
-    return handle;
+  private continuation(row: AgentSessionBase): HarnessV1ContinueTurnState | undefined {
+    const parsed = row.lifecycle_state ? lifecycleSchema.safeParse(row.lifecycle_state) : undefined;
+    const state = parsed?.success ? parsed.data : undefined;
+
+    return state?.type === "continue-turn" ? state : state?.continueFrom;
   }
 
   private async attach(
@@ -804,39 +681,15 @@ export class AgentSessionRunner implements RelaySessionStore {
     const sandbox = await this.options.provider.resumeSession({ sessionId: row.id, abortSignal });
     await this.loadSecrets(row);
     const handle = this.newHandle(row, sandbox);
-
-    const fallback = reconstructContinueState({
-      sessionId: row.id,
-      lastSeenEventId:
-        turn?.last_logged_event_seq ??
-        (await AgentModel.latestTurn(row.id))?.last_logged_event_seq ??
-        0,
-    });
-
-    const savedState = row.lifecycle_state
-      ? lifecycleSchema.parse(row.lifecycle_state)
-      : continuing
-        ? fallback
-        : { ...fallback, type: "resume-session" as const };
-
-    const state = {
-      ...savedState,
-      data: { ...bridgeData(savedState), bridge: bridgeData(fallback).bridge },
-    };
-
-    let continuation: HarnessV1ContinueTurnState | undefined;
+    const parsed = row.lifecycle_state ? lifecycleSchema.safeParse(row.lifecycle_state) : undefined;
+    const saved = parsed?.success ? parsed.data : undefined;
 
     if (continuing) {
-      continuation = state.type === "continue-turn" ? state : (state.continueFrom ?? fallback);
-      // DB progress may be newer than the most recent graceful suspension envelope.
-      continuation = {
-        ...continuation,
-        data: {
-          ...bridgeData(continuation),
-          bridge: { port: 8787, lastSeenEventId: turn?.last_logged_event_seq ?? 0 },
-        },
-      };
+      let continuation = this.continuation(row);
+
+      if (!continuation) throw new AgentStateError(409, "continuation_unavailable");
       const pending = turn?.pending_actions.filter((action) => !action.deliveredAt) ?? [];
+      // DB results may be newer than the suspended envelope's pending list.
       continuation = {
         ...continuation,
         pendingToolResults: pending.map((action) => ({
@@ -845,17 +698,25 @@ export class AgentSessionRunner implements RelaySessionStore {
           input: JSON.stringify(action.input),
         })),
       };
+      handle.session = await handle.agent.createSession({
+        sessionId: row.id,
+        sandboxSession: sandbox,
+        abortSignal,
+        continueFrom: continuation,
+      });
+    } else {
+      handle.session = await handle.agent.createSession({
+        sessionId: row.id,
+        sandboxSession: sandbox,
+        abortSignal,
+        // harness-pi builds both state types from the same session snapshot; a leftover
+        // continue-turn envelope (aborted caller-tool turn) resumes the conversation itself.
+        resumeFrom: saved
+          ? { ...saved, type: "resume-session", continueFrom: undefined }
+          : undefined,
+      });
     }
 
-    handle.session = await handle.agent.createSession({
-      sessionId: row.id,
-      sandboxSession: sandbox,
-      abortSignal,
-      continueFrom: continuation,
-      resumeFrom: continuing
-        ? undefined
-        : { ...state, type: "resume-session", continueFrom: undefined },
-    });
     await AgentModel.updateSession(row.id, {
       container_ip: await this.options.provider.inspectIp(row.id),
     });
@@ -887,10 +748,8 @@ export class AgentSessionRunner implements RelaySessionStore {
     handle.controller = new AbortController();
     handle.stop = undefined;
     handle.ended = false;
-    handle.seq = turn.last_logged_event_seq;
     handle.text = turn.result_text ?? "";
-    handle.pendingBoundary = false;
-    handle.abortFinish = Promise.withResolvers<void>();
+    handle.calls = turn.model_call_count;
 
     const remaining =
       new Date(turn.started_at).getTime() + this.options.maxTurnSeconds * 1000 - Date.now();
@@ -905,6 +764,8 @@ export class AgentSessionRunner implements RelaySessionStore {
   private async consume(row: AgentSessionBase, handle: Handle, continuing: boolean) {
     const turn = handle.turn!;
     const session = handle.session!;
+    let callKey: string | undefined;
+    let callStartedAt = 0;
 
     try {
       const continuations: ToolResultPart[] = turn.pending_actions.flatMap((action) =>
@@ -940,19 +801,65 @@ export class AgentSessionRunner implements RelaySessionStore {
 
       for await (const part of stream.fullStream) {
         if (handle.ended) break;
-        await this.recordBridgeResults(handle);
-        const seq = eventSequence.safeParse(part).data?.providerMetadata.qgrid.seq;
 
-        if (seq !== undefined && seq <= handle.seq) continue;
-        handle.seq = Math.max(handle.seq, seq ?? 0);
+        if (part.type === "start-step") {
+          // One Pi model call = one generate step (D16). Limits apply before the call runs long.
+          handle.calls += 1;
+          callKey = `call:${turn.id}:${handle.calls}`;
+          callStartedAt = Date.now();
 
-        if (part.type === "tool-call") {
-          const host = row.tools.some((definition) => definition.name === part.toolName);
+          try {
+            await this.checkDisk();
+          } catch (error) {
+            if (error instanceof AgentStateError && error.code === "limit_exceeded:disk")
+              this.onLimitExceeded(row.id, "disk");
+            throw error;
+          }
 
-          if (host) handle.pendingBoundary = true;
+          await AgentModel.recordCallStart(turn.id, callKey, row.model);
+
+          if (handle.calls > this.options.maxModelCallsPerTurn)
+            this.onLimitExceeded(row.id, "calls");
+        } else if (part.type === "finish-step") {
+          if (!callKey) continue;
+
+          const usage = stepUsage.safeParse(part.usage).data;
+          const response = stepResponse.safeParse(part.response).data;
+
+          const model = response?.modelId
+            ? `openai/${response.modelId.replace(/^openai(-codex)?\//, "")}`
+            : row.model;
+
+          const input = usage?.inputTokens ?? 0;
+          const output = usage?.outputTokens ?? 0;
+          const cached = usage?.inputTokenDetails?.cacheReadTokens ?? 0;
+
+          await AgentModel.updateStep(
+            turn.id,
+            callKey,
+            {
+              model_name: model,
+              input_tokens: input,
+              output_tokens: output,
+              cache_read_tokens: cached,
+              cache_creation_tokens: 0,
+              cost_usd: Math.round(
+                calculateCostUsd(model, {
+                  inputTokens: input,
+                  outputTokens: output,
+                  cachedInputTokens: cached,
+                }) * 1_000_000,
+              ),
+              cost_source: "pricing_table",
+              duration_ms: Date.now() - callStartedAt,
+              finish_reason: part.finishReason,
+            },
+            response?.id ? `response:${response.id}` : undefined,
+          );
+          callKey = undefined;
+        } else if (part.type === "tool-call") {
           await AgentModel.recordStep(turn.id, {
             key: `tool:${part.toolCallId}`,
-            seq: handle.pendingBoundary ? undefined : seq,
             step: {
               type: "tool_call",
               tool_call_id: part.toolCallId,
@@ -968,36 +875,35 @@ export class AgentSessionRunner implements RelaySessionStore {
                 ? this.redact(row.id, jsonValueSchema.parse(part.output))
                 : undefined,
             error: part.type === "tool-error" ? this.redact(row.id, String(part.error)) : undefined,
-            seq: handle.pendingBoundary ? undefined : seq,
             truncate: !row.tools.some((definition) => definition.name === part.toolName),
           });
         } else if (part.type === "text-start") {
           handle.text = "";
-
-          if (seq !== undefined && !handle.pendingBoundary)
-            await AgentModel.recordEvent(turn.id, seq, { result_text: "" });
         } else if (part.type === "text-delta") {
           handle.text += part.text;
-
-          if (seq !== undefined && !handle.pendingBoundary)
-            await AgentModel.recordEvent(turn.id, seq, {
-              result_text: this.redact(row.id, handle.text),
-            });
+        } else if (part.type === "text-end") {
+          await AgentModel.recordEvent(turn.id, undefined, {
+            result_text: this.redact(row.id, handle.text),
+          });
         } else if (part.type === "error") {
           throw new Error("agent_stream_failed", { cause: part.error });
-        } else if (seq !== undefined && !handle.pendingBoundary) {
-          await AgentModel.recordEvent(turn.id, seq);
         }
       }
 
-      await this.recordBridgeResults(handle);
-
       if (handle.suspending || handle.ended) return;
-      await this.drainCalls(turn.id);
+
+      if (callKey) {
+        // The stream ended without a finish-step for the last call (abort or pause).
+        await AgentModel.updateStep(turn.id, callKey, {
+          duration_ms: Date.now() - callStartedAt,
+          error: handle.stop?.reason ?? "incomplete",
+        });
+        callKey = undefined;
+      }
 
       await this.locked(row.id, async () => {
         if (handle.suspending || handle.ended || handle.stop) {
-          // abort() owns finalization after the bridge's explicit aborted finish (or timeout).
+          // abort() owns finalization once the stream has drained.
           return;
         } else if (session.hasUnfinishedTurn()) {
           const state = await session.suspendTurn();
@@ -1006,88 +912,70 @@ export class AgentSessionRunner implements RelaySessionStore {
           await AgentModel.recordEvent(turn.id, undefined, {
             result_text: this.redact(row.id, handle.text),
           });
-          await AgentModel.suspend(
-            row.id,
-            turn.id,
-            state,
-            pending,
-            bridgeCursor.parse(state.data).bridge.lastSeenEventId,
-          );
+          await AgentModel.suspend(row.id, turn.id, state, pending, 0);
         } else {
           await this.finish(row.id, handle);
         }
       });
     } catch (error) {
       if (handle.suspending || handle.ended) return;
-      this.relay?.abortTurn(String(turn.id));
-      await this.drainCalls(turn.id);
+
+      if (callKey) {
+        await AgentModel.updateStep(turn.id, callKey, {
+          duration_ms: Date.now() - callStartedAt,
+          error: this.redact(row.id, error instanceof Error ? error.message : "call_failed"),
+        }).catch(() => logger.warn("Could not close the failed agent call step"));
+      }
 
       await this.locked(row.id, async () => {
         if (handle.suspending || handle.ended || handle.stop) return;
+        const tokenError = error instanceof Error ? findAgentTokenError(error) : undefined;
         await this.finish(row.id, handle, {
           status: "failed",
-          reason: this.redact(
-            row.id,
-            error instanceof Error ? error.message : "agent_stream_failed",
-          ),
+          reason:
+            tokenError?.code ??
+            this.redact(row.id, error instanceof Error ? error.message : "agent_stream_failed"),
         });
       });
     }
-  }
-
-  private async drainCalls(turnId: number) {
-    await Promise.all(
-      this.calls
-        .values()
-        .filter((call) => call.turnId === turnId)
-        .map((call) => call.done),
-    );
   }
 
   private pendingActions(
     row: AgentSessionBase,
     state: HarnessV1ContinueTurnState,
   ): AgentPendingActions {
-    return (state.pendingToolResults ?? []).map((action) => ({
-      toolCallId: action.toolCallId,
-      toolName: action.toolName,
-      input: this.redact(row.id, jsonValueSchema.parse(JSON.parse(action.input))),
-      gate: row.tools.find((definition) => definition.name === action.toolName)?.gate ?? "auto",
-      requestedAt: new Date().toISOString(),
-    }));
-  }
+    return (state.pendingToolResults ?? []).map((action) => {
+      // Pi serializes pending tool inputs as JSON text; accept a JSON value as well.
+      const encoded = z.string().safeParse(action.input);
 
-  private async recordBridgeResults(handle: Handle) {
-    for (const event of handle.bridgeResults.splice(0)) {
-      if (handle.ended) return;
-      await AgentModel.recordToolResult(handle.turn!.id, {
-        toolCallId: event.toolCallId,
-        output: this.redact(handle.turn!.session_id, event.result),
-        error: event.isError
-          ? JSON.stringify(this.redact(handle.turn!.session_id, event.result))
-          : undefined,
-        // fullStream may filter this echo. Persist delivery before any following cursor.
-        truncate: !handle.turn!.pending_actions.some(
-          (action) => action.toolCallId === event.toolCallId,
-        ),
-      });
-    }
+      const input = encoded.success
+        ? jsonValueSchema.parse(JSON.parse(encoded.data))
+        : jsonValueSchema.parse(action.input);
+
+      return {
+        toolCallId: action.toolCallId,
+        toolName: action.toolName,
+        input: this.redact(row.id, input),
+        gate: row.tools.find((definition) => definition.name === action.toolName)?.gate ?? "auto",
+        requestedAt: new Date().toISOString(),
+      };
+    });
   }
 
   private async finish(id: string, handle: Handle, stop?: Stop, timedOut = false) {
     if (handle.ended) return;
     handle.ended = true;
     clearTimeout(handle.timer);
-    this.relay?.abortTurn(String(handle.turn!.id));
+
+    let checkpoint:
+      | { lifecycleState: HarnessV1LifecycleState; seq: number; resultText: string }
+      | undefined;
 
     if (!timedOut && handle.session) {
       try {
+        // Persist the conversation at every turn boundary (D17); Pi lives in this process only.
         const state = await handle.session.detach();
-        handle.checkpoint = {
-          lifecycleState: state,
-          seq: bridgeCursor.parse(state.data).bridge.lastSeenEventId,
-          resultText: this.redact(id, handle.text),
-        };
+        checkpoint = { lifecycleState: state, seq: 0, resultText: this.redact(id, handle.text) };
       } catch {
         logger.warn("Could not detach completed agent session");
       }
@@ -1103,7 +991,7 @@ export class AgentSessionRunner implements RelaySessionStore {
         stop?.reason,
         timedOut ? "stopped" : "idle",
         timedOut ? "abort_timeout" : undefined,
-        handle.checkpoint,
+        checkpoint,
       );
     } catch (error) {
       handle.ended = false;
@@ -1111,7 +999,7 @@ export class AgentSessionRunner implements RelaySessionStore {
     }
 
     if (timedOut || stop) {
-      // Reattach from persisted Pi files for a later prompt after a failed local handle.
+      // The next prompt restores from the persisted state instead of this handle.
       this.handles.delete(id);
     }
   }
@@ -1131,11 +1019,11 @@ export class AgentSessionRunner implements RelaySessionStore {
         if (row.status === "waiting_action") await AgentModel.claimContinuation(id, true);
 
         try {
+          // Restore the suspended turn so Pi records the cancellation in its own history.
           const current = await AgentModel.getSession(id);
           handle = await this.attach(current, true, turn, AbortSignal.timeout(10_000));
           this.launch(current, turn, handle, true);
         } catch {
-          // A dead bridge cannot acknowledge cancellation. Preserve the caller's terminal reason.
           await this.options.provider.stopContainer(id);
           await AgentModel.finish(
             id,
@@ -1155,7 +1043,6 @@ export class AgentSessionRunner implements RelaySessionStore {
       if (!handle) return;
       handle.stop ??= stop;
       handle.controller?.abort();
-      this.relay?.abortTurn(String(turn.id));
     });
 
     if (!handle || handle.ended) return;
@@ -1164,7 +1051,7 @@ export class AgentSessionRunner implements RelaySessionStore {
 
     try {
       const completed = await Promise.race([
-        Promise.all([active.task, active.abortFinish.promise]).then(() => true),
+        active.task!.then(() => true),
         new Promise<false>((resolve) => {
           timer = setTimeout(() => resolve(false), 10_000);
         }),
@@ -1175,7 +1062,6 @@ export class AgentSessionRunner implements RelaySessionStore {
 
         if (!completed) {
           await this.options.provider.stopContainer(id);
-          await this.drainCalls(active.turn!.id);
           await this.finish(id, active, active.stop ?? stop, true);
         } else await this.finish(id, active, active.stop ?? stop);
       });
@@ -1196,15 +1082,4 @@ export class AgentSessionRunner implements RelaySessionStore {
     });
     this.forget(row.id);
   }
-}
-
-function bridgeData(state: HarnessV1LifecycleState) {
-  return z
-    .object({
-      bridge: z.object({ port: z.literal(8787), lastSeenEventId: z.number() }),
-      piSession: z.string(),
-      model: z.string().nullable(),
-      instructionsHash: z.string().nullable(),
-    })
-    .parse(state.data);
 }

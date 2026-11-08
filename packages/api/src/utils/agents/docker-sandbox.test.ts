@@ -4,7 +4,7 @@ import { Duplex, Readable } from "node:stream";
 import Docker from "dockerode";
 import { describe, expect, it, vi } from "vitest";
 
-import { DockerSandboxProvider, type DockerSandboxOptions } from "./docker-sandbox";
+import { DockerSandboxProvider } from "./docker-sandbox";
 
 function frame(channel: number, text: string | Buffer) {
   const bytes = Buffer.from(text);
@@ -14,15 +14,12 @@ function frame(channel: number, text: string | Buffer) {
   return Buffer.concat([header, bytes]);
 }
 
-function fixture(hostAlias: DockerSandboxOptions["hostAlias"] = { kind: "gateway" }) {
+function fixture() {
   const info = {
     Config: { WorkingDir: "/workspace", Labels: { "qgrid.agents.session": "one" } },
     State: { Running: true },
     HostConfig: { NetworkMode: "qgrid-agents" },
-    NetworkSettings: {
-      Networks: { "qgrid-agents": { IPAddress: "172.30.0.2" } },
-      Ports: { "8787/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }] },
-    },
+    NetworkSettings: { Networks: { "qgrid-agents": { IPAddress: "172.30.0.2" } } },
   };
   const container = {
     inspect: vi.fn().mockResolvedValue(info),
@@ -47,17 +44,9 @@ function fixture(hostAlias: DockerSandboxOptions["hostAlias"] = { kind: "gateway
   vi.spyOn(docker, "getContainer").mockReturnValue(container as never);
   vi.spyOn(docker, "listContainers").mockResolvedValue([]);
   vi.spyOn(docker.modem, "demuxStream");
-  const onRequestTransformations = vi.fn();
-  const options = {
-    image: "qgrid-sandbox-pi:dev",
-    hostAlias,
-    memory: 536870912,
-    nanoCpus: 1000000000,
-    pidsLimit: 128,
-    onRequestTransformations,
-  };
+  const options = { image: "qgrid-sandbox-pi:dev", memory: 536870912, nanoCpus: 1000000000, pidsLimit: 128 };
   const provider = new DockerSandboxProvider(docker, options);
-  return { provider, docker, container, network, info, onRequestTransformations, options };
+  return { provider, docker, container, network, info, options };
 }
 
 function mockExec(
@@ -94,16 +83,6 @@ function mockExec(
 }
 
 describe("DockerSandboxProvider", () => {
-  it.each([
-    ["gateway", "172.30.0.1"],
-    ["host-gateway", "host-gateway"],
-  ] as const)("maps the host alias with %s", async (kind, address) => {
-    const { provider, docker } = fixture({ kind });
-    await provider.createSession({ sessionId: "one" });
-    expect(docker.createContainer).toHaveBeenCalledWith(expect.objectContaining({
-      HostConfig: expect.objectContaining({ ExtraHosts: [`host.docker.internal:${address}`] }),
-    }));
-  });
   it("passes caller env to the container and recovers only those values for redaction", async () => {
     const { provider, docker, container, info } = fixture();
     const env = { DB_PASSWORD: "private=secret", GH_TOKEN: "git-secret" };
@@ -124,7 +103,6 @@ describe("DockerSandboxProvider", () => {
     network.inspect.mockRejectedValueOnce(Object.assign(new Error("missing"), { statusCode: 404 }));
     const session = await provider.createSession({ sessionId: "one" });
     expect(provider.providerId).toBe("qgrid-docker");
-    expect(provider.specificationVersion).toBe("harness-sandbox-v1");
     expect(docker.createNetwork).toHaveBeenCalledWith({
       Name: "qgrid-agents",
       Driver: "bridge",
@@ -137,12 +115,9 @@ describe("DockerSandboxProvider", () => {
       Image: options.image,
       User: "node",
       Env: [],
-      ExposedPorts: { "8787/tcp": {} },
       Labels: { "qgrid.agents.session": "one", "qgrid.agents.env-keys": "[]" },
       HostConfig: {
         NetworkMode: "qgrid-agents",
-        ExtraHosts: ["host.docker.internal:172.30.0.1"],
-        PortBindings: { "8787/tcp": [{ HostIp: "127.0.0.1", HostPort: "0" }] },
         Memory: options.memory,
         NanoCpus: options.nanoCpus,
         PidsLimit: 128,
@@ -151,7 +126,9 @@ describe("DockerSandboxProvider", () => {
     });
     expect(container.start).toHaveBeenCalledOnce();
     expect(session.defaultWorkingDirectory).toBe("/workspace");
-    expect(await session.getPortEndpoint({ port: 8787 })).toEqual({ url: "ws://127.0.0.1:49152" });
+    expect(session.id).toBe("one");
+    // Nothing listens inside the sandbox: no published ports, no host alias.
+    expect(docker.createContainer).toHaveBeenCalledWith(expect.not.objectContaining({ ExposedPorts: expect.anything() }));
     expect(await provider.inspectIp("one")).toBe("172.30.0.2");
   });
 
@@ -168,19 +145,13 @@ describe("DockerSandboxProvider", () => {
     expect(docker.createContainer).not.toHaveBeenCalled();
   });
 
-  it("resumes a stopped sandbox and removes a fresh container if bootstrap fails", async () => {
+  it("resumes a stopped sandbox and removes a fresh container if it fails to start", async () => {
     const { provider, info, container } = fixture();
     info.State.Running = false;
     await provider.resumeSession({ sessionId: "one" });
     expect(container.start).toHaveBeenCalledOnce();
-    await expect(
-      provider.createSession({
-        sessionId: "one",
-        onFirstCreate: async () => {
-          throw new Error("bootstrap");
-        },
-      }),
-    ).rejects.toThrow("bootstrap");
+    container.start.mockRejectedValueOnce(new Error("start failed"));
+    await expect(provider.createSession({ sessionId: "one" })).rejects.toThrow("start failed");
     expect(container.remove).toHaveBeenCalledWith({ force: true });
   });
 
@@ -193,6 +164,8 @@ describe("DockerSandboxProvider", () => {
     ).toEqual({ stdout: "한글\n", stderr: "failure\n", exitCode: 7 });
     expect(container.exec).toHaveBeenCalledWith(
       expect.objectContaining({
+        // bash, not sh: harness-pi's path helpers need pipefail and $'\n' (D27).
+        Cmd: ["setsid", "--wait", "bash", "-c", expect.stringContaining("exec bash -c"), "bash", "command"],
         WorkingDir: "/workspace/src",
         Env: ["KEY=a=b"],
         Tty: false,
@@ -244,28 +217,9 @@ describe("DockerSandboxProvider", () => {
     },
   );
 
-  it("restricts the surface while forwarding transformations and archives through the full session", async () => {
-    const { provider, onRequestTransformations, container } = fixture();
+  it("uploads archives relative to the working directory", async () => {
+    const { provider, container } = fixture();
     const session = await provider.createSession({ sessionId: "one" });
-    expect(Object.keys(session.restricted()).sort()).toEqual(
-      [
-        "description",
-        "run",
-        "spawn",
-        "readFile",
-        "readTextFile",
-        "readBinaryFile",
-        "writeFile",
-        "writeTextFile",
-        "writeBinaryFile",
-        "stat",
-        "listDirectory",
-        "deleteFile",
-      ].sort(),
-    );
-    expect(session.restricted().spawn).toBe(session.spawn);
-    await session.addRequestTransformations!([]);
-    expect(onRequestTransformations).toHaveBeenCalledWith("one", []);
     const tar = Readable.from([]);
     await session.putArchive("src", tar);
     expect(container.putArchive).toHaveBeenCalledWith(tar, { path: "/workspace/src" });
