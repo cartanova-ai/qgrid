@@ -127,7 +127,7 @@ catalog:
   "@vitest/coverage-v8": ^5.0.5
   "@xyflow/react": ^12.12.0
   agentation: ^3.1.2
-  ai: 7.0.162
+  ai: 7.0.165
   autoprefixer: ^10.6.1
   axios: ^1.20.0
   bcrypt: ^6.0.0
@@ -248,6 +248,7 @@ catalogs:
     typescript: npm:@typescript/typescript6@6.0.2
 
 allowBuilds:
+  "@google/genai": false
   "@parcel/watcher": true
   "@swc/core": true
   bcrypt: true
@@ -262,8 +263,8 @@ allowBuilds:
   unrs-resolver: true
 
 overrides:
-  "@ai-sdk/provider": 4.0.35
-  "@ai-sdk/provider-utils": 5.0.74
+  "@ai-sdk/provider": 4.0.37
+  "@ai-sdk/provider-utils": 5.0.76
   axios@<0.30.0: ">=0.30.0"
   axios@<0.30.2: ">=0.30.2"
   axios@>=0.8.1 <0.28.0: ">=0.28.0"
@@ -278,6 +279,12 @@ minimumReleaseAgeExclude:
   - "@sonamu-kit/cli@0.3.0"
   - "@sonamu-kit/react-components@0.5.1"
   - "@sonamu-kit/hmr-runner@0.3.0"
+  - "@ai-sdk/gateway@4.0.138"
+  - "@ai-sdk/harness-pi@1.0.179"
+  - "@ai-sdk/harness@1.0.176"
+  - "@ai-sdk/provider-utils@5.0.76"
+  - "@ai-sdk/provider@4.0.37"
+  - ai@7.0.165
 
 # Upstream peer ranges lag the versions their own parents install; remove each once upstream widens it.
 peerDependencyRules:
