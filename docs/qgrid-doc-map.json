@@ -9,6 +9,36 @@
   },
   "topics": [
     {
+      "id": "agents-runtime",
+      "code": [
+        "packages/api/src/application/agent/agent.frame.ts",
+        "packages/api/src/application/agent/agent.types.ts",
+        "packages/api/src/application/agent/agent.model.ts",
+        "packages/api/src/application/agent/agent-session.entity.json",
+        "packages/api/src/application/agent/agent-turn.entity.json",
+        "packages/api/src/utils/agents/runtime.ts",
+        "packages/api/src/utils/agents/session-runner.ts",
+        "packages/api/src/utils/agents/docker-sandbox.ts",
+        "packages/api/src/utils/agents/relay.ts",
+        "packages/api/src/utils/agents/pi-harness.ts",
+        "packages/api/src/utils/agents/workspace.ts",
+        "packages/api/src/application/setting/setting.constant.ts",
+        "deploy/sandbox-pi/Dockerfile",
+        "deploy/sandbox-pi/bridge/bridge.mjs",
+        "packages/api/scripts/agents/smoke.ts"
+      ],
+      "skill": [
+        "packages/cli/skills/qgrid/references/agents-runtime.md",
+        "packages/cli/skills/qgrid/references/decision-rationale.md",
+        "packages/cli/skills/qgrid/references/repo-map.md",
+        "packages/cli/skills/qgrid/references/token-auth-quota-lifecycle.md"
+      ],
+      "notion": {
+        "title": "시스템 아키텍처",
+        "url": "https://app.notion.com/p/3a5f753e4fb981979136eeda4330fb45"
+      }
+    },
+    {
       "id": "architecture",
       "code": [
         "packages/api/src/application/qgrid/qgrid.frame.ts",

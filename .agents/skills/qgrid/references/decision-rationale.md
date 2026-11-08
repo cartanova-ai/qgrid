@@ -11,6 +11,7 @@ Do not copy these notes blindly into implementation. Use them to find the releva
 - OpenAI/Codex runtime
 - Anthropic/Claude Code runtime
 - Grok (xAI subscription) runtime
+- Agents runtime
 - Token sync and quota thresholds
 - Weighted token routing
 - Request logs, metrics, and dashboard
@@ -39,6 +40,42 @@ Key decisions:
 - Fable refusal fallback is an upstream Claude Code safety path to another Opus model (currently Opus 5 or Opus 4.8 by refusal category), not qgrid's reserved `fallbackModels` feature or Claude Code's overload-only `--fallback-model` flag. qgrid observes and reports the actual route and provider cost; it must not retry again or hardcode the target.
 - The SDK should stay a thin adapter. Server APIs own request-log lifecycle, provider dispatch, structured-output emulation, and provider runtime details.
 - Request logging defaults to enabled. `providerOptions.qgrid.logger: false` is the single per-generation opt-out for both native qgrid logs and `createQgridLogger` telemetry logs; it must not alter generation or tool behavior.
+
+## Agents Runtime
+
+Sources:
+
+- `docs/brainstorms/2026-11-05-qgrid-agents-sandbox-harness-requirements.md` (D1–D10 and their refinements).
+- `docs/plans/2026-11-07-feat-qgrid-agents-integration-plan.md` (rev2.6, D11–D25 and recovery/tool contracts).
+- Current implementation: `packages/api/src/utils/agents/*`, `packages/api/src/application/agent/*`, and `deploy/sandbox-pi/*`. See `references/agents-runtime.md` for the implemented API and differences from planned extensions.
+
+Decision index:
+
+- **D1:** Follow HarnessV1 internally; do not clone the OpenAI Agents API or add `/v1/` compatibility.
+- **D2:** Run Pi in a sandbox, with HarnessAgent and durable recovery state owned by qgrid.
+- **D3 / D3a:** Keep subscription credentials outside the sandbox; broker placeholders per call and treat them as usage-bearing credentials.
+- **D4:** Use a base-URL HTTP/SSE relay, avoiding TLS interception.
+- **D5:** Hide Docker behind the sandbox-provider contract; gVisor remains an operational follow-up.
+- **D6 / D6a:** Use a dedicated Pi adapter and file-backed bridge sessions; the implemented harness ID is `qgrid-pi`.
+- **D7:** Execute caller tools in the caller's trust boundary and deduplicate effects by tool-call identity.
+- **D8:** Host sessions in qgrid; polling ships first, webhook/SSE delivery follows separately.
+- **D9:** Preinstall bootstrap dependencies in the image; defer warm pooling and do not reuse a completed session's container for another session.
+- **D10:** Consume standard AI SDK/Harness stream parts internally; public UI/SSE streaming is deferred.
+- **D11:** Use dockerode through a socket accessible to the API user; enable Agents explicitly.
+- **D12:** Use a dedicated bridge and explicit Linux gateway alias so relay binding and firewall rules agree.
+- **D13:** Run relay HTTP servers in the API process, with authentication before body consumption and explicit body/time limits.
+- **D14:** Pin one token per session, recheck eligibility and read current credentials per call, and refresh once on 401.
+- **D15:** Preserve Pi identity headers; replace authorization/account headers without borrowing the ordinary Codex client's identity.
+- **D16:** Map turns, model calls, and tools onto existing request logs with durable replay identities and transactional cursors.
+- **D17:** Persist AgentSession/AgentTurn and complete lifecycle envelopes, including framework-owned continuation fields.
+- **D18:** Derive session secrets deterministically and distinguish surviving-bridge replay from lost model calls or process-local turns.
+- **D19:** Let the runner own stop/destroy and idle/retention sweeps, because the harness does not own the supplied sandbox.
+- **D20:** Bind relay use to session, Linux container IP, active turn, model, and limits; abort upstreams when the turn ends.
+- **D21:** Keep Anthropic out of the Agents path until a separate provider decision is made.
+- **D22:** Pin compatible harness/AI SDK/ws versions and preserve CLI bundled dependency parity.
+- **D23:** Block sandbox access to host services except relay and probe isolation at startup; operators own firewall changes.
+- **D24:** Suspend caller-tool turns, commit pending state before exposing it, and continue with durable tool-result submissions.
+- **D25:** Ship one slim Node/Python/git/gh/Pi image without a browser, avoiding the size and sandbox constraints of broader images.
 
 ## Thinking Control
 
