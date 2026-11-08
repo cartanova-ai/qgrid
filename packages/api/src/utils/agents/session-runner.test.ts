@@ -294,6 +294,18 @@ describe("agent runner recovery", () => {
     expect(db.row.status).toBe("idle");
   });
 
+  it("resumes a running turn whose continuation and results were saved before the crash", async () => {
+    const db = modelFixture(session({ status: "running", lifecycle_state: continueState() }), turn({ pending_actions: [pending()] }));
+    const { runner, provider } = fixture();
+    const agent = harness();
+    await runner.start();
+    await vi.waitFor(() => expect(db.finish).toHaveBeenCalled());
+    expect(provider.stopContainer).not.toHaveBeenCalled();
+    expect(agent.create).toHaveBeenCalledWith(expect.objectContaining({ continueFrom: expect.objectContaining({ type: "continue-turn" }) }));
+    expect(agent.continued).toHaveBeenCalledWith(expect.objectContaining({ toolResultContinuations: [expect.objectContaining({ toolCallId: "tool-1" })] }));
+    expect(db.finish).toHaveBeenLastCalledWith(db.row.id, 12, "succeeded", undefined, "idle", undefined, expect.anything());
+  });
+
   it("destroys sessions persisted by the previous adapter format", async () => {
     const db = modelFixture(session({ status: "stopped", lifecycle_state: { type: "resume-session", harnessId: "qgrid-pi", specificationVersion: "harness-v1", data: {} } }));
     const { runner, provider } = fixture();
