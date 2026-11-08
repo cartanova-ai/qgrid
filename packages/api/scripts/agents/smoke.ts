@@ -2,7 +2,9 @@
  * Live P1 acceptance smoke (no provider credentials or server imports).
  * mise exec -- pnpm --filter qgrid-api exec tsx scripts/agents/smoke.ts [URL]
  *   --scenarios M1,S1,S2,S3,S6,A7 --docker
- * macOS: QGRID_AGENTS_HOST_MODE=auto detects Docker Desktop; set QGRID_AGENTS_ISOLATION_CHECK=warn.
+ * macOS (Docker Desktop): set QGRID_AGENTS_ISOLATION_CHECK=warn; S12 host isolation is Linux-only.
+ * Pi runs inside the API process (harness-pi): a restart fails the in-flight turn (S7/S8) and the
+ * conversation survives between turns (S13).
  *
  * --docker asserts that the Docker CLI targets the server's Docker daemon.
  * --restart-cmd must restart the API and return; --kill-cmd must SIGKILL it and return.
@@ -15,7 +17,7 @@
 /* oxlint-disable anti-slop/no-unsafe-dictionary-type */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { networkInterfaces, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -42,23 +44,39 @@ const { values, positionals } = parseArgs({
     scenarios: { type: "string" },
     model: { type: "string", default: "openai/gpt-6-astra" },
     "timeout-sec": { type: "string", default: "900" },
-    "relay-port": { type: "string", default: "44901" },
     "idle-ttl-sec": { type: "string" },
     "host-ip": { type: "string" },
     help: { type: "boolean", default: false },
   },
 });
 
-const ids = ["M1", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "A7"];
+const ids = [
+  "M1",
+  "S1",
+  "S2",
+  "S3",
+  "S4",
+  "S5",
+  "S6",
+  "S7",
+  "S8",
+  "S13",
+  "S10",
+  "S11",
+  "S12",
+  "A7",
+];
 
 if (values.help) {
   console.log(`Usage: smoke.ts [http://localhost:44900] [--docker] [--scenarios ${ids.join(",")}]
-  --model openai/gpt-6-astra   --timeout-sec 900   --relay-port 44901
+  --model openai/gpt-6-astra   --timeout-sec 900
   --restart-cmd COMMAND       --kill-cmd COMMAND
   --idle-ttl-sec 30  Confirm the server's effective idle TTL (does not change it).
   --host-ip IP     Additional host interface to probe in Linux S12.
-Docker is required for S5/S9/S10/S11/S12 and independent A7 grading.
-S3/S4 need S1; S6 audits every turn produced by the selected scenarios.`);
+Docker is required for S5/S10/S11/S12 and independent A7 grading.
+S3/S4 need S1; S6 audits every turn produced by the selected scenarios.
+S7/S8 expect the in-flight turn to fail with server_restart and the re-prompt to finish the task.
+S13 (kill between turns) expects the conversation to be recalled after the restart.`);
   process.exit(0);
 }
 
@@ -78,11 +96,7 @@ assert(
 assert(selected.size > 0, "Select at least one scenario");
 
 const timeoutMs = Number(values["timeout-sec"]) * 1000;
-const relayPort = Number(values["relay-port"]);
-
 assert(Number.isFinite(timeoutMs) && timeoutMs > 0, "Invalid timeout");
-
-assert(Number.isInteger(relayPort) && relayPort > 0 && relayPort <= 65535, "Invalid relay port");
 
 assert(
   !values["idle-ttl-sec"] || values["idle-ttl-sec"] === "30",
@@ -115,8 +129,7 @@ function redact(text: string) {
 
   return text
     .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[JWT]")
-    .replace(/sk-ant-[A-Za-z0-9_-]+/g, "[ANTHROPIC_TOKEN]")
-    .replace(/aisdkhc_[A-Za-z0-9_-]+/g, "[PLACEHOLDER]");
+    .replace(/sk-ant-[A-Za-z0-9_-]+/g, "[ANTHROPIC_TOKEN]");
 }
 
 async function save() {
@@ -475,7 +488,7 @@ async function restart(command: string, previousProcess: number) {
 async function scanSandboxDump(id: string) {
   // Scan in the container and return counts only. Never transport a raw credential dump.
   const scan = `import os, glob, re, json
-patterns = {'jwtHits': rb'eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+', 'anthropicHits': rb'sk-ant-[A-Za-z0-9_-]+', 'placeholderHits': rb'aisdkhc_[A-Za-z0-9_-]{43}'}
+patterns = {'jwtHits': rb'eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+', 'anthropicHits': rb'sk-ant-[A-Za-z0-9_-]+'}
 result = dict.fromkeys(patterns, 0)
 result.update(files=0, bytes=0, unreadableFiles=0)
 paths = glob.glob('/proc/*/environ')
@@ -506,51 +519,9 @@ print(json.dumps(result))`;
 
   assert.equal(counts.jwtHits, 0, "Real JWT pattern in sandbox dump");
   assert.equal(counts.anthropicHits, 0, "Anthropic token pattern in sandbox dump");
-  assert(Number(counts.placeholderHits) >= 1, "No placeholder in sandbox dump");
   assert.equal(counts.unreadableFiles, 0, "Incomplete home/workspace/tmp dump");
 
   return counts;
-}
-
-async function placeholder(id: string) {
-  const result = await exec(id, [
-    "python3",
-    "-c",
-    `
-import glob, re
-values = set()
-for path in glob.glob('/proc/*/environ'):
-    try:
-        values.update(re.findall(rb'aisdkhc_[A-Za-z0-9_-]{43}', open(path, 'rb').read()))
-    except (OSError, PermissionError): pass
-assert len(values) == 1, 'Expected exactly one sandbox placeholder'
-print(next(iter(values)).decode())
-`,
-  ]);
-
-  const value = result.stdout.trim();
-  assert(/^aisdkhc_[A-Za-z0-9_-]{43}$/.test(value), "No unique placeholder in bridge environment");
-  secrets.add(value);
-
-  return value;
-}
-
-// Send only sandbox placeholders, never real credentials. A mismatched model ensures an
-// isolation regression cannot accidentally spend a token by forwarding a valid request.
-async function probeRelay(sourceId: string, credential: string) {
-  const source = `const fs = require('node:fs');
-const token = fs.readFileSync(0, 'utf8');
-fetch('http://host.docker.internal:${relayPort}/backend-api/codex/responses', {
-  method: 'POST', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
-  body: JSON.stringify({ model: 'smoke-invalid-model', input: 'isolation probe' }),
-  signal: AbortSignal.timeout(10000)
-}).then(async r => { await r.body?.cancel(); console.log(r.status); }).catch(() => process.exit(1));`;
-
-  const result = await exec(sourceId, ["node", "-e", source], credential);
-  const status = Number(result.stdout.trim());
-  assert(Number.isInteger(status) && status >= 100, "Relay returned no HTTP status");
-
-  return status;
 }
 
 let mainSession: string | undefined;
@@ -610,8 +581,12 @@ async function recovery(id: "S7" | "S8", metrics: Metrics) {
 
   metrics.processBefore = processBefore;
   metrics.processAfter = await restart(restartCommand, processBefore);
+  // Pi ran inside the dead process: the in-flight turn cannot continue (rev3 D18 b).
   const turn = await waitTurn(sessionId, turnId);
   metrics.recoveredStatus = turn.status;
+  metrics.recoveredError = turn.errorMessage;
+  assert.equal(turn.status, "failed", "In-flight turn should fail across a restart");
+  assert.equal(turn.errorMessage, "server_restart");
   assert.equal(turn.requestLogId, beforeTurn.requestLogId, "Recovery changed parent request log");
   const after = await logs(beforeTurn.requestLogId);
   metrics.after = summarize(after);
@@ -627,7 +602,7 @@ async function recovery(id: "S7" | "S8", metrics: Metrics) {
     }
   }
 
-  // A settled parent must remain identical on another read: replay must not add steps/usage.
+  // A settled parent must remain identical on another read.
   await sleep(1500);
   const settled = await logs(beforeTurn.requestLogId);
   assert.deepEqual(
@@ -637,18 +612,16 @@ async function recovery(id: "S7" | "S8", metrics: Metrics) {
   );
   metrics.settled = summarize(settled);
 
-  if (id === "S8" && turn.status === "failed") {
-    const retry = await prompt(
-      sessionId,
-      "Continue the interrupted task. Run python3 slow.py and reply with only its output.",
-    );
+  // The session stays usable and remembers the task: the re-prompt completes it.
+  assert.equal((await get(sessionId)).session.status, "idle", "Session not idle after recovery");
+  const retry = await prompt(
+    sessionId,
+    "Continue the interrupted task: run python3 slow.py (create it again if missing) and reply with only its output.",
+  );
 
-    metrics.retryTurnId = retry.id;
-    assert(retry.resultText?.includes(marker), "Re-prompt did not complete slow.py");
-  } else {
-    assert.equal(turn.status, "succeeded");
-    assert(turn.resultText?.includes(marker), "Recovered turn omitted slow.py output");
-  }
+  metrics.retryTurnId = retry.id;
+  assert.equal(retry.status, "succeeded");
+  assert(retry.resultText?.includes(marker), "Re-prompt did not complete slow.py");
 
   await destroy(sessionId);
 }
@@ -775,14 +748,11 @@ try {
     metrics.medianReadyMs = samples.map((s) => s.readyMs).toSorted((a, b) => a - b)[1];
     metrics.within2Seconds =
       Number(metrics.medianResponseMs) <= 2000 && Number(metrics.medianReadyMs) <= 2000;
-    metrics.bridgeReadyReported = samples.every(
+    metrics.readyReported = samples.every(
       (s) => Number.isFinite(s.readyMs) && s.readyMs >= 0 && s.readyMs <= s.responseMs,
     );
-    assert(metrics.within2Seconds, "sessionCreate response or bridge-ready median exceeds 2000 ms");
-    assert(
-      metrics.bridgeReadyReported,
-      "sessionCreate does not expose valid readyMs; bridge readiness cannot be certified",
-    );
+    assert(metrics.within2Seconds, "sessionCreate response or ready median exceeds 2000 ms");
+    assert(metrics.readyReported, "sessionCreate does not expose valid readyMs");
   });
 
   await scenario("S1", async (metrics) => {
@@ -898,25 +868,30 @@ try {
   await scenario("S7", (metrics) => recovery("S7", metrics));
   await scenario("S8", (metrics) => recovery("S8", metrics));
 
-  await scenario("S9", async (metrics) => {
-    requireDocker();
-    const owner = (await create()).sessionId;
-    const other = (await create()).sessionId;
-    const key = await placeholder(owner);
-    const turnId = await startTurn(owner, "Run sleep 40 using bash, wait, then reply done.");
-    const running = (await get(owner)).turn;
-    assert.equal(running?.status, "running");
-    metrics.otherContainerStatus = await probeRelay(other, key);
-    assert.equal((await get(owner)).turn?.status, "running", "Owner turn ended during IP probe");
-    metrics.unregisteredStatus = await probeRelay(owner, `aisdkhc_${"x".repeat(43)}`);
-    await waitTurn(owner, turnId);
-    metrics.endedTurnStatus = await probeRelay(owner, key);
-    assert.deepEqual(
-      [metrics.otherContainerStatus, metrics.unregisteredStatus, metrics.endedTurnStatus],
-      [403, 401, 403],
+  await scenario("S13", async (metrics) => {
+    if (!values["restart-cmd"] || !values["kill-cmd"])
+      throw new Skip("requires --restart-cmd and --kill-cmd");
+    const sessionId = (await create()).sessionId;
+    const codeword = `heron-${randomUUID().slice(0, 8)}`;
+    const first = await prompt(
+      sessionId,
+      `Remember the codeword '${codeword}' for later in this session; do not write it to any file. Reply with only OK.`,
     );
-    await destroy(owner);
-    await destroy(other);
+    assert.equal(first.status, "succeeded");
+    const processBefore = (await api<{ processStartedAt: number }>("monit/monitLogs"))
+      .processStartedAt;
+    assert(processBefore, "Missing server process start time");
+    await run("/bin/sh", ["-c", values["kill-cmd"]]);
+    metrics.processAfter = await restart(values["restart-cmd"], processBefore);
+    // The conversation was saved at the turn boundary (rev3 D17) and restores after a hard kill.
+    const recalled = await prompt(
+      sessionId,
+      "What codeword did I give you earlier? Reply with only the codeword, without using tools.",
+    );
+    metrics.text = recalled.resultText;
+    assert.equal(recalled.status, "succeeded");
+    assert(recalled.resultText?.includes(codeword), "Codeword not recalled after kill/restart");
+    await destroy(sessionId);
   });
 
   await scenario("S10", async (metrics) => {
@@ -963,12 +938,6 @@ try {
     requireDocker();
     const a = (await create()).sessionId;
     const b = (await create()).sessionId;
-    const [keyA, keyB] = await Promise.all([placeholder(a), placeholder(b)]);
-    metrics.placeholderDistinct = keyA !== keyB;
-    metrics.placeholderHashes = [keyA, keyB].map((key) =>
-      createHash("sha256").update(key).digest("hex"),
-    );
-
     const [turnA, turnB] = await Promise.all([
       prompt(a, "Write /workspace/only-a.txt containing A, then read it and reply A."),
       prompt(b, "Write /workspace/only-b.txt containing B, then read it and reply B."),
@@ -987,12 +956,6 @@ try {
     ]);
 
     assert.equal((await get(a)).turn?.status, "running");
-    metrics.crossPlaceholderStatus = await probeRelay(b, keyA);
-    assert.equal(
-      (await get(a)).turn?.status,
-      "running",
-      "Owner turn ended during cross-placeholder probe",
-    );
     const secondTurns = await Promise.all([waitTurn(a, turnIds[0]!), waitTurn(b, turnIds[1]!)]);
 
     const second = await Promise.all(
@@ -1010,8 +973,6 @@ try {
       (log, index) =>
         log.parent.token_name && log.parent.token_name === second[index]!.parent.token_name,
     );
-    assert(metrics.placeholderDistinct, "Session placeholders are equal");
-    assert.equal(metrics.crossPlaceholderStatus, 403);
     assert(metrics.tokenNamesStable, "Session token_name changed between turns");
 
     for (const log of [...first, ...second]) assertAccounting(log);
@@ -1040,17 +1001,10 @@ try {
       .filter((entry) => entry.family === "IPv4" && !entry.internal)
       .map((entry) => entry.address);
 
-    const hosts = [
-      ...new Set([
-        "host.docker.internal",
-        gateway,
-        ...hostAddresses,
-        ...[values["host-ip"]].filter(Boolean),
-      ]),
-    ];
+    const hosts = [...new Set([gateway, ...hostAddresses, ...[values["host-ip"]].filter(Boolean)])];
 
+    // No relay any more: nothing on the host may be reachable from the sandbox (rev3 D23).
     const targets = hosts.flatMap((host) => [44900, 5432].map((port) => ({ host, port })));
-    targets.push({ host: "host.docker.internal", port: 44901 });
 
     const source = `const net = require('node:net');
 Promise.all(${JSON.stringify(targets)}.map(target => new Promise(resolve => {
@@ -1070,8 +1024,8 @@ Promise.all(${JSON.stringify(targets)}.map(target => new Promise(resolve => {
 
     Object.assign(metrics, detail);
     assert(
-      detail.probes.every((probe) => probe.reachable === (probe.port === 44901)),
-      "Host service isolation or relay connectivity failed",
+      detail.probes.every((probe) => !probe.reachable),
+      "A host port is reachable from the sandbox",
     );
     assert(detail.githubStatus >= 200 && detail.githubStatus < 400, "GitHub is unreachable");
     await destroy(id);

@@ -1,9 +1,11 @@
 # node:22-bookworm-slim, pinned 2026-11-08 (multi-platform index).
+# Pi runs inside the qgrid API process (official @ai-sdk/harness-pi); this image is only the
+# remote filesystem and shell. Nothing listens inside and no credentials are ever mounted.
 FROM node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        git python3 ripgrep curl jq unzip ca-certificates tini \
+        bash git python3 ripgrep curl jq unzip ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI v2.103.3: official release binaries and pinned SHA-256 checksums.
@@ -20,17 +22,9 @@ RUN set -eu; \
     install -m 0755 "/tmp/gh_2.103.3_linux_${arch}/bin/gh" /usr/local/bin/gh; \
     rm -rf /tmp/gh.tar.gz "/tmp/gh_2.103.3_linux_${arch}"
 
-WORKDIR /opt/qgrid-pi-bridge
-COPY bridge/package*.json ./
-RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
-# node-compile-cache is written to /tmp as root during install; drop it so sandbox /tmp starts clean.
-# Kept as its own layer so the npm layer cache stays valid.
-RUN rm -rf /tmp/node-compile-cache
-COPY bridge/bridge.mjs ./bridge.mjs
-RUN mkdir -p /workspace /home/node/.pi-session && chown node:node /workspace /home/node/.pi-session
+RUN mkdir -p /workspace && chown node:node /workspace
 
 WORKDIR /workspace
 USER node
-EXPOSE 8787
 ENTRYPOINT ["tini", "--"]
 CMD ["sleep", "infinity"]
