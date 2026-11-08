@@ -1,0 +1,11 @@
+{
+  "name": "qgrid-pi-bridge",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ai-sdk/harness": "1.0.173",
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "ws": "8.21.0",
+    "zod": "4.6.7"
+  }
+}
