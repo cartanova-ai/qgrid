@@ -3,6 +3,7 @@ import { HarnessAgent, type HarnessAgentSession } from "@ai-sdk/harness/agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentModel, AgentStateError, type AgentSessionRow, type AgentTurnRow } from "../../application/agent/agent.model";
+import { QuotaThresholdExceededError } from "../../application/qgrid/qgrid.types";
 import { type DockerSandboxProvider, type DockerSandboxSession } from "./docker-sandbox";
 import * as piHarness from "./pi-harness";
 import { derivePiSessionSecrets, reconstructContinueState } from "./pi-harness";
@@ -145,6 +146,49 @@ function harness(config: { hold?: boolean; abortCloses?: boolean } = {}) {
   cleanup.push(async () => { end.resolve(); await Promise.resolve(); });
   return { create, stream, continued, live, end, acknowledgeAbort, signal: () => signal };
 }
+
+describe("agent runner token selection", () => {
+  it("retries a transient selection failure once after 250 ms with the same preferred token", async () => {
+    vi.useFakeTimers();
+    const db = modelFixture();
+    const selectToken = vi.fn()
+      .mockRejectedValueOnce(new QuotaThresholdExceededError("quota_threshold gate: all_exceeded"))
+      .mockResolvedValue({ tokenId: 9, metadata: { name: "fixture-account" } });
+    const { runner, provider } = fixture({ dispatcher: { selectToken } });
+    vi.spyOn(AgentModel, "createSession").mockImplementation(async (row) => { Object.assign(db.row, row); return db.row; });
+    harness();
+    const result = runner.create({ model: db.row.model, tokenId: 9 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(selectToken).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(249);
+    expect(selectToken).toHaveBeenCalledTimes(1);
+    expect(provider.createSession).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toMatchObject({ status: "idle", token_id: 9 });
+    expect(selectToken).toHaveBeenCalledTimes(2);
+    expect(selectToken.mock.calls[0]).toEqual([9, true, expect.any(AbortSignal)]);
+    expect(selectToken.mock.calls[1]).toEqual(selectToken.mock.calls[0]);
+  });
+
+  it.each([
+    [new QuotaThresholdExceededError("all_exceeded"), { status: 503, code: "quota_exceeded" }],
+    [new Error("NO_OPENAI_WORKERS"), { status: 503, code: "token_unavailable" }],
+    [new Error("unexpected selection failure"), { message: "unexpected selection failure" }],
+  ])("maps the retry's failure without allocating a session: %s", async (error, expected) => {
+    vi.useFakeTimers();
+    const db = modelFixture();
+    const selectToken = vi.fn().mockRejectedValueOnce(new Error("transient")).mockRejectedValue(error);
+    const { runner, provider } = fixture({ dispatcher: { selectToken } });
+    const create = vi.spyOn(AgentModel, "createSession");
+    const result = runner.create({ model: db.row.model }).catch((caught: Error) => caught);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(await result).toMatchObject(expected);
+    expect(selectToken).toHaveBeenCalledTimes(2);
+    expect(selectToken.mock.calls[1]).toEqual([undefined, false, expect.any(AbortSignal)]);
+    expect(create).not.toHaveBeenCalled();
+    expect(provider.createSession).not.toHaveBeenCalled();
+  });
+});
 
 describe("agent runner disk guard", () => {
   it("rejects insufficient daemon data-root space before container allocation", async () => {

@@ -1,6 +1,7 @@
 import { gzipSync } from "node:zlib";
 
-import { describe, expect, it, vi } from "vitest";
+import { getLogger } from "@logtape/logtape";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { type DockerSandboxSession } from "./docker-sandbox";
 import { prepareWorkspace, readWorkspaceDiff, WORKSPACE_DIFF_MAX_BYTES } from "./workspace";
@@ -8,8 +9,10 @@ import { prepareWorkspace, readWorkspaceDiff, WORKSPACE_DIFF_MAX_BYTES } from ".
 function fixture() {
   const run = vi.fn().mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
   const putArchive = vi.fn().mockResolvedValue(undefined);
-  return { run, putArchive, sandbox: { run, putArchive } as unknown as DockerSandboxSession };
+  return { run, putArchive, sandbox: { id: "workspace-session", run, putArchive } as unknown as DockerSandboxSession };
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("agent workspace", () => {
   it("clones with a transient credential helper and discards credential-bearing errors", async () => {
@@ -29,6 +32,7 @@ describe("agent workspace", () => {
   });
 
   it("expands base64 gzip to a tar stream for /workspace and rejects invalid gzip", async () => {
+    const warn = vi.spyOn(getLogger(["qgrid", "agents", "workspace"]), "warn");
     const { sandbox, putArchive } = fixture();
     const tar = Buffer.alloc(1024); // Empty tar: two zero blocks.
     await prepareWorkspace(sandbox, { archive: gzipSync(tar).toString("base64") });
@@ -38,6 +42,22 @@ describe("agent workspace", () => {
     expect(Buffer.concat(chunks)).toEqual(tar);
     await expect(prepareWorkspace(sandbox, { archive: "YWJj" })).rejects.toMatchObject({ status: 400, code: "invalid_workspace_archive" });
     expect(putArchive).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "Workspace archive gunzip failed for session {sessionId}: {message}",
+      { sessionId: sandbox.id, message: "incorrect header check" },
+    );
+  });
+
+  it("logs Docker archive failures with the session ID while preserving the public 400", async () => {
+    const { sandbox, putArchive } = fixture();
+    const warn = vi.spyOn(getLogger(["qgrid", "agents", "workspace"]), "warn");
+    const message = 'lsetxattr /workspace/task: xattr "com.apple.provenance": operation not supported';
+    putArchive.mockRejectedValue(new Error(message, { cause: new Error("private cause") }));
+    await expect(prepareWorkspace(sandbox, { archive: gzipSync(Buffer.alloc(1024)).toString("base64") })).rejects.toMatchObject({ status: 400, code: "invalid_workspace_archive" });
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "Workspace archive putArchive failed for session {sessionId}: {message}",
+      { sessionId: sandbox.id, message },
+    );
   });
 
   it("bounds git diff in the container and retains valid UTF-8 within 1 MiB", async () => {

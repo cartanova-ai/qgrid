@@ -2,10 +2,13 @@ import { Readable } from "node:stream";
 import { gunzipSync } from "node:zlib";
 
 import { shellQuote } from "@ai-sdk/harness/utils";
+import { getLogger } from "@logtape/logtape";
 
 import { AgentStateError } from "../../application/agent/agent.model";
 import { type AgentWorkspace } from "../../application/agent/agent.types";
 import { type DockerSandboxSession } from "./docker-sandbox";
+
+const logger = getLogger(["qgrid", "agents", "workspace"]);
 
 export async function prepareWorkspace(sandbox: DockerSandboxSession, workspace?: AgentWorkspace) {
   if (workspace?.git) {
@@ -35,13 +38,21 @@ export async function prepareWorkspace(sandbox: DockerSandboxSession, workspace?
       tar = gunzipSync(Buffer.from(workspace.archive, "base64"), {
         maxOutputLength: 64 * 1024 ** 2,
       });
-    } catch {
+    } catch (error) {
+      logger.warn("Workspace archive gunzip failed for session {sessionId}: {message}", {
+        sessionId: sandbox.id,
+        message: error instanceof Error ? error.message : "Unknown gunzip error",
+      });
       throw new AgentStateError(400, "invalid_workspace_archive");
     }
 
     try {
       await sandbox.putArchive("/workspace", Readable.from(tar));
-    } catch {
+    } catch (error) {
+      logger.warn("Workspace archive putArchive failed for session {sessionId}: {message}", {
+        sessionId: sandbox.id,
+        message: error instanceof Error ? error.message : "Unknown putArchive error",
+      });
       throw new AgentStateError(400, "invalid_workspace_archive");
     }
   }

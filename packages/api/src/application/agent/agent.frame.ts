@@ -1,5 +1,6 @@
+import { getLogger } from "@logtape/logtape";
 import { api, BaseFrameClass, SoException } from "sonamu";
-import { type z } from "zod";
+import { z } from "zod";
 
 import { type LocalizedString } from "../../i18n/sd.generated";
 import { getAgentRunner } from "../../utils/agents/runtime";
@@ -17,6 +18,8 @@ import {
   type AgentSessionPromptOutput,
   type AgentSessionStopOutput,
 } from "./agent.types";
+
+const logger = getLogger(["qgrid", "agents", "api"]);
 
 class AgentApiException extends SoException {
   constructor(status: number, code: string) {
@@ -45,11 +48,27 @@ function parseInput<S extends z.ZodType>(schema: S, value: z.input<S>): z.output
   return parsed.data;
 }
 
-async function run<T>(operation: () => Promise<T>): Promise<T> {
+async function run<T>(
+  operation: () => Promise<T>,
+  sessionId = "",
+  secrets: readonly string[] = [],
+): Promise<T> {
   try {
     return await operation();
   } catch (error) {
     if (error instanceof AgentStateError) throw new AgentApiException(error.status, error.code);
+    const code = z.object({ code: z.union([z.string(), z.number()]).optional() }).safeParse(error);
+    logger.error(
+      "Agent operation failed: {message} (code: {code})",
+      getAgentRunner().redact(
+        sessionId,
+        {
+          message: error instanceof Error ? error.message : "Unknown agent error",
+          code: code.success ? code.data.code : undefined,
+        },
+        secrets,
+      ),
+    );
     // Docker/Git errors may echo environment values or credentials. Never forward their cause.
     throw new AgentApiException(500, "agent_operation_failed");
   }
@@ -60,26 +79,33 @@ class AgentFrameClass extends BaseFrameClass {
   async sessionCreate(params: AgentSessionCreateInput): Promise<AgentSessionCreateOutput> {
     const input = parseInput(AgentSessionCreateInput, params);
 
-    return run(async () => {
-      const session = await getAgentRunner().create({
-        ...input,
-        tools: input.tools.map((definition) => ({
-          ...definition,
-          timeoutSec: definition.timeoutSec ?? 600,
-        })),
-      });
+    return run(
+      async () => {
+        const session = await getAgentRunner().create({
+          ...input,
+          tools: input.tools.map((definition) => ({
+            ...definition,
+            timeoutSec: definition.timeoutSec ?? 600,
+          })),
+        });
 
-      return { sessionId: session.id, status: session.status, readyMs: session.readyMs };
-    });
+        return { sessionId: session.id, status: session.status, readyMs: session.readyMs };
+      },
+      "",
+      [...Object.values(input.env ?? {}), input.workspace?.git?.token ?? ""],
+    );
   }
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async sessionPrompt(params: AgentSessionPromptInput): Promise<AgentSessionPromptOutput> {
     const input = parseInput(AgentSessionPromptInput, params);
 
-    return run(async () => ({
-      turnId: (await getAgentRunner().prompt(input.sessionId, input.prompt)).id,
-    }));
+    return run(
+      async () => ({
+        turnId: (await getAgentRunner().prompt(input.sessionId, input.prompt)).id,
+      }),
+      input.sessionId,
+    );
   }
 
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
@@ -126,7 +152,7 @@ class AgentFrameClass extends BaseFrameClass {
           : undefined,
         workspaceDiff,
       });
-    });
+    }, input.sessionId);
   }
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
@@ -137,7 +163,7 @@ class AgentFrameClass extends BaseFrameClass {
       const saved = await getAgentRunner().actionResult(sessionId, toolCallId, result);
 
       return { accepted: true, turnStatus: saved.turn.status };
-    });
+    }, sessionId);
   }
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
@@ -149,7 +175,7 @@ class AgentFrameClass extends BaseFrameClass {
       await runner.stop(sessionId);
 
       return { status: (await runner.get(sessionId)).session.status };
-    });
+    }, sessionId);
   }
 
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
@@ -160,7 +186,7 @@ class AgentFrameClass extends BaseFrameClass {
       await getAgentRunner().destroy(sessionId);
 
       return { destroyed: true };
-    });
+    }, sessionId);
   }
 }
 

@@ -21,6 +21,7 @@ import {
   type AgentTools,
   type AgentWorkspace,
 } from "../../application/agent/agent.types";
+import { QuotaThresholdExceededError } from "../../application/qgrid/qgrid.types";
 import { calculateCostUsd } from "../providers/common/model-cost";
 import { jsonValueSchema, type JsonValue } from "../providers/common/provider-types";
 import { type OpenAIDispatcher } from "../providers/openai/openai-dispatcher";
@@ -192,11 +193,26 @@ export class AgentSessionRunner implements RelaySessionStore {
         throw new AgentStateError(429, "limit_exceeded:max_sessions");
       await this.checkDisk();
 
-      const selected = await this.options.dispatcher.selectToken(
-        input.tokenId,
-        input.tokenId !== undefined,
-        new AbortController().signal,
-      );
+      const signal = new AbortController().signal;
+
+      const selectToken = () =>
+        this.options.dispatcher.selectToken(input.tokenId, input.tokenId !== undefined, signal);
+
+      const selected = await selectToken().catch(async () => {
+        // Token refresh/NOTIFY can invalidate the metadata generation during selection.
+        await new Promise((resolve) => setTimeout(resolve, 250));
+
+        try {
+          return await selectToken();
+        } catch (error) {
+          if (error instanceof QuotaThresholdExceededError)
+            throw new AgentStateError(503, "quota_exceeded");
+
+          if (error instanceof Error && error.message === "NO_OPENAI_WORKERS")
+            throw new AgentStateError(503, "token_unavailable");
+          throw error;
+        }
+      });
 
       const id = randomUUID();
       this.secrets.set(
@@ -344,8 +360,13 @@ export class AgentSessionRunner implements RelaySessionStore {
     });
   }
 
-  private redact<T>(sessionId: string, value: T): T {
-    return redactAgentValue(value, this.secrets.get(sessionId) ?? []);
+  redact<T>(sessionId: string, value: T, additionalSecrets: readonly string[] = []): T {
+    return redactAgentValue(
+      value,
+      [...(this.secrets.get(sessionId) ?? []), ...additionalSecrets]
+        .filter(Boolean)
+        .toSorted((a, b) => b.length - a.length),
+    );
   }
 
   private async loadSecrets(row: AgentSessionBase) {

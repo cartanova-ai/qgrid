@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type LocalizedString } from "../../i18n/sd.generated";
 import { handleServerError } from "../../server-error-handler";
 import { getAgentRunner } from "../../utils/agents/runtime";
-import { type AgentSessionRunner } from "../../utils/agents/session-runner";
+import { AgentSessionRunner, type AgentSessionRunnerOptions } from "../../utils/agents/session-runner";
 import { AgentFrame, sanitizeAgentApiError } from "./agent.frame";
 import { AgentStateError } from "./agent.model";
 import { type AgentSessionCreateInput, type AgentSessionPromptInput, type AgentActionResultInput, type AgentSessionInput, type AgentSessionGetInput } from "./agent.types";
@@ -27,11 +27,13 @@ const turn = {
   request_log_id: 10, usage: { inputTokens: 12 }, model_call_count: 3,
   pending_actions: [{ toolCallId: "call-1", toolName: "lookup", input: { id: 1 }, gate: "auto", requestedAt: "2026-11-08T00:00:00Z" }],
 };
-const runner = { create: vi.fn(), prompt: vi.fn(), get: vi.fn(), actionResult: vi.fn(), stop: vi.fn(), destroy: vi.fn() };
+const runner = { create: vi.fn(), prompt: vi.fn(), get: vi.fn(), actionResult: vi.fn(), stop: vi.fn(), destroy: vi.fn(), redact: vi.fn() };
 let server: FastifyInstance;
 
 beforeEach(() => {
   vi.resetAllMocks();
+  const redactor = new AgentSessionRunner({} as AgentSessionRunnerOptions);
+  runner.redact.mockImplementation(redactor.redact.bind(redactor));
   vi.mocked(getAgentRunner).mockReturnValue(runner as unknown as AgentSessionRunner);
   runner.create.mockResolvedValue({ ...session, readyMs: 125 });
   runner.prompt.mockResolvedValue({ ...turn, status: "running" });
@@ -84,18 +86,24 @@ describe("AgentFrame", () => {
 
   it("does not expose Docker errors or Sonamu validation details containing env/token values", async () => {
     const log = vi.spyOn(getLogger(["qgrid"]), "error");
-    runner.create.mockRejectedValue(new Error("Docker rejected env-secret git-secret"));
-    const response = await server.inject({ method: "POST", url: "/api/agent/sessionCreate", payload: { params: input } });
+    const diagnostic = vi.spyOn(getLogger(["qgrid", "agents", "api"]), "error");
+    runner.create.mockRejectedValue(Object.assign(new Error("Docker rejected env-secret git-secret", { cause: new Error("private cause") }), { code: "DOCKER_env-secret", stack: "private stack" }));
+    const params = { ...input, env: { PASSWORD: "env-secret", EMPTY: "" }, workspace: { git: { url: "https://example.com/repo.git", ref: "main", token: "git-secret" } } };
+    const response = await server.inject({ method: "POST", url: "/api/agent/sessionCreate", payload: { params } });
     expect(response.statusCode).toBe(500);
     expect(response.body).not.toMatch(/env-secret|git-secret|Docker/);
     expect(log).toHaveBeenCalled();
     expect(JSON.stringify(log.mock.calls)).not.toMatch(/env-secret|git-secret|Docker/);
+    expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+      "Agent operation failed: {message} (code: {code})",
+      { message: "Docker rejected [REDACTED] [REDACTED]", code: "DOCKER_[REDACTED]" },
+    );
     const mapped = sanitizeAgentApiError(new BadRequestException("env-secret git-secret" as LocalizedString));
     expect(mapped).toMatchObject({ statusCode: 400, message: "invalid_agent_request" });
     expect(JSON.stringify(mapped)).not.toMatch(/env-secret|git-secret/);
   });
 
-  it.each([[409, "session_busy"], [404, "session_not_found"], [503, "agents_unavailable"], [429, "limit_exceeded:max_sessions"], [400, "unsupported_agent_model"]])("preserves runner status %i", async (status, code) => {
+  it.each([[409, "session_busy"], [404, "session_not_found"], [503, "agents_unavailable"], [503, "quota_exceeded"], [503, "token_unavailable"], [429, "limit_exceeded:max_sessions"], [400, "unsupported_agent_model"]])("preserves runner status %i", async (status, code) => {
     runner.prompt.mockRejectedValue(new AgentStateError(Number(status), String(code)));
     const response = await server.inject({ method: "POST", url: "/api/agent/sessionPrompt", payload: { params: { sessionId: session.id, prompt: "Go" } } });
     expect(response.statusCode).toBe(status);

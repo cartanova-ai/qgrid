@@ -500,7 +500,7 @@ for path in paths:
 print(json.dumps(result))`;
 
   const counts: Record<string, number> = JSON.parse(
-    (await run("docker", ["exec", "-i", "-u", "root", container(id), "python3", "-c", scan]))
+    (await run("docker", ["exec", "-i", "-u", "node", container(id), "python3", "-c", scan]))
       .stdout,
   );
 
@@ -701,7 +701,17 @@ async function archiveFixture() {
       "fixture",
     ]);
     const path = join(directory, "fixture.tar.gz");
-    await run("tar", ["-czf", path, "-C", directory, "task"]);
+    const bsdtar = (await run("tar", ["--version"])).stdout.includes("bsdtar");
+    await run("env", [
+      "COPYFILE_DISABLE=1",
+      "tar",
+      ...(bsdtar ? ["--no-xattrs", "--no-mac-metadata"] : []),
+      "-czf",
+      path,
+      "-C",
+      directory,
+      "task",
+    ]);
 
     return (await readFile(path)).toString("base64");
   } finally {
