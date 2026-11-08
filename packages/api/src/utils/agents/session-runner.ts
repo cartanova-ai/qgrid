@@ -189,7 +189,11 @@ export class AgentSessionRunner implements RelaySessionStore {
       if (this.shuttingDown) throw new AgentStateError(503, "agents_shutting_down");
       const sessions = await AgentModel.listSessions();
 
-      if (sessions.filter((row) => row.status !== "destroyed").length >= this.options.maxSessions)
+      if (
+        sessions.filter((row) =>
+          ["creating", "idle", "running", "waiting_action"].includes(row.status),
+        ).length >= this.options.maxSessions
+      )
         throw new AgentStateError(429, "limit_exceeded:max_sessions");
       await this.checkDisk();
 
@@ -344,8 +348,15 @@ export class AgentSessionRunner implements RelaySessionStore {
   ) {
     return this.locked(sessionId, async () => {
       if (this.shuttingDown) throw new AgentStateError(503, "agents_shutting_down");
-      const saved = await AgentModel.saveActionResult(sessionId, toolCallId, result);
       const row = await AgentModel.getSession(sessionId);
+      await this.loadSecrets(row);
+
+      const saved = await AgentModel.saveActionResult(
+        sessionId,
+        toolCallId,
+        result,
+        this.redact(sessionId, result),
+      );
 
       if (
         row.status === "waiting_action" &&

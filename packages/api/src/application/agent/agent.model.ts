@@ -447,6 +447,7 @@ class AgentModelClass extends BaseModelClass {
     sessionId: string,
     toolCallId: string,
     result: AgentActionResult,
+    redactedLog: AgentActionResult = result,
   ): Promise<{ turn: AgentTurnRow; duplicate: boolean }> {
     await this.lockSession(sessionId);
     const latest = await this.latestTurn(sessionId);
@@ -485,8 +486,8 @@ class AgentModelClass extends BaseModelClass {
         .where("type", "tool_call")
         .update({
           tool_result:
-            result.error === undefined ? (JSON.stringify(result.output) ?? "null") : null,
-          error: result.error ?? null,
+            redactedLog.error === undefined ? (JSON.stringify(redactedLog.output) ?? "null") : null,
+          error: redactedLog.error ?? null,
           tool_duration_ms: Math.max(0, Date.now() - Date.parse(action.requestedAt)),
         });
 

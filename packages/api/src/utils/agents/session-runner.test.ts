@@ -148,6 +148,23 @@ function harness(config: { hold?: boolean; abortCloses?: boolean } = {}) {
 }
 
 describe("agent runner token selection", () => {
+  it.each(["creating", "idle", "running", "waiting_action", "stopped", "failed", "destroyed"] as const)("counts only live sessions toward maxSessions: %s", async (status) => {
+    const db = modelFixture(session({ status }));
+    const selectToken = vi.fn().mockResolvedValue({ tokenId: 9, metadata: { name: "fixture-account" } });
+    const { runner, provider } = fixture({ maxSessions: 1, dispatcher: { selectToken } });
+    vi.spyOn(AgentModel, "createSession").mockImplementation(async (row) => { Object.assign(db.row, row); return db.row; });
+    harness();
+    const result = runner.create({ model: db.row.model });
+    if (["stopped", "failed", "destroyed"].includes(status)) {
+      await expect(result).resolves.toMatchObject({ status: "idle" });
+      expect(provider.createSession).toHaveBeenCalledTimes(1);
+    } else {
+      await expect(result).rejects.toMatchObject({ status: 429, code: "limit_exceeded:max_sessions" });
+      expect(selectToken).not.toHaveBeenCalled();
+      expect(provider.createSession).not.toHaveBeenCalled();
+    }
+  });
+
   it("retries a transient selection failure once after 250 ms with the same preferred token", async () => {
     vi.useFakeTimers();
     const db = modelFixture();
@@ -287,6 +304,22 @@ describe("agent runner recovery", () => {
 });
 
 describe("agent runner turn ownership", () => {
+  it("redacts the initial action-result log copy while preserving the submitted result", async () => {
+    const { result: _result, ...action } = pending();
+    const db = modelFixture(session({ status: "waiting_action" }), turn({ status: "waiting_action", pending_actions: [action] }));
+    const { runner, provider } = fixture();
+    provider.callerEnvironment.mockResolvedValue({ PASSWORD: "secret-value" });
+    const result = { output: { nested: ["secret-value"] }, error: "Failed: secret-value" };
+    const save = vi.spyOn(AgentModel, "saveActionResult").mockResolvedValue({ turn: db.active, duplicate: false });
+
+    await runner.actionResult(db.row.id, action.toolCallId, result);
+
+    expect(save).toHaveBeenCalledWith(db.row.id, action.toolCallId, result, {
+      output: { nested: ["[REDACTED]"] }, error: "Failed: [REDACTED]",
+    });
+    expect(result).toEqual({ output: { nested: ["secret-value"] }, error: "Failed: secret-value" });
+  });
+
   it.each(["running", "waiting_action"] as const)("rejects %s prompts before accessing Docker", async (status) => {
     const db = modelFixture(session({ status }));
     const { runner, provider } = fixture();

@@ -173,6 +173,15 @@ describe("AgentModel PostgreSQL lifecycle", () => {
     expect((await AgentModel.getTurn(turn.id)).pending_actions[0]!.deliveredAt).toBe(delivered);
   });
 
+  it("stores original action results for continuation and only redacted copies in the initial log", async () => {
+    const { session, turn } = await waitingFixture();
+    await AgentModel.saveActionResult(session.id, "action-1", { output: { token: "secret-value" } }, { output: { token: "[REDACTED]" } });
+    expect((await AgentModel.getTurn(turn.id)).pending_actions[0]).toMatchObject({ result: { output: { token: "secret-value" } } });
+    const step = await AgentModel.getPuri("w").from("request_log_steps").selectAll()
+      .where("request_log_id", turn.request_log_id!).where("tool_call_id", "action-1").first();
+    expect(step).toMatchObject({ tool_result: JSON.stringify({ token: "[REDACTED]" }), error: null });
+  });
+
   it("keeps caller abort and limit failure distinct and rolls model usage into the parent", async () => {
     for (const status of ["aborted", "failed"] as const) {
       const session = await fixture();

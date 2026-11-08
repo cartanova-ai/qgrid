@@ -74,7 +74,7 @@ Session and turn statuses are distinct. A failed turn normally leaves a reusable
 | Destroy | Any retained state → `destroyed` after active cancellation | Active turn aborted; repeated destroy succeeds |
 | Startup/reattach failure | Incomplete creation or failed recovery → `failed` | Active turn, if present, becomes `failed` |
 
-Repeated stop on `stopped` succeeds; stop on `failed`, `destroyed`, or `creating` returns 409. Prompt cannot restart `failed` or `destroyed` sessions. TTL and retention ages both use `last_turn_at` (creation or last turn start/finish), not the time the container was stopped. A 60-second sweep means TTLs are not exact stop deadlines. Retained stopped/failed sessions count toward `maxSessions` until destroyed.
+Repeated stop on `stopped` succeeds; stop on `failed`, `destroyed`, or `creating` returns 409. Prompt cannot restart `failed` or `destroyed` sessions. TTL and retention ages both use `last_turn_at` (creation or last turn start/finish), not the time the container was stopped. A 60-second sweep means TTLs are not exact stop deadlines. Only `creating`, `idle`, `running`, and `waiting_action` sessions count toward `maxSessions`. Retained stopped/failed sessions consume disk space and are removed by the `retainSec` sweep.
 
 ## Caller Tools And Required Actions
 
@@ -101,7 +101,7 @@ Unanswered actions time out on the sweep (`action_timeout`). The overall turn ti
 - `workspace.git` takes `{ url, ref, token? }`. URL must be HTTPS without embedded credentials, query, or fragment. Ref must be nonempty, contain no whitespace/control characters, and not start with `-`. The implementation runs `git clone --depth 50 -b <ref>` into `/workspace` with a 120-second timeout; use a branch or tag, not an arbitrary commit SHA. The optional token is supplied only to that exec's credential helper through `QGRID_CLONE_TOKEN`, not written into the remote URL or Git config.
 - `workspace.archive` is a base64-encoded gzip tar archive uploaded into `/workspace`. Git and archive are mutually exclusive; omitted/empty workspace starts with the image's empty workspace. Gunzip is capped at 64 MiB; the API body limit also bounds the encoded input. Qgrid passes the decompressed tar to Docker `putArchive` without its own entry/path validation. Supply trusted archive contents relative to the workspace root.
 - `env` maps valid environment-variable names to strings without NUL. It becomes container environment, not a host secret lookup. There is no reserved-name allowlist or denylist; the adapter separately supplies its bridge/relay credential environment when spawning the bridge. Supply narrowly scoped caller credentials only when the task needs them. For example, `GH_TOKEN: "<SCOPED_GITHUB_TOKEN>"` enables Pi to use `gh pr create`; qgrid does not supply a GitHub token or create a PR itself. A caller-owned `open_pull_request` tool is an alternative.
-- The runner masks known caller secret values in polling output and its log writes. This is literal-value redaction, not protection from exfiltration or transformed secrets. `actionResult` persists the submitted result intact and immediately writes it to the tool log without that redactor; a later bridge acknowledgement updates the log through the redacted path. Do not include secrets in submitted results. On restart the runner reloads caller env from Docker; clone-only tokens are not retained there. Do not rely on masking as sandbox isolation.
+- The runner masks known caller secret values in polling output and its log writes. This is literal-value redaction, not protection from exfiltration or transformed secrets. `actionResult` persists the submitted result intact in `pending_actions` for continuation and applies the runner's redactor to the log copy before its first tool-log write; a later bridge acknowledgement also updates the log through the redacted path. On restart the runner reloads caller env from Docker; clone-only tokens are not retained there. Do not rely on masking as sandbox isolation.
 
 `sessionGet(includeDiff: true)` runs bounded `git diff --no-ext-diff --no-textconv` in `/workspace`, with a 10-second timeout and a 1 MiB UTF-8 cap. It returns tracked, unstaged changes only, not staged/untracked files or a full workspace export. It returns 409 when the workspace is unavailable/non-Git or the session is creating, stopped, failed, or destroyed.
 
@@ -144,7 +144,7 @@ All settings below apply on restart. Precedence is stored DB setting → corresp
 | `qgrid.agents.subnet` | `QGRID_AGENTS_SUBNET` | `172.30.0.0/24` |
 | `qgrid.agents.hostMode` | `QGRID_AGENTS_HOST_MODE` | `auto`; choices `auto`, `linux`, `desktop` |
 | `qgrid.agents.relayPort` | `QGRID_AGENTS_RELAY_PORT` | `44901`; integer 1–65535 |
-| `qgrid.agents.maxSessions` | `QGRID_AGENTS_MAX_SESSIONS` | `4`; positive integer, all nondestroyed sessions |
+| `qgrid.agents.maxSessions` | `QGRID_AGENTS_MAX_SESSIONS` | `4`; positive integer, live sessions (`creating`, `idle`, `running`, `waiting_action`) |
 | `qgrid.agents.idleTtlSec` | `QGRID_AGENTS_IDLE_TTL_SEC` | `1800`; positive integer seconds |
 | `qgrid.agents.retainSec` | `QGRID_AGENTS_RETAIN_SEC` | `86400`; positive integer seconds |
 | `qgrid.agents.maxModelCallsPerTurn` | `QGRID_AGENTS_MAX_MODEL_CALLS_PER_TURN` | `60`; positive integer |
