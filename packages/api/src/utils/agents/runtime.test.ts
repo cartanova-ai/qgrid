@@ -1,3 +1,5 @@
+import { Server } from "node:http";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { loadSettings } from "../../application/setting/setting.store";
@@ -83,13 +85,15 @@ describe("agent settings", () => {
       maxTurnSeconds: 1200,
       minFreeDiskGb: 20,
       isolationCheck: "enforce",
+      hostMode: "auto",
       isolationPorts: [5432, 6379],
     });
     vi.stubEnv("QGRID_AGENTS_MAX_SESSIONS", "6");
     vi.stubEnv("QGRID_AGENTS_SECRET", "test-secret");
-    expect(readAgentsSettings()).toMatchObject({ maxSessions: 6, secret: "test-secret" });
-    await settings({ maxSessions: "3" });
-    expect(readAgentsSettings().maxSessions).toBe(3);
+    vi.stubEnv("QGRID_AGENTS_HOST_MODE", "desktop");
+    expect(readAgentsSettings()).toMatchObject({ maxSessions: 6, secret: "test-secret", hostMode: "desktop" });
+    await settings({ maxSessions: "3", hostMode: "linux" });
+    expect(readAgentsSettings()).toMatchObject({ maxSessions: 3, hostMode: "linux" });
   });
 });
 
@@ -142,6 +146,25 @@ describe("agents startup", () => {
 
   const options = { dispatcher: {} as never, apiHost: "172.19.0.1", apiPort: 44900 };
 
+  it.each([
+    ["auto", "linux", ["172.30.0.1", "127.0.0.1"]],
+    ["auto", "darwin", ["127.0.0.1"]],
+    ["linux", "darwin", ["172.30.0.1", "127.0.0.1"]],
+    ["desktop", "linux", ["127.0.0.1"]],
+  ] as const)("binds relay for host mode %s on %s", async (hostMode, platform, addresses) => {
+    const probe = runtimeProbe();
+    probe.listen.mockRestore();
+    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+    const listen = vi.spyOn(Server.prototype, "listen").mockImplementation(function (this: Server) {
+      queueMicrotask(() => this.emit("listening"));
+      return this;
+    });
+    await settings({ enabled: "true", secret: "test-secret", sandboxImage: "test:pi", hostMode });
+    await startAgentsRuntime(options);
+    expect(await agentsHealth()).toMatchObject({ ready: true });
+    expect(listen.mock.calls.map((args) => args[1])).toEqual(addresses);
+  });
+
   it("does not start Docker or relay when disabled", async () => {
     const probe = runtimeProbe();
     await startAgentsRuntime(options);
@@ -166,7 +189,7 @@ describe("agents startup", () => {
 
   it("warn continues startup and shutdown saves runner state before closing relay", async () => {
     const probe = runtimeProbe(true);
-    await settings({ enabled: "true", secret: "test-secret", sandboxImage: "test:pi", isolationCheck: "warn" });
+    await settings({ enabled: "true", secret: "test-secret", sandboxImage: "test:pi", isolationCheck: "warn", hostMode: "desktop" });
     await startAgentsRuntime(options);
     expect(await agentsHealth()).toEqual({ enabled: true, ready: true, sessions: 2 });
     await stopAgentsRuntime();

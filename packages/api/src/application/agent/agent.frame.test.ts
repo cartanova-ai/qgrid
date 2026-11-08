@@ -24,7 +24,7 @@ const session = {
 };
 const turn = {
   id: 1, index: 0, status: "waiting_action", result_text: null, error_message: null,
-  request_log_id: 10, usage: { inputTokens: 12 },
+  request_log_id: 10, usage: { inputTokens: 12 }, model_call_count: 3,
   pending_actions: [{ toolCallId: "call-1", toolName: "lookup", input: { id: 1 }, gate: "auto", requestedAt: "2026-11-08T00:00:00Z" }],
 };
 const runner = { create: vi.fn(), prompt: vi.fn(), get: vi.fn(), actionResult: vi.fn(), stop: vi.fn(), destroy: vi.fn() };
@@ -33,7 +33,7 @@ let server: FastifyInstance;
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(getAgentRunner).mockReturnValue(runner as unknown as AgentSessionRunner);
-  runner.create.mockResolvedValue(session);
+  runner.create.mockResolvedValue({ ...session, readyMs: 125 });
   runner.prompt.mockResolvedValue({ ...turn, status: "running" });
   runner.get.mockResolvedValue({ session, turn });
   runner.actionResult.mockResolvedValue({ turn: { ...turn, status: "running" }, duplicate: false });
@@ -65,7 +65,7 @@ describe("AgentFrame", () => {
     const params = { ...input, env: { DB_PASSWORD: "env-secret" }, workspace: { git: { url: "https://example.com/repo.git", ref: "main", token: "git-secret" } } };
     const response = await server.inject({ method: "POST", url: "/api/agent/sessionCreate", payload: { params } });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ sessionId: session.id, status: "idle" });
+    expect(response.json()).toEqual({ sessionId: session.id, status: "idle", readyMs: 125 });
     expect(runner.create).toHaveBeenCalledWith({ ...params, tools: [{ ...params.tools[0], timeoutSec: 600 }] });
   });
 
@@ -109,7 +109,7 @@ describe("AgentFrame", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       session: { id: session.id, status: "idle", model: input.model, projectName: "tests", createdAt: "2026-11-08T00:00:00.000Z", lastTurnAt: "2026-11-08T00:00:00.000Z" },
-      turn: { id: 1, index: 0, status: "waiting_action", pendingActions: turn.pending_actions, requestLogId: 10, usage: { inputTokens: 12 } },
+      turn: { id: 1, index: 0, status: "waiting_action", pendingActions: turn.pending_actions, requestLogId: 10, usage: { inputTokens: 12 }, modelCallCount: 3 },
     });
     expect(response.body).not.toMatch(/private|token_id|lifecycle/);
     expect(runner.get).toHaveBeenCalledWith(session.id, undefined);

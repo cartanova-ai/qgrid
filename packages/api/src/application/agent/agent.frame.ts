@@ -69,7 +69,7 @@ class AgentFrameClass extends BaseFrameClass {
         })),
       });
 
-      return { sessionId: session.id, status: session.status };
+      return { sessionId: session.id, status: session.status, readyMs: session.readyMs };
     });
   }
 
@@ -108,6 +108,7 @@ class AgentFrameClass extends BaseFrameClass {
               id: turn.id,
               index: turn.index,
               status: turn.status,
+              modelCallCount: turn.model_call_count,
               pendingActions: turn.pending_actions
                 .filter((action) => !action.result)
                 .map((action) => ({

@@ -288,12 +288,18 @@ describe("agent runner turn ownership", () => {
 
   it("prepares git before starting the bridge and never persists create credentials", async () => {
     const db = modelFixture();
-    const { runner, provider, run } = fixture({ dispatcher: { selectToken: vi.fn().mockResolvedValue({ tokenId: 9, metadata: { name: "fixture-account" } }) } });
-    const created = vi.spyOn(AgentModel, "createSession").mockImplementation(async (row) => { Object.assign(db.row, row); return db.row; });
+    let elapsed = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    const { runner, provider, sandbox, run } = fixture({ dispatcher: { selectToken: vi.fn().mockResolvedValue({ tokenId: 9, metadata: { name: "fixture-account" } }) } });
+    const created = vi.spyOn(AgentModel, "createSession").mockImplementation(async (row) => { elapsed += 100; Object.assign(db.row, row); return db.row; });
     const agent = harness();
+    provider.createSession.mockImplementation(async () => { elapsed += 40; return sandbox; });
+    agent.create.mockImplementation(async () => { elapsed += 60; return agent.live as unknown as HarnessAgentSession; });
+    provider.inspectIp.mockImplementation(async () => { elapsed += 500; return "172.30.0.2"; });
     const input = { model: db.row.model, instructions: "Use PASSWORD", tools: db.row.tools, env: { PASSWORD: "env-secret" }, workspace: { git: { url: "https://example.com/repo.git", ref: "main", token: "git-secret" } } };
     const result = await runner.create(input);
     expect(result.status).toBe("idle");
+    expect(result.readyMs).toBe(100);
     expect(provider.createSession).toHaveBeenCalledWith({ sessionId: result.id, env: input.env });
     expect(run.mock.invocationCallOrder[0]).toBeLessThan(agent.create.mock.invocationCallOrder[0]!);
     expect(JSON.stringify(created.mock.calls)).not.toMatch(/env-secret|git-secret/);

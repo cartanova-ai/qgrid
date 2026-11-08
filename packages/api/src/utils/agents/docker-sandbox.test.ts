@@ -4,7 +4,7 @@ import { Duplex, Readable } from "node:stream";
 import Docker from "dockerode";
 import { describe, expect, it, vi } from "vitest";
 
-import { DockerSandboxProvider } from "./docker-sandbox";
+import { DockerSandboxProvider, type DockerSandboxOptions } from "./docker-sandbox";
 
 function frame(channel: number, text: string | Buffer) {
   const bytes = Buffer.from(text);
@@ -14,7 +14,7 @@ function frame(channel: number, text: string | Buffer) {
   return Buffer.concat([header, bytes]);
 }
 
-function fixture() {
+function fixture(hostAlias: DockerSandboxOptions["hostAlias"] = { kind: "gateway" }) {
   const info = {
     Config: { WorkingDir: "/workspace", Labels: { "qgrid.agents.session": "one" } },
     State: { Running: true },
@@ -50,6 +50,7 @@ function fixture() {
   const onRequestTransformations = vi.fn();
   const options = {
     image: "qgrid-sandbox-pi:dev",
+    hostAlias,
     memory: 536870912,
     nanoCpus: 1000000000,
     pidsLimit: 128,
@@ -93,6 +94,16 @@ function mockExec(
 }
 
 describe("DockerSandboxProvider", () => {
+  it.each([
+    ["gateway", "172.30.0.1"],
+    ["host-gateway", "host-gateway"],
+  ] as const)("maps the host alias with %s", async (kind, address) => {
+    const { provider, docker } = fixture({ kind });
+    await provider.createSession({ sessionId: "one" });
+    expect(docker.createContainer).toHaveBeenCalledWith(expect.objectContaining({
+      HostConfig: expect.objectContaining({ ExtraHosts: [`host.docker.internal:${address}`] }),
+    }));
+  });
   it("passes caller env to the container and recovers only those values for redaction", async () => {
     const { provider, docker, container, info } = fixture();
     const env = { DB_PASSWORD: "private=secret", GH_TOKEN: "git-secret" };

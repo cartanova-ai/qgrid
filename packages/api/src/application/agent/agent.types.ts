@@ -138,7 +138,12 @@ const SessionStatus = z.enum([
 ]);
 
 const TurnStatus = z.enum(["running", "waiting_action", "succeeded", "failed", "aborted"]);
-export const AgentSessionCreateOutput = z.object({ sessionId: z.string(), status: SessionStatus });
+
+export const AgentSessionCreateOutput = z.object({
+  sessionId: z.string(),
+  status: SessionStatus,
+  readyMs: z.number().nonnegative(),
+});
 
 export type AgentSessionCreateOutput = z.infer<typeof AgentSessionCreateOutput>;
 
@@ -161,6 +166,7 @@ export const AgentSessionGetOutput = z.object({
       id: z.number().int(),
       index: z.number().int(),
       status: TurnStatus,
+      modelCallCount: z.number().int().nonnegative(),
       pendingActions: z.array(
         z.object({
           toolCallId: z.string(),

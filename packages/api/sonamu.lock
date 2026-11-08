@@ -17,7 +17,7 @@
   },
   {
     "path": "api/src/application/agent/agent.frame.ts",
-    "checksum": "e0475cba0d1dc151a627d477753f8c3bba5a99e0"
+    "checksum": "8099e86fc5210627c98900a889d63db54bcff999"
   },
   {
     "path": "api/src/application/agent/agent.model.ts",
@@ -25,7 +25,7 @@
   },
   {
     "path": "api/src/application/agent/agent.types.ts",
-    "checksum": "ffe69f8047b82ff9558a788a84a1d9fdf3e3271b"
+    "checksum": "522d2ce421643e571c10a1d7a49ac00a811c1dc6"
   },
   {
     "path": "api/src/application/monit/monit.frame.ts",
@@ -145,7 +145,7 @@
   },
   {
     "path": "web/src/services/agent/agent.types.ts",
-    "checksum": "64d92ea1614377be135ba792ee6d49aa3e977d74"
+    "checksum": "9e38a38a6222a5c6bde724ca11b220883923cf37"
   },
   {
     "path": "web/src/services/monit/monit.types.ts",

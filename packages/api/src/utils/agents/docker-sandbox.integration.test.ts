@@ -19,6 +19,7 @@ it.skipIf(process.env.QGRID_AGENTS_IT !== "1")(
     const docker = new Docker();
     const provider = new DockerSandboxProvider(docker, {
       image: process.env.QGRID_AGENTS_IT_IMAGE ?? "qgrid-sandbox-pi:dev",
+      hostAlias: { kind: "gateway" },
       memory: 512 * 1024 * 1024,
       nanoCpus: 1_000_000_000,
       pidsLimit: 128,

@@ -77,6 +77,17 @@ export const SETTING_DEFS: SettingDef[] = [
     fallback: "172.30.0.0/24",
   },
   {
+    key: "qgrid.agents.hostMode",
+    group: "qgrid",
+    envKey: "QGRID_AGENTS_HOST_MODE",
+    label: "Agents 호스트 모드",
+    kind: "string",
+    applies: "restart",
+    choices: ["auto", "linux", "desktop"],
+    fallback: "auto",
+    help: "auto: Linux는 bridge gateway, 그 외는 Docker Desktop 호스트 연결을 사용합니다",
+  },
+  {
     key: "qgrid.agents.relayPort",
     group: "qgrid",
     envKey: "QGRID_AGENTS_RELAY_PORT",

@@ -28,6 +28,7 @@ const BRIDGE_PORT = 8787;
 export type DockerSandboxOptions = {
   image: string;
   subnet?: string;
+  hostAlias: { kind: "gateway" } | { kind: "host-gateway" };
   memory: number;
   nanoCpus: number;
   pidsLimit: number;
@@ -168,7 +169,9 @@ export class DockerSandboxProvider implements HarnessV1SandboxProvider {
       },
       HostConfig: {
         NetworkMode: NETWORK,
-        ExtraHosts: [`host.docker.internal:${gateway}`],
+        ExtraHosts: [
+          `host.docker.internal:${this.options.hostAlias.kind === "gateway" ? gateway : "host-gateway"}`,
+        ],
         PortBindings: { [`${BRIDGE_PORT}/tcp`]: [{ HostIp: "127.0.0.1", HostPort: "0" }] },
         Memory: this.options.memory,
         NanoCpus: this.options.nanoCpus,

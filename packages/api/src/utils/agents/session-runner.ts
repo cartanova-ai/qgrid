@@ -173,7 +173,7 @@ export class AgentSessionRunner implements RelaySessionStore {
     }
   }
 
-  async create(input: CreateAgentSession): Promise<AgentSessionBase> {
+  async create(input: CreateAgentSession): Promise<AgentSessionBase & { readyMs: number }> {
     if (!z.enum(PI_MODELS).safeParse(input.model).success)
       throw new AgentStateError(400, "unsupported_agent_model");
     const names = new Set<string>();
@@ -233,6 +233,7 @@ export class AgentSessionRunner implements RelaySessionStore {
 
       try {
         const row = await AgentModel.getSession(id);
+        const startedAt = performance.now();
 
         const sandbox = await this.options.provider.createSession({
           sessionId: id,
@@ -246,11 +247,12 @@ export class AgentSessionRunner implements RelaySessionStore {
           sessionId: id,
           sandboxSession: sandbox,
         });
+        const readyMs = performance.now() - startedAt;
         await AgentModel.transition(id, ["creating"], "idle", {
           container_ip: await this.options.provider.inspectIp(id),
         });
 
-        return await AgentModel.getSession(id);
+        return { ...(await AgentModel.getSession(id)), readyMs };
       } catch (error) {
         await this.options.provider.destroyContainer(id);
         this.handles.delete(id);

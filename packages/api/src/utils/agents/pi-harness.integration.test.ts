@@ -12,6 +12,7 @@ it.skipIf(process.env.QGRID_AGENTS_IT !== "1")(
     const onRequestTransformations = vi.fn();
     const provider = new DockerSandboxProvider(new Docker(), {
       image: "qgrid-sandbox-pi:dev",
+      hostAlias: { kind: "gateway" },
       memory: 536870912,
       nanoCpus: 1000000000,
       pidsLimit: 128,

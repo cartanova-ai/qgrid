@@ -35,6 +35,7 @@ export function readAgentsSettings() {
     enabled: settingValue("enabled") === "true",
     sandboxImage: settingValue("sandboxImage"),
     subnet: settingValue("subnet"),
+    hostMode: settingValue("hostMode"),
     relayPort: Number(settingValue("relayPort")),
     maxSessions: Number(settingValue("maxSessions")),
     idleTtlSec: Number(settingValue("idleTtlSec")),
@@ -170,9 +171,14 @@ export async function startAgentsRuntime(options: {
 
     if (!options.dispatcher) throw new Error("OpenAI dispatcher is unavailable");
 
+    const linuxHost =
+      settings.hostMode === "linux" ||
+      (settings.hostMode === "auto" && process.platform === "linux");
+
     const provider = new DockerSandboxProvider(new Docker(), {
       image: settings.sandboxImage,
       subnet: settings.subnet,
+      hostAlias: { kind: linuxHost ? "gateway" : "host-gateway" },
       memory: 2 * 1024 ** 3,
       nanoCpus: 2_000_000_000,
       pidsLimit: 256,
@@ -199,7 +205,7 @@ export async function startAgentsRuntime(options: {
     relay = new AgentsRelay({
       sessions: runner,
       dispatcher: options.dispatcher,
-      bindAddresses: [gateway, "127.0.0.1"],
+      bindAddresses: linuxHost ? [gateway, "127.0.0.1"] : ["127.0.0.1"],
       port: settings.relayPort,
       limits: {
         maxModelCalls: settings.maxModelCallsPerTurn,
