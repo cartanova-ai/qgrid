@@ -1184,7 +1184,7 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<TranscribeOutpu
             callId,
             alignMs,
             wordsError,
-            // Word timing of the input audio for the request-log detail player.
+            // Word timing of the input audio, as returned to the caller.
             words: output.words,
           }),
         },
@@ -2316,7 +2316,7 @@ class QgridFrameClass extends BaseFrameClass {
               text: output.text,
               language: output.language,
               durationSec: output.durationSec,
-              // Word timing of the input audio for the request-log detail player.
+              // Word timing of the input audio, as returned to the caller.
               words: output.words,
             }),
           },

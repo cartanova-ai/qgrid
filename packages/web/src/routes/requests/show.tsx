@@ -1445,10 +1445,7 @@ function RequestDetail({ id }: { id: number }) {
   const firstImageGenerationStepId =
     toolCalls.find((toolCall) => toolCall.toolName === "image_generation")?.id ?? null;
 
-  const voiceStepId =
-    toolCalls.find(
-      (toolCall) => toolCall.toolName === "speech" || toolCall.toolName === "transcription",
-    )?.id ?? null;
+  const voiceStepId = toolCalls.find((toolCall) => toolCall.toolName === "speech")?.id ?? null;
 
   const hasSteps = stepTree.length > 0;
   const tokensPerSecEnabled = isTokensPerSecEnabled(data);
@@ -1480,11 +1477,8 @@ function RequestDetail({ id }: { id: number }) {
         <div className="space-y-3">
           <div className="relative">
             <CopyButton text={data.user_prompt ?? "null"} />
-            {data.media_kind === "stt" ? (
-              <VoiceAwareContent text={data.user_prompt ?? "null"} stepId={voiceStepId} />
-            ) : (
-              <FormattedContent text={data.user_prompt ?? "null"} markdown />
-            )}
+            {/* STT input is shown as plain audio; its word timing stays in the step result. */}
+            <FormattedContent text={data.user_prompt ?? "null"} markdown />
           </div>
           <RequestInputImages images={data.input_images} stepId={firstImageGenerationStepId} />
         </div>
