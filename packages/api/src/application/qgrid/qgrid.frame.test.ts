@@ -2310,8 +2310,15 @@ describe("QgridFrame Grok media and voice (U11)", () => {
         tokenName: "grok/a",
       });
 
-      const out = await QgridFrame.speak({ model: "openai/gpt-realtime-2.1-mini", text: "Hi there.", withTimestamps: true });
+      const out = await QgridFrame.speak({
+        model: "openai/gpt-realtime-2.1-mini",
+        text: "Hi there.",
+        instructions: "Speak warmly.",
+        withTimestamps: true,
+      });
 
+      // The style instructions are kept as the run's system prompt for the request log.
+      expect(requestLogCreateRunMock).toHaveBeenCalledWith(expect.objectContaining({ system_prompt: "Speak warmly." }));
       expect(grok.transcribe).toHaveBeenCalledWith(expect.objectContaining({ mediaType: "audio/wav", model: "grok-voice-transcribe-2.0" }));
       expect(out).toMatchObject({ timestampsSource: "aligned", durationSec: 0.5 });
       expect(out.audioTimestamps?.graphChars.join("")).toBe("Hi there.");

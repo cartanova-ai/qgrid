@@ -777,7 +777,14 @@ function imageTagForLog(b64: string, mimeType: string, alt: string | undefined):
   return `<img src="data:${mimeType};base64,${b64}" alt="${safeAlt}" />`;
 }
 
-type MediaLogStart = { kind: MediaKind; model: string; prompt: string; projectName?: string };
+type MediaLogStart = {
+  kind: MediaKind;
+  model: string;
+  prompt: string;
+  projectName?: string;
+  /** OpenAI speech style instructions, shown as the run's system prompt. */
+  systemPrompt?: string;
+};
 
 // Creating the running row is a precondition of a logged provider call, as for query.
 async function startMediaRun(
@@ -788,6 +795,7 @@ async function startMediaRun(
 
   return RequestLogModel.createRun({
     user_prompt: start.prompt,
+    system_prompt: start.systemPrompt,
     requested_model_name: start.model,
     project_name: start.projectName,
     is_image_generation: start.kind === "image",
@@ -1225,6 +1233,7 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
     kind: "tts",
     model: route,
     prompt: input.text,
+    systemPrompt: input.instructions,
     projectName: input.projectName,
     logger: input.logger,
   } as const;
