@@ -2327,6 +2327,23 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       expect(end).toBeCloseTo(0.15);
     });
 
+    it("keeps the OpenAI STT prompt as the run's system prompt", async () => {
+      const transcribe = vi.fn().mockResolvedValue({
+        result: { text: "hi", durationSec: 0.5, callId: "c", transport: "realtime-calls" },
+        tokenName: "openai/a",
+      });
+      Object.assign(QgridDispatcher, { openaiDispatcher: { speak: openaiSpeak, transcribe } });
+
+      await QgridFrame.transcribe({
+        model: "openai/gpt-4o-transcribe",
+        audio: Buffer.from(wav).toString("base64"),
+        mediaType: "audio/wav",
+        prompt: "qgrid, Kuma",
+      });
+
+      expect(requestLogCreateRunMock).toHaveBeenCalledWith(expect.objectContaining({ system_prompt: "qgrid, Kuma", media_kind: "stt" }));
+    });
+
     it("still returns the audio when the timing step fails", async () => {
       grok.transcribe!.mockRejectedValueOnce(new Error("grok down"));
 

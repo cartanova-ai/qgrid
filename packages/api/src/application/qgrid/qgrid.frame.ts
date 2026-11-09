@@ -782,7 +782,7 @@ type MediaLogStart = {
   model: string;
   prompt: string;
   projectName?: string;
-  /** OpenAI speech style instructions, shown as the run's system prompt. */
+  /** OpenAI speech style instructions or STT prompt, shown as the run's system prompt. */
   systemPrompt?: string;
 };
 
@@ -1115,6 +1115,7 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<TranscribeOutpu
     kind: "stt",
     model: route,
     prompt: audioForLog(input.audio, input.mediaType, audio.byteLength),
+    systemPrompt: input.prompt,
     projectName: input.projectName,
     logger: input.logger,
   } as const;

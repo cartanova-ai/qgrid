@@ -1462,7 +1462,15 @@ function RequestDetail({ id }: { id: number }) {
 
   const promptSections = (
     <div className="space-y-4">
-      <Section title={data.media_kind === "tts" ? "Style instructions" : "System"}>
+      <Section
+        title={
+          data.media_kind === "tts"
+            ? "Style instructions"
+            : data.media_kind === "stt"
+              ? "Prompt"
+              : "System"
+        }
+      >
         <div className="relative">
           <CopyButton text={data.system_prompt ?? "null"} />
           <FormattedContent text={data.system_prompt ?? "null"} markdown />
