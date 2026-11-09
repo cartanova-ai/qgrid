@@ -30,8 +30,9 @@ const WINDOW_SAMPLES = 30 * SAMPLE_RATE;
 const CONTEXT_SAMPLES = 2 * SAMPLE_RATE;
 const IDLE_UNLOAD_MS = 10 * 60_000;
 
-// Viterbi back-pointers take frames x (2 x tokens + 1) bytes.
-const MAX_TRELLIS_CELLS = 300_000_000;
+// Viterbi back-pointers take frames x (2 x tokens + 1) bytes; 100 MB covers about 5 minutes of
+// ordinary speech.
+const MAX_TRELLIS_CELLS = 100_000_000;
 
 export class SpeechAlignerUnavailableError extends Error {}
 
@@ -132,7 +133,14 @@ export function forcedAlign(emissions: Float64Array[], targets: number[]): Array
 
   if (frames < targets.length) throw new Error("speech is too short for its script");
 
-  if (frames * states > MAX_TRELLIS_CELLS) throw new Error("speech is too long to align");
+  if (frames * states > MAX_TRELLIS_CELLS) {
+    const limitSec = Math.floor((MAX_TRELLIS_CELLS / states) * (SAMPLES_PER_FRAME / SAMPLE_RATE));
+
+    throw new Error(
+      `speech is too long to align: this script can be timed in up to ${limitSec} s of audio`,
+    );
+  }
+
   const label = (s: number) => (s % 2 === 0 ? BLANK : targets[(s - 1) / 2]!);
   const back = new Uint8Array(frames * states);
   let previous = new Float64Array(states).fill(-Infinity);
@@ -374,10 +382,11 @@ export async function alignSpeech(
   const { ids, owners } = scriptTargets(chars);
 
   if (!ids.some((id) => id !== STAR)) throw new Error("script has no letters to align");
-  const loaded = await loadModel();
+  // Counted before the model is awaited, so the idle unload cannot release it under this request.
   inFlight++;
 
   try {
+    const loaded = await loadModel();
     const samples = to16kFloat(pcm, sampleRate);
     const emissions = await emissionsFor(loaded, samples);
     const durationSec = pcm.byteLength / 2 / sampleRate;

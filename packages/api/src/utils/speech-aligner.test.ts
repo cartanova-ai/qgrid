@@ -47,6 +47,13 @@ describe("forcedAlign", () => {
     ]);
   });
 
+  it("refuses audio too long for the script with the limit in seconds", () => {
+    const longClip = Array.from({ length: 20_000 }, () => new Float64Array(32));
+    const script = Array.from({ length: 3_000 }, () => H);
+
+    expect(() => forcedAlign(longClip, script)).toThrow(/up to \d+ s of audio/);
+  });
+
   it("lets a leading star absorb speech before the script", () => {
     // The audio says "hi" twice; the script is the second "hi".
     const emissions = frames(H, I, BLANK, BLANK, H, I);
