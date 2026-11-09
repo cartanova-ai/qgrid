@@ -75,6 +75,31 @@ export function warnMissingRuntimeCliDependencies(): void {
   }
 }
 
+/**
+ * OpenAI speech timing (`withTimestamps`) needs the speech aligner model and onnxruntime-node, which
+ * only the Docker image ships. Without them the server returns `timestampsError`, so warn once here.
+ */
+export function warnMissingSpeechAligner(env: NodeJS.ProcessEnv = process.env): void {
+  const model = env.QGRID_ALIGNER_MODEL;
+
+  if (model && existsSync(model) && canResolve("onnxruntime-node")) return;
+
+  console.warn(
+    "Warning: speech aligner not installed. OpenAI TTS withTimestamps returns no timing.",
+  );
+  console.warn("Install: see the Speech aligner section of the @cartanova/qgrid-cli README.");
+}
+
+function canResolve(specifier: string): boolean {
+  try {
+    import.meta.resolve(specifier);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function normalizePort(value: string): string {
   const numeric = Number(value);
 
@@ -136,6 +161,7 @@ program
     }
 
     warnMissingRuntimeCliDependencies();
+    warnMissingSpeechAligner();
 
     // --db가 최우선이며, Qgrid의 공개 DB 환경변수로 정규화한 뒤 Sonamu 내부 env로 복사한다.
     if (opts.db) {

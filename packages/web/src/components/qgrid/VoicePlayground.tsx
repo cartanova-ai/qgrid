@@ -48,7 +48,7 @@ const GROK_VOICE_GROUPS = [
 
 const OPENAI_VOICE_GROUPS = [{ label: "", voices: OPENAI_VOICES }];
 
-const TIMING_SOURCE = { provider: "timing from Grok TTS", aligned: "timing aligned via Grok STT" };
+const TIMING_SOURCE = { provider: "timing from Grok TTS", aligned: "timing from qgrid aligner" };
 
 const isOpenAI = (model: string) => model.startsWith("openai/");
 

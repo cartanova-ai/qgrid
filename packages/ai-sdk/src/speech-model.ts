@@ -255,8 +255,8 @@ export function createQgridSpeech(
  * (default `marin`, Codex v2 list), `outputFormat` `wav` (default) or `pcm` — other formats
  * warn and fall back to wav, as the official provider falls back to mp3 — `openai.instructions`
  * as style guidance, `openai.speed` and `language` unsupported with the official warning text.
- * `providerOptions.qgrid.withTimestamps` returns timing the server infers by aligning a Grok STT
- * pass over the generated audio (`providerMetadata.qgrid.timestampsSource: "aligned"`).
+ * `providerOptions.qgrid.withTimestamps` returns timing the server's built-in aligner places in the
+ * generated audio (`providerMetadata.qgrid.timestampsSource: "aligned"`).
  */
 function createOpenAISpeech(
   modelId: QgridSpeechModel,

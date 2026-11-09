@@ -29,7 +29,7 @@ vi.mock("commander", () => ({
   },
 }));
 
-const { warnMissingRuntimeCliDependencies } = await import("./cli");
+const { warnMissingRuntimeCliDependencies, warnMissingSpeechAligner } = await import("./cli");
 const execFileSyncMock = vi.mocked(execFileSync);
 
 describe("runtime CLI dependency check", () => {
@@ -64,5 +64,19 @@ describe("runtime CLI dependency check", () => {
 
     expect(execFileSyncMock).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls.join("\n")).toContain("claude CLI not found");
+  });
+});
+
+describe("speech aligner check", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("warns when the aligner model is not configured", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    warnMissingSpeechAligner({});
+
+    expect(warn.mock.calls.join("\n")).toContain("speech aligner not installed");
   });
 });

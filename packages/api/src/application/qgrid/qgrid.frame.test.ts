@@ -105,6 +105,11 @@ vi.mock("sonamu/cache", () => {
   };
 });
 
+// The aligner needs the MMS-FA model; its own tests cover the alignment itself.
+const alignSpeechMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../utils/speech-aligner", () => ({ alignSpeech: alignSpeechMock }));
+
 // Token exchange and device endpoints hit xAI; startGrokOAuth stays real (fetch is stubbed).
 vi.mock("../../utils/providers/grok", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../utils/providers/grok")>()),
@@ -2303,12 +2308,9 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       Object.assign(QgridDispatcher, { openaiDispatcher: { speak: openaiSpeak } });
     });
 
-    it("aligns Grok STT word timing to the script", async () => {
-      grok.transcribe!.mockResolvedValueOnce({
-        result: { text: "Hi there.", words: [{ text: "Hi", start: 0.1, end: 0.2 }, { text: "there.", start: 0.25, end: 0.45 }] },
-        tokenId: 3,
-        tokenName: "grok/a",
-      });
+    it("aligns the script in the generated audio without calling Grok", async () => {
+      const audioTimestamps = { graphChars: Array.from("Hi"), graphTimes: [[0.1, 0.15], [0.15, 0.2]] };
+      alignSpeechMock.mockResolvedValueOnce(audioTimestamps);
 
       const out = await QgridFrame.speak({
         model: "openai/gpt-realtime-2.1-mini",
@@ -2319,12 +2321,10 @@ describe("QgridFrame Grok media and voice (U11)", () => {
 
       // The style instructions are kept as the run's system prompt for the request log.
       expect(requestLogCreateRunMock).toHaveBeenCalledWith(expect.objectContaining({ system_prompt: "Speak warmly." }));
-      expect(grok.transcribe).toHaveBeenCalledWith(expect.objectContaining({ mediaType: "audio/wav", model: "grok-voice-transcribe-2.0" }));
-      expect(out).toMatchObject({ timestampsSource: "aligned", durationSec: 0.5 });
-      expect(out.audioTimestamps?.graphChars.join("")).toBe("Hi there.");
-      const [start, end] = out.audioTimestamps!.graphTimes[0]!;
-      expect(start).toBe(0.1);
-      expect(end).toBeCloseTo(0.15);
+      // PCM after the 44-byte WAV header, at the realtime sample rate.
+      expect(alignSpeechMock).toHaveBeenCalledWith(wav.subarray(44), 24_000, "Hi there.");
+      expect(grok.transcribe).not.toHaveBeenCalled();
+      expect(out).toMatchObject({ timestampsSource: "aligned", durationSec: 0.5, audioTimestamps });
     });
 
     it("keeps the OpenAI STT prompt as the run's system prompt", async () => {
@@ -2345,13 +2345,13 @@ describe("QgridFrame Grok media and voice (U11)", () => {
     });
 
     it("still returns the audio when the timing step fails", async () => {
-      grok.transcribe!.mockRejectedValueOnce(new Error("grok down"));
+      alignSpeechMock.mockRejectedValueOnce(new Error("speech aligner model is not installed"));
 
       const out = await QgridFrame.speak({ model: "openai/gpt-realtime-2.1-mini", text: "Hi there.", withTimestamps: true });
 
       expect(out.audio).toBe(Buffer.from(wav).toString("base64"));
       expect(out.audioTimestamps).toBeUndefined();
-      expect(out.timestampsError).toBe("grok down");
+      expect(out.timestampsError).toBe("speech aligner model is not installed");
     });
   });
 

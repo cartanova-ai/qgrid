@@ -41,7 +41,9 @@ function collectEntries(directory: string) {
 export default defineConfig({
   clean: true,
   deps: {
-    neverBundle: [/^sonamu(?:\/.*)?$/],
+    // onnxruntime-node is a devDependency (the Docker image installs it globally), so it must stay a
+    // runtime import instead of being inlined like other devDependencies.
+    neverBundle: [/^sonamu(?:\/.*)?$/, "onnxruntime-node"],
   },
   dts: false,
   entry: collectEntries(srcRoot),

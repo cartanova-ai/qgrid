@@ -88,7 +88,8 @@ import {
   wrapPcmAsWav,
 } from "../../utils/providers/openai/openai-realtime-protocol";
 import { OpenAIVoiceInputError } from "../../utils/providers/openai/openai-voice-client";
-import { alignScriptToWords, wordsFromCharTimestamps } from "../../utils/speech-alignment";
+import { alignSpeech } from "../../utils/speech-aligner";
+import { wordsFromCharTimestamps } from "../../utils/speech-alignment";
 import {
   type FinishRunParams,
   MICRO_USD,
@@ -1172,35 +1173,6 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<TranscribeOutpu
 }
 
 /**
- * OpenAI realtime speech carries no timing, so the generated audio is transcribed with Grok STT and
- * the heard words are aligned to the script (`alignScriptToWords`). The Grok call goes through the
- * Grok dispatcher on an automatically selected token, like any Grok STT request.
- */
-async function alignOpenAISpeech(wav: Uint8Array, script: string, signal: AbortSignal) {
-  const selection = await resolveGrokTokenSelection(undefined);
-
-  const dispatched = await grokVoice().transcribe({
-    audio: wav,
-    mediaType: "audio/wav",
-    model: GROK_STT_DEFAULT_MODEL,
-    signal,
-    ...selection,
-  });
-
-  const words = dispatched.result.words ?? [];
-
-  if (words.length === 0) throw new Error("Grok STT returned no word timing");
-  // 44-byte WAV header, PCM16 mono at the realtime sample rate.
-  const durationSec = (wav.byteLength - 44) / (2 * OPENAI_REALTIME_SAMPLE_RATE);
-
-  return {
-    ...alignScriptToWords(script, words, durationSec),
-    durationSec,
-    heard: dispatched.result.text,
-  };
-}
-
-/**
  * OpenAI realtime speech (openai/<id>): a conversational realtime model repeating the text over
  * the direct realtime socket. Output is PCM16 24 kHz, wrapped as WAV unless `format` is pcm.
  */
@@ -1260,32 +1232,29 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
     // pcm output is always 24 kHz PCM16, so the log copy is wrapped as WAV to stay playable.
     const wav = mediaType === "audio/wav" ? audio : wrapPcmAsWav(audio);
     const logAudio = mediaType === "audio/wav" ? output.audio : Buffer.from(wav).toString("base64");
-    let alignment: Awaited<ReturnType<typeof alignOpenAISpeech>> | undefined;
+    let alignMs: number | undefined;
 
     if (input.withTimestamps) {
+      // Realtime speech carries no timing: the in-process aligner places the script in the audio.
       try {
-        alignment = await alignOpenAISpeech(wav, input.text, signal);
-        output.audioTimestamps = alignment.audioTimestamps;
-        output.durationSec = alignment.durationSec;
+        const alignStart = performance.now();
+        // 44-byte WAV header (wrapPcmAsWav), then PCM16 mono at the realtime sample rate.
+        const pcm = wav.subarray(44);
+        output.audioTimestamps = await alignSpeech(pcm, OPENAI_REALTIME_SAMPLE_RATE, input.text);
+        output.durationSec = pcm.byteLength / 2 / OPENAI_REALTIME_SAMPLE_RATE;
         output.timestampsSource = "aligned";
+        alignMs = Math.round(performance.now() - alignStart);
       } catch (error) {
         // The speech itself succeeded; timing is best-effort and its failure is reported, not thrown.
         output.timestampsError = error instanceof Error ? error.message : String(error);
       }
     }
 
-    const speechCost = openaiSpeechCost(id, usage);
-
-    // The alignment pass is a Grok STT call over the same audio, priced with the speech.
-    const alignCost = alignment
-      ? (sttCost(`grok/${GROK_STT_DEFAULT_MODEL}`, alignment.durationSec)?.costUsd ?? 0)
-      : 0;
-
     const log: MediaRunLog = {
       tokenName: output.tokenName,
       response: audioForLog(logAudio, "audio/wav", audio.byteLength),
       firstOutputAt: firstAudioAt,
-      cost: speechCost && { ...speechCost, costUsd: speechCost.costUsd + alignCost },
+      cost: openaiSpeechCost(id, usage),
       steps: [
         {
           toolCallId: "speech:0",
@@ -1304,14 +1273,10 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
             audioBytes: audio.byteLength,
             transcript,
             usage,
-            alignment: alignment && {
-              heard: alignment.heard,
-              matchedWords: alignment.matchedWords,
-              scriptWords: alignment.scriptWords,
-            },
+            alignMs,
             timestampsError: output.timestampsError,
             // Word timing for the request-log detail player.
-            words: alignment && wordsFromCharTimestamps(alignment.audioTimestamps),
+            words: output.audioTimestamps && wordsFromCharTimestamps(output.audioTimestamps),
           }),
         },
       ],

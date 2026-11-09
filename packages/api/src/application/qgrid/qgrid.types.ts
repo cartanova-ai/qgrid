@@ -561,8 +561,8 @@ export const SpeakInput = z.object({
   // Grok only: speaking rate, xAI's documented 0.7–1.5 (1 = normal).
   speed: z.number().min(0.7).max(1.5).optional(),
   // Per-character timing in the output (`audioTimestamps`). Grok returns it natively; for OpenAI
-  // realtime (no timing data) qgrid transcribes the generated audio with Grok STT and aligns the
-  // heard words to the text (`timestampsSource: "aligned"`).
+  // realtime (no timing data) qgrid force-aligns the text to the generated audio with its built-in
+  // aligner (`timestampsSource: "aligned"`; Docker image only, otherwise `timestampsError`).
   withTimestamps: z.boolean().optional(),
   ...MediaCallOptions,
 });
@@ -584,8 +584,8 @@ export const SpeakOutput = z.object({
     })
     .optional(),
   durationSec: z.number().optional(),
-  // "provider" when the TTS provider timed the audio itself, "aligned" when qgrid inferred it from
-  // Grok STT word timing.
+  // "provider" when the TTS provider timed the audio itself, "aligned" when qgrid's aligner placed
+  // the text in the audio.
   timestampsSource: z.enum(["provider", "aligned"]).optional(),
   // Set when timestamps were requested but could not be produced; the audio is still returned.
   timestampsError: z.string().optional(),

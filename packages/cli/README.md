@@ -101,6 +101,7 @@ Server behavior variables:
 | Variable | Description | Default |
 |------|------|--------|
 | `NODE_ENV` | Sonamu runtime profile. Set `staging` for a remote non-production deployment | `production` |
+| `QGRID_ALIGNER_MODEL` | Path to the speech aligner model (see below) | set in the Docker image |
 
 ## Prerequisites
 
@@ -108,6 +109,24 @@ Server behavior variables:
 - PostgreSQL
 - Docker (if running PostgreSQL locally as a container)
 - [Claude Code](https://www.anthropic.com/claude-code) (for Anthropic models)
+
+## Speech aligner
+
+OpenAI realtime speech carries no timing, so for `withTimestamps` qgrid force-aligns the text to the
+generated audio with a built-in aligner: the MMS-FA model (Meta, CC BY-NC 4.0, non-commercial) quantized
+to int8, run by `onnxruntime-node`. The Docker image includes both. An npm install has neither; the CLI
+warns at startup and OpenAI speech then returns `timestampsError` instead of timing (Grok speech timing
+is unaffected). To enable it on an npm install:
+
+```bash
+npm install --global --ignore-scripts onnxruntime-node@1.31.1
+mkdir -p ~/.cache/qgrid/models
+curl -fL -o ~/.cache/qgrid/models/mms-300m-fa-int8.onnx \
+  https://github.com/cartanova-ai/qgrid/releases/download/aligner-model-v1/mms-300m-fa-int8.onnx
+export QGRID_ALIGNER_MODEL=~/.cache/qgrid/models/mms-300m-fa-int8.onnx
+```
+
+The model loads on the first timed request (about 640 MB of memory) and unloads after 10 idle minutes.
 
 ## How it works
 
