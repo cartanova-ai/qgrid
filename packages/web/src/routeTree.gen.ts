@@ -14,6 +14,7 @@ import { Route as LogsRouteImport } from './routes/logs'
 import { Route as MonitRouteImport } from './routes/monit'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as TokensRouteImport } from './routes/tokens'
+import { Route as VoiceRouteImport } from './routes/voice'
 import { Route as RequestsShowRouteImport } from './routes/requests/show'
 
 const IndexRoute = IndexRouteImport.update({
@@ -41,6 +42,11 @@ const TokensRoute = TokensRouteImport.update({
   path: '/tokens',
   getParentRoute: () => rootRouteImport,
 } as any)
+const VoiceRoute = VoiceRouteImport.update({
+  id: '/voice',
+  path: '/voice',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const RequestsShowRoute = RequestsShowRouteImport.update({
   id: '/requests/show',
   path: '/requests/show',
@@ -53,6 +59,7 @@ export interface FileRoutesByFullPath {
   '/monit': typeof MonitRoute
   '/settings': typeof SettingsRoute
   '/tokens': typeof TokensRoute
+  '/voice': typeof VoiceRoute
   '/requests/show': typeof RequestsShowRoute
 }
 export interface FileRoutesByTo {
@@ -61,6 +68,7 @@ export interface FileRoutesByTo {
   '/monit': typeof MonitRoute
   '/settings': typeof SettingsRoute
   '/tokens': typeof TokensRoute
+  '/voice': typeof VoiceRoute
   '/requests/show': typeof RequestsShowRoute
 }
 export interface FileRoutesById {
@@ -70,14 +78,28 @@ export interface FileRoutesById {
   '/monit': typeof MonitRoute
   '/settings': typeof SettingsRoute
   '/tokens': typeof TokensRoute
+  '/voice': typeof VoiceRoute
   '/requests/show': typeof RequestsShowRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/logs' | '/monit' | '/settings' | '/tokens' | '/requests/show'
+    | '/'
+    | '/logs'
+    | '/monit'
+    | '/settings'
+    | '/tokens'
+    | '/voice'
+    | '/requests/show'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/logs' | '/monit' | '/settings' | '/tokens' | '/requests/show'
+  to:
+    | '/'
+    | '/logs'
+    | '/monit'
+    | '/settings'
+    | '/tokens'
+    | '/voice'
+    | '/requests/show'
   id:
     | '__root__'
     | '/'
@@ -85,6 +107,7 @@ export interface FileRouteTypes {
     | '/monit'
     | '/settings'
     | '/tokens'
+    | '/voice'
     | '/requests/show'
   fileRoutesById: FileRoutesById
 }
@@ -94,6 +117,7 @@ export interface RootRouteChildren {
   MonitRoute: typeof MonitRoute
   SettingsRoute: typeof SettingsRoute
   TokensRoute: typeof TokensRoute
+  VoiceRoute: typeof VoiceRoute
   RequestsShowRoute: typeof RequestsShowRoute
 }
 
@@ -134,6 +158,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TokensRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/voice': {
+      id: '/voice'
+      path: '/voice'
+      fullPath: '/voice'
+      preLoaderRoute: typeof VoiceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/requests/show': {
       id: '/requests/show'
       path: '/requests/show'
@@ -150,6 +181,7 @@ const rootRouteChildren: RootRouteChildren = {
   MonitRoute: MonitRoute,
   SettingsRoute: SettingsRoute,
   TokensRoute: TokensRoute,
+  VoiceRoute: VoiceRoute,
   RequestsShowRoute: RequestsShowRoute,
 }
 export const routeTree = rootRouteImport

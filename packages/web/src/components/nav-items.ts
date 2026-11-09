@@ -1,4 +1,5 @@
 import type React from "react";
+import AudioLinesIcon from "~icons/lucide/audio-lines";
 import ActivityIcon from "~icons/lucide/file-text";
 import GaugeIcon from "~icons/lucide/home";
 import KeyRoundIcon from "~icons/lucide/key-round";
@@ -32,6 +33,10 @@ export const NAV_SECTIONS: NavSection[] = [
       { title: "Server Logs", shortTitle: "Server", path: "/monit", icon: TerminalIcon },
       { title: "Settings", path: "/settings", icon: SettingsIcon },
     ],
+  },
+  {
+    label: "Playground",
+    items: [{ title: "Voice", path: "/voice", icon: AudioLinesIcon }],
   },
 ];
 

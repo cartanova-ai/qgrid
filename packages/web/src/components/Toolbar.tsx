@@ -6,6 +6,7 @@ const ROUTE_TITLES = new Map<string, string>(
     "/tokens": "Tokens",
     "/logs": "Request Logs",
     "/monit": "Server Logs",
+    "/voice": "Voice",
   }),
 );
 
