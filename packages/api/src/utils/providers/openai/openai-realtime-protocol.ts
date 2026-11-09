@@ -76,14 +76,10 @@ export const OPENAI_TRANSCRIPTION_MODELS_WITHOUT_PROMPT: ReadonlySet<string> = n
 
 /**
  * Text-to-speech (realtime conversational) ids. Verbatim fidelity on the 2026-10-17 matrix:
- * gpt-realtime-2.1-mini 13/13, gpt-realtime-2.1 12/13 (one paraphrase), gpt-realtime-1.5 6/13
- * (often answers the text instead of repeating it). Default stays 2.1-mini.
+ * gpt-realtime-2.1-mini 13/13, gpt-realtime-2.1 12/13 (one paraphrase). Default stays 2.1-mini.
+ * gpt-realtime-1.5 was removed on 2026-11-09: it answered the text instead of repeating it (6/13).
  */
-export const OPENAI_SPEECH_MODELS = [
-  "gpt-realtime-2.1-mini",
-  "gpt-realtime-2.1",
-  "gpt-realtime-1.5",
-] as const;
+export const OPENAI_SPEECH_MODELS = ["gpt-realtime-2.1-mini", "gpt-realtime-2.1"] as const;
 
 /**
  * A minimal Opus-only SDP offer. Codex sends a real WebRTC offer; qgrid has no RTP peer and only

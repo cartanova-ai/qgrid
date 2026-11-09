@@ -348,7 +348,7 @@ qgrid는 `grok/*` 모델을 qgrid 대시보드에 등록한 xAI 구독 토큰(�
 | `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0` | `generateImage` |
 | `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
 | `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI 구독: `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/gpt-transcribe`, `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`, `openai/whisper-1` | `transcribe` |
-| `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임); OpenAI 구독: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1`, `openai/gpt-realtime-1.5` | `generateSpeech` |
+| `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임); OpenAI 구독: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1` | `generateSpeech` |
 
 qgrid는 카탈로그에 없는 language model ID를 거부하지 않고 그대로 전달합니다(OpenAI와 같음). 판단은
 subscription backend가 하며 다른 모델로 응답할 수 있으므로, 실제로 실행된 모델은 request log의 응답 모델(또는
@@ -516,7 +516,7 @@ const speech = await generateSpeech({
 
 - 음성 인식은 먼저 Codex realtime call에서 25초 예산으로 실행됩니다(call은 생성 약 30초 뒤 정리됨). 그 안에 전사가 오지 않으면 서버가 직접 realtime 전사 소켓으로 1회 재시도합니다(최대 60초). 7 MiB 인라인 제한(24 kHz PCM 약 2.5분)은 보통 첫 경로에서 몇 초 안에 끝납니다.
 - 음성 합성은 TTS 모델이 아니라 텍스트를 읽는 대화 모델입니다. qgrid는 `<script>` 태그 안의 텍스트만 읽고 답하지 말라고 지시합니다. 원문 그대로 읽는지는 짧은 영어 문장과 질문형 영어 캐릭터 대사에서 검증했습니다. 모델이 실제로 말한 transcript를 요청 로그에 함께 남겨 비교할 수 있지만, 한영 혼합 텍스트에서는 transcript가 일치해도 영어 음성을 알아듣기 어려운 경우가 있었습니다.
-- 모델별 동작은 서버 저장소의 `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`에 기록되어 있습니다. 2026-10-17 기준 알려진 한계: `gpt-live-transcribe`, `gpt-realtime-whisper`는 60초 클립의 절반 정도만 반환하므로 짧은 발화에 쓰세요. `gpt-realtime-whisper`는 `openai.prompt`를 거부합니다(서버가 업스트림 호출 전에 HTTP 400). `whisper-1`은 `openai.prompt`를 받지만 무시합니다. 음성 합성은 `gpt-realtime-2.1-mini`가 모든 테스트 문장을 그대로 읽었고(13/13), `gpt-realtime-2.1`은 1회 의역(12/13), `gpt-realtime-1.5`는 텍스트를 읽지 않고 답변하는 경우가 잦았습니다(6/13). 2026-11-06에는 현재 프롬프트로 `gpt-realtime-2.1`과 `gpt-realtime-2.1-mini` 모두 질문형 캐릭터 대사 12/12를 그대로 읽었습니다(이전 프롬프트에서는 `gpt-realtime-2.1`이 7/12를 답변). `gpt-realtime-1.5`는 다시 측정하지 않았습니다. 정확성이 중요하면 로그의 transcript를 입력과 비교하세요.
+- 모델별 동작은 서버 저장소의 `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`에 기록되어 있습니다. 2026-10-17 기준 알려진 한계: `gpt-live-transcribe`, `gpt-realtime-whisper`는 60초 클립의 절반 정도만 반환하므로 짧은 발화에 쓰세요. `gpt-realtime-whisper`는 `openai.prompt`를 거부합니다(서버가 업스트림 호출 전에 HTTP 400). `whisper-1`은 `openai.prompt`를 받지만 무시합니다. 음성 합성은 `gpt-realtime-2.1-mini`가 모든 테스트 문장을 그대로 읽었고(13/13), `gpt-realtime-2.1`은 1회 의역(12/13)했습니다. `gpt-realtime-1.5`는 텍스트를 읽지 않고 답변하는 경우가 잦아(6/13) 2.18.0에서 제외했습니다. 2026-11-06에는 현재 프롬프트로 `gpt-realtime-2.1`과 `gpt-realtime-2.1-mini` 모두 질문형 캐릭터 대사 12/12를 그대로 읽었습니다(이전 프롬프트에서는 `gpt-realtime-2.1`이 7/12를 답변). 2026-11-09에 독립 STT 2종으로 영어 108건(6문장, 보이스 `marin` `cedar` `ballad`, 각 3회)을 판정한 결과 `gpt-realtime-2.1`은 54/54, `gpt-realtime-2.1-mini`는 53/54였고, 실패 1건은 "Sure, let me read that out loud for you exactly as written."으로 시작했습니다. 한영 혼합 문장은 두 모델 모두 끝까지 읽었습니다(각 9/9). 모델이 남기는 transcript에는 이런 서두가 나타나지 않으므로, 정확성이 중요하면 transcript 대신 STT나 `withTimestamps`(정렬이 덧붙은 말을 건너뜀)로 오디오를 확인하세요.
 
 ## Telemetry Logger
 

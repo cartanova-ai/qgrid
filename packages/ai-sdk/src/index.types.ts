@@ -66,12 +66,9 @@ export type QgridGrokSpeechModel = "grok/grok-tts";
 /**
  * OpenAI subscription text-to-speech ids: realtime conversational models repeating the text
  * (`gpt-4o-mini-tts`/`tts-1` are unavailable on subscription). Verbatim fidelity on 2026-10-17:
- * `gpt-realtime-2.1-mini` 13/13, `gpt-realtime-2.1` 12/13, `gpt-realtime-1.5` 6/13.
+ * `gpt-realtime-2.1-mini` 13/13, `gpt-realtime-2.1` 12/13 (`gpt-realtime-1.5`, 6/13, removed in 2.18.0).
  */
-export type QgridOpenAISpeechModel =
-  | "openai/gpt-realtime-2.1-mini"
-  | "openai/gpt-realtime-2.1"
-  | "openai/gpt-realtime-1.5";
+export type QgridOpenAISpeechModel = "openai/gpt-realtime-2.1-mini" | "openai/gpt-realtime-2.1";
 
 export type QgridSpeechModel = QgridGrokSpeechModel | QgridOpenAISpeechModel;
 

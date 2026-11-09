@@ -464,7 +464,6 @@ export type VoiceCost = { costUsd: number; costSource: "pricing_table"; ticks?: 
 const OPENAI_SPEECH_PRICES = new Map([
   ["gpt-realtime-2.1", { textIn: 4, textOut: 24, audioOut: 64 }],
   ["gpt-realtime-2.1-mini", { textIn: 0.6, textOut: 2.4, audioOut: 20 }],
-  ["gpt-realtime-1.5", { textIn: 4, textOut: 16, audioOut: 64 }],
 ]);
 
 // Transcription, USD per minute of audio (OpenAI's published per-minute estimates; Grok $0.10/hour).

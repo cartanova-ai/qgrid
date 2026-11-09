@@ -19,8 +19,6 @@ import { audioToWavBase64 } from "./voice-audio";
 
 const PROJECT_NAME = "qgrid_voice";
 
-// gpt-realtime-1.5 is left out: it answered the script instead of reading it in 7 of 13 lines
-// (2026-10-17 matrix). The server and SDK still accept it.
 const TTS_MODELS = ["grok/grok-tts", "openai/gpt-realtime-2.1-mini", "openai/gpt-realtime-2.1"];
 
 // Only the OpenAI models that held up in the 2026-11-09 language/accent run (lowest CER, kept learner
