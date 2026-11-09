@@ -142,7 +142,7 @@ function formatCost(costUsd: number): string {
 const MAX_ATTACHMENTS = 4;
 const MAX_IMAGE_DIMENSION = 1536;
 
-// 원본 그대로 보내면 data-URL 팽창으로 body 한도(10MB)와 provider 입력 한도를 위협하므로
+// 원본 그대로 보내면 data-URL 팽창으로 body 한도(26 MiB)와 provider 입력 한도를 위협하므로
 // 긴 변 1536px JPEG 로 줄여서 보낸다.
 async function fileToDataUrl(file: File): Promise<string> {
   const bitmap = await createImageBitmap(file);

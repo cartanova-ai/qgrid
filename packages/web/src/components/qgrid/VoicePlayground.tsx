@@ -15,9 +15,9 @@ import {
 import { QgridService } from "@/services/services.generated";
 
 import { TimedPlayer, type TimedWord } from "./TimedPlayer";
-import { audioToWavBase64 } from "./voice-audio";
+import { audioToWavBase64, bytesToBase64 } from "./voice-audio";
 
-const PROJECT_NAME = "qgrid_voice";
+const PROJECT_NAME = "qgrid_voice_playground";
 
 const TTS_MODELS = ["grok/grok-tts", "openai/gpt-realtime-2.1-mini", "openai/gpt-realtime-2.1"];
 
@@ -479,10 +479,19 @@ function SttPanel() {
   const submit = async () => {
     if (!audio) return;
     setAudioError(undefined);
-    let wav: string;
+    // Grok STT takes the recording or file as is; OpenAI realtime accepts only PCM, so only it gets
+    // the decode to 24 kHz WAV (several times larger than mp3 or webm).
+    const originalType = audio.blob.type.split(";")[0]!;
+    let clip: { audio: string; mediaType: string };
 
     try {
-      wav = await audioToWavBase64(audio.blob);
+      clip =
+        !openai && originalType.startsWith("audio/")
+          ? {
+              audio: bytesToBase64(new Uint8Array(await audio.blob.arrayBuffer())),
+              mediaType: originalType,
+            }
+          : { audio: await audioToWavBase64(audio.blob), mediaType: "audio/wav" };
     } catch (error) {
       setAudioError(
         `could not decode audio: ${error instanceof Error ? error.message : String(error)}`,
@@ -491,12 +500,7 @@ function SttPanel() {
       return;
     }
 
-    const params: TranscribeInput = {
-      model,
-      audio: wav,
-      mediaType: "audio/wav",
-      projectName: PROJECT_NAME,
-    };
+    const params: TranscribeInput = { model, ...clip, projectName: PROJECT_NAME };
 
     if (openai && prompt.trim()) params.prompt = prompt.trim();
     const startedAt = performance.now();

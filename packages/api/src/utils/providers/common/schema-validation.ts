@@ -7,7 +7,7 @@ import { isJsonObject, type JsonValue } from "./provider-types";
 /**
  * Caller-provided schemas are serialized, copied, and recursively normalized before dispatch.
  * Keep these limits comfortably above normal generated schemas while bounding that preprocessing
- * well below the API's 10 MiB request-body ceiling.
+ * well below the API's 26 MiB request-body ceiling.
  */
 export const CALLER_SCHEMA_LIMITS = {
   maxUtf8Bytes: 512 * 1024,

@@ -1984,7 +1984,7 @@ describe("QgridFrame Grok media and voice (U11)", () => {
         prompt: "x",
         referenceImages: ["data:image/png;base64," + "A".repeat(28 * 1024 * 1024)],
       },
-      "7 MiB",
+      "19 MiB",
     ],
   ])("generateImages rejects invalid input %#", async (input, message) => {
     await expect(QgridFrame.generateImages(input)).rejects.toThrow(message);
@@ -2006,7 +2006,7 @@ describe("QgridFrame Grok media and voice (U11)", () => {
     // The aggregate counts every inline image of the request, not just each one.
     const split = GenerateImagesInput.safeParse({ ...largest, referenceImages: [half, half] });
     expect(split.success).toBe(false);
-    expect(split.error?.issues.map((issue) => issue.message)).toContain("inline images exceed 7 MiB in total");
+    expect(split.error?.issues.map((issue) => issue.message)).toContain("inline images exceed 19 MiB in total");
     expect(
       VideoStartInput.safeParse({ model: "grok/grok-imagine-video", prompt: "x", image: half, lastFrame: half }).success,
     ).toBe(false);
@@ -2045,7 +2045,7 @@ describe("QgridFrame Grok media and voice (U11)", () => {
         payload,
       });
       expect(tooLarge.statusCode).toBe(413);
-      expect(tooLarge.json()).toEqual({ name: "Error", message: SD("qgrid.requestBodyTooLarge")(10) });
+      expect(tooLarge.json()).toEqual({ name: "Error", message: SD("qgrid.requestBodyTooLarge")(26) });
 
       const ok = await server.inject({ method: "POST", url: "/media", payload: { ok: true } });
       expect(ok.statusCode).toBe(200);

@@ -315,19 +315,19 @@ describe("qgrid.image with Grok models", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("rejects inline references above 7 MiB decoded in total before transport", async () => {
+  it("rejects inline references above 19 MiB decoded in total before transport", async () => {
     const fetchMock = vi.fn(async () => Response.json(grokOutput()));
     vi.stubGlobal("fetch", fetchMock);
     const model = qgrid.image("grok/grok-imagine-image");
     await expect(generateImage({
       model,
-      prompt: { text: "Edit", images: [new Uint8Array(4 * 1024 * 1024).fill(1), new Uint8Array(4 * 1024 * 1024).fill(1)] },
+      prompt: { text: "Edit", images: [new Uint8Array(10 * 1024 * 1024).fill(1), new Uint8Array(10 * 1024 * 1024).fill(1)] },
       maxRetries: 0,
-    })).rejects.toThrow("above the qgrid server limit of 7.00 MiB");
+    })).rejects.toThrow("above the qgrid server limit of 19.00 MiB");
     expect(fetchMock).not.toHaveBeenCalled();
     await generateImage({
       model,
-      prompt: { text: "Edit", images: [new Uint8Array(7 * 1024 * 1024).fill(1), "https://example.com/big.png"] },
+      prompt: { text: "Edit", images: [new Uint8Array(19 * 1024 * 1024).fill(1), "https://example.com/big.png"] },
       maxRetries: 0,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);

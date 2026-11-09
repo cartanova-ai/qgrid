@@ -396,9 +396,9 @@ Grok language model은 user 이미지 part(https URL 또는 inline bytes)를 버
 | Transcription | `xai.language` | 오디오 bytes는 base64로, `mediaType`은 파라미터 제거(`audio/webm;codecs=opus` → `audio/webm`) | 나머지 모든 `xai` 키(`audioFormat`, `sampleRate`, `format`, `diarize`, `keyterm`, ...) |
 | Speech | `voice`, `language`, `speed`(0.7-1.5, 2.18.0+), `xai.withTimestamps` | `outputFormat`은 `format`(`mp3`, `wav`, `pcm`, `mulaw`, `alaw`, 그 외 값은 `@ai-sdk/xai`처럼 warning과 함께 `mp3`) | `instructions`, 그 밖의 모든 `xai` 키(`sampleRate`, `bitRate`, `replace`, ...) |
 
-**요청 크기.** qgrid 서버는 최대 10 MiB JSON body를 받습니다. inline 미디어는 base64로 전송되어 3분의 1만큼
+**요청 크기.** qgrid 서버는 최대 26 MiB JSON body를 받습니다. inline 미디어는 base64로 전송되어 3분의 1만큼
 커지므로, 서버는 inline 오디오, 각 inline 이미지, 한 요청의 inline 이미지 합계(비디오: `image` + `lastFrame` +
-참조 이미지)를 디코딩 기준 7 MiB로 제한합니다. SDK는 더 큰 입력을 전송 전에 거부하고, 서버 413도 같은 크기
+참조 이미지)를 디코딩 기준 19 MiB로 제한합니다(2.19.0+, 이전 서버와 SDK는 10 MiB와 7 MiB). SDK는 더 큰 입력을 전송 전에 거부하고, 서버 413도 같은 크기
 오류로 보여줍니다. 입력을 압축하거나, 옵션이 허용하면 https 이미지 URL을 넘기세요.
 
 ### Grok 이미지
@@ -514,7 +514,7 @@ const speech = await generateSpeech({
 | Transcription | `openai.language`, `openai.prompt`(`gpt-realtime-whisper`는 HTTP 400으로 거부, `whisper-1`은 받지만 업스트림이 무시) | 입력은 PCM16 WAV(`audio/wav`) 또는 raw PCM(`audio/pcm;rate=…;channels=…`)만 가능하며 mp3/webm/ogg는 디코더가 추가되기 전까지 서버가 HTTP 400으로 거부합니다. `durationInSeconds`는 보낸 오디오에서 계산하고 `language`는 요청값을 그대로 돌려줍니다(realtime 세션은 둘 다 보고하지 않음). `segments`는 비어 있습니다 | `openai.temperature`, `openai.include`, `openai.timestampGranularities`, `openai.responseFormat`, `openai.chunkingStrategy`, `openai.streaming` |
 | Speech | `voice`(기본 `marin`; Codex v2 목록 `alloy ash ballad coral echo sage shimmer verse marin cedar`, 그 외는 HTTP 400), `instructions` / `openai.instructions`(원문 그대로 읽기 지시문 뒤에 붙는 스타일 안내) | `outputFormat`은 `wav`(기본, PCM16 24 kHz) 또는 `pcm`; 그 외 값은 `@ai-sdk/openai`가 `mp3`로 되돌리듯 경고와 함께 `wav`로 바뀝니다 | `language`, `speed`, `openai.speed` |
 
-- 음성 인식은 먼저 Codex realtime call에서 25초 예산으로 실행됩니다(call은 생성 약 30초 뒤 정리됨). 그 안에 전사가 오지 않으면 서버가 직접 realtime 전사 소켓으로 1회 재시도합니다(최대 60초). 7 MiB 인라인 제한(24 kHz PCM 약 2.5분)은 보통 첫 경로에서 몇 초 안에 끝납니다.
+- 음성 인식은 먼저 Codex realtime call에서 25초 예산으로 실행됩니다(call은 생성 약 30초 뒤 정리됨). 그 안에 전사가 오지 않으면 서버가 직접 realtime 전사 소켓으로 1회 재시도합니다(최대 60초). 19 MiB 인라인 제한에는 24 kHz mono WAV가 약 6.9분 들어갑니다. 6.7분 영어 클립은 첫 경로에서 약 20초에 끝났고, transcript가 더 길게 나온 6.4분 클립은 기한을 넘겨 재시도 경로에서 52초에 끝났습니다.
 - 음성 합성은 TTS 모델이 아니라 텍스트를 읽는 대화 모델입니다. qgrid는 `<script>` 태그 안의 텍스트만 읽고 답하지 말라고 지시합니다. 원문 그대로 읽는지는 짧은 영어 문장과 질문형 영어 캐릭터 대사에서 검증했습니다. 모델이 실제로 말한 transcript를 요청 로그에 함께 남겨 비교할 수 있지만, 한영 혼합 텍스트에서는 transcript가 일치해도 영어 음성을 알아듣기 어려운 경우가 있었습니다.
 - 모델별 동작은 서버 저장소의 `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`에 기록되어 있습니다. 2026-10-17 기준 알려진 한계: `gpt-live-transcribe`, `gpt-realtime-whisper`는 60초 클립의 절반 정도만 반환하므로 짧은 발화에 쓰세요. `gpt-realtime-whisper`는 `openai.prompt`를 거부합니다(서버가 업스트림 호출 전에 HTTP 400). `whisper-1`은 `openai.prompt`를 받지만 무시합니다. 음성 합성은 `gpt-realtime-2.1-mini`가 모든 테스트 문장을 그대로 읽었고(13/13), `gpt-realtime-2.1`은 1회 의역(12/13)했습니다. `gpt-realtime-1.5`는 텍스트를 읽지 않고 답변하는 경우가 잦아(6/13) 2.18.0에서 제외했습니다. 2026-11-06에는 현재 프롬프트로 `gpt-realtime-2.1`과 `gpt-realtime-2.1-mini` 모두 질문형 캐릭터 대사 12/12를 그대로 읽었습니다(이전 프롬프트에서는 `gpt-realtime-2.1`이 7/12를 답변). 2026-11-09에 독립 STT 2종으로 영어 108건(6문장, 보이스 `marin` `cedar` `ballad`, 각 3회)을 판정한 결과 `gpt-realtime-2.1`은 54/54, `gpt-realtime-2.1-mini`는 53/54였고, 실패 1건은 "Sure, let me read that out loud for you exactly as written."으로 시작했습니다. 한영 혼합 문장은 두 모델 모두 끝까지 읽었습니다(각 9/9). 모델이 남기는 transcript에는 이런 서두가 나타나지 않으므로, 정확성이 중요하면 transcript 대신 STT나 `withTimestamps`(정렬이 덧붙은 말을 건너뜀)로 오디오를 확인하세요.
 

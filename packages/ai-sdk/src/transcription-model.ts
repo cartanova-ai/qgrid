@@ -143,7 +143,7 @@ export function createQgridTranscription(
           : parseGrokQgridOptions(options.providerOptions?.qgrid, LABEL);
 
       const warnings: SharedV3Warning[] = [];
-      // Also throws before transport when the JSON body would exceed the 10 MiB body limit.
+      // Also throws before transport when the JSON body would exceed the 26 MiB body limit.
       const params: JSONObject = { model: modelId, audio, mediaType };
 
       if (provider === "openai") {

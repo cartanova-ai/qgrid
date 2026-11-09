@@ -243,10 +243,10 @@ describe("qgrid.video with AI SDK experimental_generateVideo", () => {
     [{ providerOptions: { xai: { resolution: "4k" } } }, "invalid providerOptions.xai"],
     [
       {
-        prompt: { image: new Uint8Array(4 * 1024 * 1024).fill(1), text: "A cat" },
-        providerOptions: { xai: { lastFrame: `data:image/png;base64,${Buffer.alloc(4 * 1024 * 1024).toString("base64")}` } },
+        prompt: { image: new Uint8Array(10 * 1024 * 1024).fill(1), text: "A cat" },
+        providerOptions: { xai: { lastFrame: `data:image/png;base64,${Buffer.alloc(10 * 1024 * 1024).toString("base64")}` } },
       },
-      "above the qgrid server limit of 7.00 MiB",
+      "above the qgrid server limit of 19.00 MiB",
     ],
   ])("rejects %j before transport", async (extra, message) => {
     const { fetchMock } = mockServer([done]);

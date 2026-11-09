@@ -316,14 +316,16 @@ export type StreamEvents = z.infer<typeof StreamEvents>;
 
 const MiB = 1024 * 1024;
 
-// Fastify bodyLimit for every JSON request; sonamu.config.ts reads it from here.
-export const REQUEST_BODY_LIMIT_BYTES = 10 * MiB;
+// Fastify bodyLimit for every JSON request; sonamu.config.ts reads it from here. Sized so a ~5 MB
+// compressed recording still fits once a browser decodes it to the 24 kHz PCM16 WAV that OpenAI
+// realtime transcription requires (19 MiB holds about 6.9 minutes).
+export const REQUEST_BODY_LIMIT_BYTES = 26 * MiB;
 
-// Media rides inside that JSON body as base64 (4 chars per 3 bytes), so a 10 MiB body carries at
-// most 10 MiB x 3/4 = 7.5 MiB of decoded bytes; 0.5 MiB is left for the prompt, options and JSON
+// Media rides inside that JSON body as base64 (4 chars per 3 bytes), so a 26 MiB body carries at
+// most 26 MiB x 3/4 = 19.5 MiB of decoded bytes; 0.5 MiB is left for the prompt, options and JSON
 // framing. The same budget bounds the audio clip, each inline image, and the sum of a request's
 // inline images, so every request the schema accepts also fits the transport.
-export const MEDIA_MAX_INLINE_BYTES = 7 * MiB;
+export const MEDIA_MAX_INLINE_BYTES = 19 * MiB;
 const MEDIA_MAX_INLINE_LABEL = `${MEDIA_MAX_INLINE_BYTES / MiB} MiB`;
 export const MEDIA_MAX_REFERENCE_IMAGES = 5;
 
