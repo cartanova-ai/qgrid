@@ -113,17 +113,21 @@ CLI는 실행 시 npm의 최신 버전을 확인하고 patch를 포함해 설치
 
 OpenAI realtime 음성 합성과 전사는 타이밍을 주지 않아서, qgrid가 내장 정렬기로 텍스트를 오디오에 맞춥니다. 음성 합성의
 `withTimestamps`와 전사 결과의 단어 타이밍(`words`)이 여기서 나옵니다. 정렬기는 int8로 양자화한 MMS-FA 모델(Meta,
-CC BY-NC 4.0, 비상업)과 이를 돌리는 `onnxruntime-node`입니다. Docker 이미지에는 둘 다 들어 있습니다. npm 설치에서는 모델(355 MB)을 기본 경로에 받고 런타임을 설치합니다:
+CC BY-NC 4.0, 비상업)과 이를 돌리는 `onnxruntime-node`입니다. Docker 이미지에는 둘 다 들어 있습니다. npm이나 pnpm으로 설치했다면 한 번 실행합니다:
+
+```bash
+qgrid --install-aligner
+```
+
+모델(355 MB)과 `onnxruntime-node` 1.31.1(115 MB, 현재 플랫폼 바이너리만 남김)을 `~/.cache/qgrid`에 받고, 파일마다
+해시를 확인한 뒤 끝납니다. npm이나 pnpm을 거치지 않아서 qgrid를 어떻게 설치했든 똑같이 동작합니다. 소스 체크아웃을
+`sonamu dev`로 띄울 때는 모델 파일만 있으면 됩니다(`onnxruntime-node`는 api devDependency로 이미 들어 있음):
 
 ```bash
 mkdir -p ~/.cache/qgrid/models
 curl -fL -o ~/.cache/qgrid/models/mms-300m-fa-int8.onnx \
   https://github.com/cartanova-ai/qgrid/releases/download/aligner-model-v1/mms-300m-fa-int8.onnx
-npm install --global --ignore-scripts onnxruntime-node@1.31.1
 ```
-
-소스 체크아웃을 `sonamu dev`로 띄울 때는 모델 파일만 있으면 됩니다. `onnxruntime-node`는 api devDependency로 이미
-들어 있습니다.
 
 `QGRID_ALIGNER_MODEL`로 모델 경로를 바꿀 수 있습니다. 정렬기가 없으면 CLI가 시작할 때 경고하고, OpenAI 음성 합성은
 `timestampsError`를, OpenAI 전사는 단어 타이밍 없는 결과를 돌려줍니다(Grok 타이밍은 영향 없음). 정렬에는 클립 길이의 약

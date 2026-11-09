@@ -115,18 +115,22 @@ Server behavior variables:
 OpenAI realtime speech and transcription carry no timing, so qgrid force-aligns the text to the audio
 with a built-in aligner: speech `withTimestamps` and transcript word timing (`words`). The aligner is
 the MMS-FA model (Meta, CC BY-NC 4.0, non-commercial) quantized to int8, run by `onnxruntime-node`. The
-Docker image includes both. On an npm install, download the model (355 MB) to its default path and
-install the runtime:
+Docker image includes both. On an npm or pnpm install, run once:
+
+```bash
+qgrid --install-aligner
+```
+
+It downloads the model (355 MB) and `onnxruntime-node` 1.31.1 (115 MB, keeping only this platform's
+binary) into `~/.cache/qgrid`, checks each file's hash, and exits. It does not use npm or pnpm, so it
+works however qgrid was installed. A source checkout run with `sonamu dev` needs only the model file
+(`onnxruntime-node` is an api devDependency there):
 
 ```bash
 mkdir -p ~/.cache/qgrid/models
 curl -fL -o ~/.cache/qgrid/models/mms-300m-fa-int8.onnx \
   https://github.com/cartanova-ai/qgrid/releases/download/aligner-model-v1/mms-300m-fa-int8.onnx
-npm install --global --ignore-scripts onnxruntime-node@1.31.1
 ```
-
-A source checkout run with `sonamu dev` needs only the model file: `onnxruntime-node` is an api
-devDependency there.
 
 `QGRID_ALIGNER_MODEL` overrides the model path. Without the aligner the CLI warns at startup, OpenAI
 speech returns `timestampsError`, and OpenAI transcripts come without word timing (Grok timing is

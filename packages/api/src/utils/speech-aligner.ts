@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -12,9 +13,9 @@ import { type CharTimestamps } from "./speech-alignment";
  * CC-BY-NC 4.0) quantized to int8 ONNX: it scores every 20 ms frame of 16 kHz audio against 28
  * letters, and a Viterbi pass walks the script's letters through those scores in order.
  *
- * The model file and `onnxruntime-node` ship in the Docker image. Elsewhere the model is read from
- * `QGRID_ALIGNER_MODEL`, else DEFAULT_MODEL_PATH (where the CLI README says to download it); without
- * them alignment throws and callers return the result without timing.
+ * The model file and `onnxruntime-node` ship in the Docker image. Elsewhere `qgrid --install-aligner`
+ * puts the model at DEFAULT_MODEL_PATH (`QGRID_ALIGNER_MODEL` overrides it) and the runtime under
+ * RUNTIME_DIR; without them alignment throws and callers return the result without timing.
  */
 
 const SAMPLE_RATE = 16_000;
@@ -37,8 +38,9 @@ const IDLE_UNLOAD_MS = 10 * 60_000;
 // audio, so the table grows with its square: 100 MB fits about 4 minutes of dense English speech.
 const MAX_TRELLIS_CELLS = 100_000_000;
 
-// Keep in sync with the qgrid CLI's missing-aligner warning (packages/cli/src/cli.ts).
+// Keep both paths in sync with `qgrid --install-aligner` (packages/cli/src/aligner.ts).
 const DEFAULT_MODEL_PATH = join(homedir(), ".cache", "qgrid", "models", "mms-300m-fa-int8.onnx");
+const RUNTIME_DIR = join(homedir(), ".cache", "qgrid", "runtime");
 
 export class SpeechAlignerUnavailableError extends Error {}
 
@@ -310,7 +312,7 @@ async function loadModel(): Promise<LoadedModel> {
 
   if (!existsSync(path)) {
     throw new SpeechAlignerUnavailableError(
-      `speech aligner model not found at ${path} (download it there or set QGRID_ALIGNER_MODEL)`,
+      `speech aligner model not found at ${path} (run \`qgrid --install-aligner\` or set QGRID_ALIGNER_MODEL)`,
     );
   }
 
@@ -325,19 +327,35 @@ async function loadModel(): Promise<LoadedModel> {
 }
 
 async function openModel(path: string): Promise<LoadedModel> {
-  let ort: typeof Ort;
-
-  try {
-    ort = await import("onnxruntime-node");
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-
-    throw new SpeechAlignerUnavailableError(
-      `speech aligner runtime onnxruntime-node failed to load: ${reason}`,
-    );
-  }
+  const ort = await loadRuntime();
 
   return { ort, session: await ort.InferenceSession.create(path) };
+}
+
+/** The installed onnxruntime-node package, else the copy `qgrid --install-aligner` unpacked. */
+async function loadRuntime(): Promise<typeof Ort> {
+  let failure: unknown;
+
+  try {
+    return await import("onnxruntime-node");
+  } catch (error) {
+    failure = error;
+  }
+
+  try {
+    if (existsSync(join(RUNTIME_DIR, "node_modules", "onnxruntime-node"))) {
+      // SAFETY: the same pinned onnxruntime-node package, loaded from qgrid's runtime folder.
+      return createRequire(join(RUNTIME_DIR, "index.js"))("onnxruntime-node") as typeof Ort;
+    }
+  } catch (error) {
+    failure = error;
+  }
+
+  const reason = failure instanceof Error ? failure.message : String(failure);
+
+  throw new SpeechAlignerUnavailableError(
+    `speech aligner runtime onnxruntime-node failed to load: ${reason} (run \`qgrid --install-aligner\`)`,
+  );
 }
 
 function scheduleUnload(): void {

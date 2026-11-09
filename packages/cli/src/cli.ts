@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { Command } from "commander";
 import { z } from "zod";
 
+import { installSpeechAligner, warnMissingSpeechAligner } from "./aligner";
 import { applyQgridDatabaseEnv } from "./database-env";
 import { pnpmGlobalBinDir, runSelfUpdate, SELF_UPDATE_CHECK_TIMEOUT_MS } from "./self-update";
 
@@ -76,34 +76,6 @@ export function warnMissingRuntimeCliDependencies(): void {
   }
 }
 
-/**
- * OpenAI speech and transcription timing need the speech aligner model and onnxruntime-node, which
- * only the Docker image ships. Without them the server returns no timing, so warn once here. Keep the
- * default model path in sync with packages/api/src/utils/speech-aligner.ts.
- */
-export function warnMissingSpeechAligner(env: NodeJS.ProcessEnv = process.env): void {
-  const model =
-    env.QGRID_ALIGNER_MODEL ||
-    join(homedir(), ".cache", "qgrid", "models", "mms-300m-fa-int8.onnx");
-
-  if (existsSync(model) && canResolve("onnxruntime-node")) return;
-
-  console.warn(
-    "Warning: speech aligner not installed. OpenAI speech and transcription return no timing.",
-  );
-  console.warn("Install: see the Speech aligner section of the @cartanova/qgrid-cli README.");
-}
-
-function canResolve(specifier: string): boolean {
-  try {
-    import.meta.resolve(specifier);
-
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function normalizePort(value: string): string {
   const numeric = Number(value);
 
@@ -124,7 +96,21 @@ program
   .option("--db <url>", "PostgreSQL connection URL (e.g. postgres://user:pw@host:port/dbname)")
   .option("-p, --port <port>", "server port (default: 44900)")
   .option("--skip-update", "skip qgrid self-update check")
+  .option(
+    "--install-aligner",
+    "download the speech aligner model and install onnxruntime-node, then exit",
+  )
   .action(async (opts) => {
+    if (opts.installAligner) {
+      try {
+        await installSpeechAligner();
+        process.exit(0);
+      } catch (e) {
+        console.error("Speech aligner install failed:", e instanceof Error ? e.message : e);
+        process.exit(1);
+      }
+    }
+
     const serverPort = normalizePort(opts.port ?? "44900");
 
     try {
