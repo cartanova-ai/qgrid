@@ -116,6 +116,7 @@ import {
   RefreshFailedError,
 } from "./oauth";
 import { CODEX_IMAGE_GENERATION_MODEL } from "./qgrid-image-generation";
+import { imagePlaceholderForLog } from "./qgrid-response-format";
 import {
   afterQuery,
   beforeQuery,
@@ -2091,7 +2092,8 @@ class QgridFrameClass extends BaseFrameClass {
           return {
             toolCallId: `image_generation:0:${index}`,
             args,
-            result: imageTagForLog(image.b64, image.mimeType, image.revisedPrompt),
+            // The run's response already holds this image.
+            result: imagePlaceholderForLog(image.mimeType, image.b64),
           };
         }),
       };

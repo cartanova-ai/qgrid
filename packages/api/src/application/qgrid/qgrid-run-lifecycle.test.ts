@@ -119,6 +119,27 @@ describe("qgrid run lifecycle start", () => {
     vi.restoreAllMocks();
   });
 
+  it("stores history images as their length only", async () => {
+    const image = "data:image/png;base64,iVBORw0KGgo=";
+    const history = JSON.stringify([
+      { type: "message", role: "user", content: [{ type: "input_image", image_url: image }] },
+    ]);
+
+    await beforeQuery({ prompt: "edit it", history });
+
+    expect(createRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        history: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_image", image_url: `[data-url ${image.length} chars]` }],
+          },
+        ],
+      }),
+    );
+  });
+
   it("creates a running parent with the full requested model before an initial query", async () => {
     const history = JSON.stringify([
       { type: "message", role: "user", content: "earlier" },
@@ -519,7 +540,8 @@ describe("qgrid run lifecycle TTFT", () => {
             size: "1536x1024",
           },
         }),
-        tool_result: '<img src="data:image/png;base64,iVBORw0KGgoBAgM" alt="green triangle" />',
+        // The run's response carries the image itself.
+        tool_result: "[image image/png 11 bytes, shown in the response]",
       }),
     );
   });
