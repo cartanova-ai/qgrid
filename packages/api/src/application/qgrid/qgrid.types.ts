@@ -549,6 +549,9 @@ export const SpeakInput = z.object({
   format: z.enum(["mp3", "wav", "pcm", "mulaw", "alaw"]).optional(),
   // OpenAI realtime speech only: style guidance appended to the verbatim-repeat instruction.
   instructions: z.string().min(1).max(2_000).optional(),
+  // Grok speech only: per-character timing in the output (`audioTimestamps`). OpenAI realtime has
+  // no timing data and rejects it with 400.
+  withTimestamps: z.boolean().optional(),
   ...MediaCallOptions,
 });
 
@@ -560,6 +563,15 @@ export const SpeakOutput = z.object({
   mimeType: z.string(),
   tokenName: z.string(),
   requestLogId: z.number().optional(),
+  // Only with `withTimestamps`: input characters (spaces, punctuation, tags included) and the
+  // `[start, end]` seconds of each, index-aligned; named as @ai-sdk/xai exposes them.
+  audioTimestamps: z
+    .object({
+      graphChars: z.array(z.string()),
+      graphTimes: z.array(z.tuple([z.number(), z.number()])),
+    })
+    .optional(),
+  durationSec: z.number().optional(),
 });
 
 export type SpeakOutput = z.infer<typeof SpeakOutput>;

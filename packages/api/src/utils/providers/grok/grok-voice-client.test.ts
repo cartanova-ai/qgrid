@@ -228,6 +228,36 @@ describe("GrokVoiceClient.speak", () => {
     });
   });
 
+  it("asks for timestamps and decodes the JSON envelope into audio plus character timing", async () => {
+    const fake = fakeFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            audio: Buffer.from(mp3).toString("base64"),
+            content_type: "audio/mpeg",
+            duration: 0.5,
+            audio_timestamps: { graph_chars: ["H", "i"], graph_times: [[0.08, 0.2], [0.2, 0.5]] },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const client = new GrokVoiceClient({ fetch: fake.impl });
+    const result = await client.speak("tok", { text: "Hi", with_timestamps: true });
+
+    const body = fake.calls[0]!.init.body;
+    expect(typeof body === "string" && JSON.parse(body)).toMatchObject({ with_timestamps: true });
+    expect(result.audio).toEqual(mp3);
+    expect(result.mediaType).toBe("audio/mpeg");
+    expect(result.durationSec).toBe(0.5);
+    expect(result.audioTimestamps).toEqual({
+      graphChars: ["H", "i"],
+      graphTimes: [
+        [0.08, 0.2],
+        [0.2, 0.5],
+      ],
+    });
+  });
+
   it("falls back to the format's media type when content-type is missing", async () => {
     const client = new GrokVoiceClient({
       fetch: fakeFetch(() => {

@@ -829,13 +829,26 @@ type MediaLogSuccess = {
   ttftMs?: number;
 };
 
-// Speech rows embed browser-playable audio so the request-log detail page can play it, as image
-// rows embed their images. Other formats (raw PCM, mu-law, A-law) keep the byte-count placeholder.
-const LOG_PLAYABLE_AUDIO = new Set(["audio/wav", "audio/mpeg"]);
+// Voice rows embed browser-playable audio (TTS output in the response, STT input in the user
+// prompt) so the request-log detail page can play it, as image rows embed their images. Other
+// formats (raw PCM, mu-law, A-law) keep the byte-count placeholder.
+const LOG_PLAYABLE_AUDIO = new Set([
+  "audio/wav",
+  "audio/x-wav",
+  "audio/wave",
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/mp4",
+  "audio/ogg",
+  "audio/webm",
+  "audio/flac",
+]);
 
-function speechResponseForLog(b64: string, mimeType: string, byteLength: number): string {
-  return LOG_PLAYABLE_AUDIO.has(mimeType)
-    ? `<audio src="data:${mimeType};base64,${b64}"></audio>`
+function audioForLog(b64: string, mimeType: string, byteLength: number): string {
+  const base = mimeType.split(";")[0]!.trim().toLowerCase();
+
+  return LOG_PLAYABLE_AUDIO.has(base)
+    ? `<audio src="data:${base};base64,${b64}"></audio>`
     : `[audio ${mimeType} ${byteLength} bytes]`;
 }
 
@@ -1097,7 +1110,7 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<TranscribeOutpu
   const start = {
     kind: "stt",
     model: route,
-    prompt: `[audio ${input.mediaType} ${audio.byteLength} bytes]`,
+    prompt: audioForLog(input.audio, input.mediaType, audio.byteLength),
     projectName: input.projectName,
     logger: input.logger,
   } as const;
@@ -1210,7 +1223,7 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
 
     const log: MediaRunLog = {
       tokenName: output.tokenName,
-      response: speechResponseForLog(logAudio, "audio/wav", audio.byteLength),
+      response: audioForLog(logAudio, "audio/wav", audio.byteLength),
       firstOutputAt: firstAudioAt,
       steps: [
         {
@@ -2199,7 +2212,7 @@ class QgridFrameClass extends BaseFrameClass {
     const start = {
       kind: "stt",
       model: route,
-      prompt: `[audio ${input.mediaType} ${audio.byteLength} bytes]`,
+      prompt: audioForLog(input.audio, input.mediaType, audio.byteLength),
       projectName: input.projectName,
       logger: input.logger,
     } as const;
@@ -2256,7 +2269,18 @@ class QgridFrameClass extends BaseFrameClass {
   async speak(params: SpeakInput): Promise<SpeakOutput> {
     const input = parseMediaInput(SpeakInput, params);
 
-    if (voiceProvider(input.model) === "openai") return speakOpenAI(input);
+    if (voiceProvider(input.model) === "openai") {
+      if (input.withTimestamps) {
+        throw new BadRequestException(
+          SD("qgrid.openaiVoiceInvalidRequest")(
+            "withTimestamps is available only for grok/ speech; OpenAI realtime has no timing data",
+          ),
+        );
+      }
+
+      return speakOpenAI(input);
+    }
+
     const voice = grokVoice();
     const selection = await resolveGrokTokenSelection(input.tokenName);
     const route = input.model ?? GROK_TTS_LOG_MODEL;
@@ -2266,6 +2290,7 @@ class QgridFrameClass extends BaseFrameClass {
       voice: input.voice ?? GROK_TTS_DEFAULT_VOICE,
       language: input.language ?? GROK_TTS_DEFAULT_LANGUAGE,
       format: input.format ?? GROK_TTS_DEFAULT_FORMAT,
+      ...(input.withTimestamps === true && { with_timestamps: true }),
     };
 
     const start = {
@@ -2288,9 +2313,17 @@ class QgridFrameClass extends BaseFrameClass {
 
       if (requestLogId !== undefined) output.requestLogId = requestLogId;
 
+      if (dispatched.result.audioTimestamps) {
+        output.audioTimestamps = dispatched.result.audioTimestamps;
+      }
+
+      if (dispatched.result.durationSec !== undefined) {
+        output.durationSec = dispatched.result.durationSec;
+      }
+
       const log: MediaRunLog = {
         tokenName: output.tokenName,
-        response: speechResponseForLog(output.audio, output.mimeType, audioBytes),
+        response: audioForLog(output.audio, output.mimeType, audioBytes),
         firstOutputAt: dispatched.result.firstByteAt,
         steps: [
           {
@@ -2301,9 +2334,15 @@ class QgridFrameClass extends BaseFrameClass {
               voice: request.voice,
               language: request.language,
               format: request.format,
+              withTimestamps: input.withTimestamps,
               characters: input.text.length,
             },
-            result: JSON.stringify({ mimeType: output.mimeType, audioBytes }),
+            result: JSON.stringify({
+              mimeType: output.mimeType,
+              audioBytes,
+              durationSec: output.durationSec,
+              timedCharacters: output.audioTimestamps?.graphChars.length,
+            }),
           },
         ],
       };

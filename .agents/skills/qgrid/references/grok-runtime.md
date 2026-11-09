@@ -81,6 +81,8 @@ Provider `cost_in_usd_ticks` is authoritative, including zero; one tick is `1e-1
 
 Qgrid exposes image generation/editing, asynchronous video start/status, transcription, and speech through `api.x.ai`. Reference images select `/images/edits`; video uses `/videos/generations` and `/videos/{request_id}`; voice uses multipart `/stt` and JSON `/tts` (`grok-media-client.ts`, `grok-voice-client.ts`, `packages/api/src/application/qgrid/qgrid.frame.ts`).
 
+TTS timestamps (2.16.0+): `withTimestamps: true` on `speak` sends `with_timestamps: true`, and `/tts` then answers with a JSON envelope (`audio` base64, `content_type`, `duration`, `audio_timestamps.graph_chars` / `graph_times`) instead of raw bytes; the client decodes it and `speak` returns `audioTimestamps` (`graphChars`, `graphTimes`, character-level `[start, end]` seconds) and `durationSec`. Verified with the subscription token on 2026-11-09 (42 characters for a 42-character line, 0.87 s to the response). OpenAI realtime speech has no timing data and rejects the flag with 400.
+
 Image generation and editing default to `grok-imagine-image-2.0`; the public SDK lists it and
 `grok-imagine-image` (1.0). Quality omission passes through as upstream `auto`, currently low for
 generation and medium for editing. Reported ticks remain authoritative. Without ticks, image cost

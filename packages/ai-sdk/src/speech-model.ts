@@ -29,7 +29,7 @@ function isSpeechFormat(value: string): value is SpeechFormat {
 
 /**
  * `providerOptions.xai` for Grok speech, field-for-field from `@ai-sdk/xai`
- * `xaiSpeechModelOptionsSchema`. The qgrid server takes none of them; every set key warns.
+ * `xaiSpeechModelOptionsSchema`. Only `withTimestamps` is honored; every other set key warns.
  */
 const xaiSpeechOptionsSchema = z.object({
   sampleRate: z
@@ -81,11 +81,21 @@ function isOpenAISpeechFormat(value: string): value is OpenAISpeechFormat {
   return OPENAI_SPEECH_FORMATS.some((format) => format === value);
 }
 
+/** `providerOptions.xai` keys honored by `qgrid.speech("grok/...")`. */
+const XAI_SPEECH_HONORED = new Set(["withTimestamps"]);
+
 const speakOutputSchema = z.object({
   audio: z.string(),
   mimeType: z.string(),
   tokenName: z.string(),
   requestLogId: z.number().optional(),
+  audioTimestamps: z
+    .object({
+      graphChars: z.array(z.string()),
+      graphTimes: z.array(z.tuple([z.number(), z.number()])),
+    })
+    .optional(),
+  durationSec: z.number().optional(),
 });
 
 function base64ToBytes(data: string): Uint8Array {
@@ -101,7 +111,9 @@ function base64ToBytes(data: string): Uint8Array {
 /**
  * Grok text-to-speech through `POST /api/qgrid/speak`. `voice`, `language` and `outputFormat`
  * map to the server's `voice`, `language` and `format`; when omitted the server applies
- * `ara` / `en` / `mp3` (the only combination verified live). The model id only labels the log.
+ * `ara` / `en` / `mp3`. The model id only labels the log. `providerOptions.xai.withTimestamps`
+ * returns per-character timing in `providerMetadata.qgrid.audioTimestamps` (`graphChars`,
+ * `graphTimes`), the shape `@ai-sdk/xai` puts under `providerMetadata.xai`.
  */
 export function createQgridSpeech(
   modelId: QgridSpeechModel,
@@ -129,7 +141,7 @@ export function createQgridSpeech(
       const xai = parseXaiMediaOptions(
         options.providerOptions?.xai,
         xaiSpeechOptionsSchema,
-        new Set<string>(),
+        XAI_SPEECH_HONORED,
         LABEL,
       );
 
@@ -165,6 +177,8 @@ export function createQgridSpeech(
 
       if (format !== undefined) requestParams.format = format;
 
+      if (xai.options?.withTimestamps === true) requestParams.withTimestamps = true;
+
       if (projectName) requestParams.projectName = projectName;
       const params: JSONObject = { ...requestParams, ...qgridOptions };
 
@@ -184,6 +198,10 @@ export function createQgridSpeech(
       const qgridMetadata: JSONObject = { mediaType: data.mimeType, tokenName: data.tokenName };
 
       if (data.requestLogId !== undefined) qgridMetadata.requestLogId = data.requestLogId;
+
+      if (data.audioTimestamps) qgridMetadata.audioTimestamps = data.audioTimestamps;
+
+      if (data.durationSec !== undefined) qgridMetadata.duration = data.durationSec;
 
       return {
         audio: base64ToBytes(data.audio),

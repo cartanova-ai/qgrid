@@ -2202,6 +2202,10 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       77,
       expect.objectContaining({ status: "succeeded", response: "hello there", cost_usd: null, cost_source: null }),
     );
+    // The input audio is kept playable in the user prompt, as TTS output is in the response.
+    expect(requestLogCreateRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({ user_prompt: `<audio src="data:audio/wav;base64,${audio}"></audio>`, media_kind: "stt" }),
+    );
   });
 
   it("transcribe rejects non-base64 and non-audio input before dispatch", async () => {
@@ -2253,6 +2257,27 @@ describe("QgridFrame Grok media and voice (U11)", () => {
         ttft_ms: 250,
       }),
     );
+  });
+
+  it("speak passes withTimestamps to Grok and returns the character timing", async () => {
+    const audioTimestamps = { graphChars: ["h", "i"], graphTimes: [[0, 0.1], [0.1, 0.3]] as Array<[number, number]> };
+    grok.speak!.mockResolvedValueOnce({
+      result: { audio: new Uint8Array([1, 2]), mediaType: "audio/mpeg", audioTimestamps, durationSec: 0.3 },
+      tokenId: 3,
+      tokenName: "grok/a",
+    });
+
+    const out = await QgridFrame.speak({ text: "hi", withTimestamps: true });
+
+    expect(grok.speak).toHaveBeenCalledWith(expect.objectContaining({ with_timestamps: true }));
+    expect(out).toMatchObject({ audioTimestamps, durationSec: 0.3 });
+  });
+
+  it("speak rejects withTimestamps for OpenAI before any log or dispatch", async () => {
+    await expect(
+      QgridFrame.speak({ model: "openai/gpt-realtime-2.1-mini", text: "hi", withTimestamps: true }),
+    ).rejects.toThrow("withTimestamps is available only for grok/");
+    expect(requestLogCreateRunMock).not.toHaveBeenCalled();
   });
 
   it("speak keeps the byte-count placeholder for audio a browser cannot play", async () => {

@@ -284,6 +284,9 @@ export const GrokTtsRequest = z.object({
   voice: z.string().min(1),
   language: z.string().min(1),
   format: z.string().min(1),
+  // true switches /tts to a JSON envelope with per-character timing (verified on the subscription
+  // token 2026-11-09).
+  with_timestamps: z.boolean().optional(),
 });
 
 export type GrokTtsRequest = z.infer<typeof GrokTtsRequest>;
@@ -361,9 +364,20 @@ export interface GrokTranscribeRequest {
   signal?: AbortSignal;
 }
 
+/** Per-character timing of the spoken text, named as `@ai-sdk/xai` exposes it. */
+export interface GrokAudioTimestamps {
+  /** Input characters, including spaces, punctuation and speech tags. */
+  graphChars: string[];
+  /** `[start, end]` seconds for the character at the same index. */
+  graphTimes: Array<[number, number]>;
+}
+
 export interface GrokSpeechResult {
   audio: Uint8Array;
   mediaType: string;
+  /** Only with `with_timestamps`. */
+  audioTimestamps?: GrokAudioTimestamps;
+  durationSec?: number;
   /** Epoch ms when the response headers arrived; /tts is not streamed, so this is first byte. */
   firstByteAt?: number;
 }

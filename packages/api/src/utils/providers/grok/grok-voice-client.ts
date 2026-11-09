@@ -118,6 +118,19 @@ function transportError(message: string, afterSend: boolean, cause: unknown): Gr
   return new GrokHttpError(classification, "", {}, { cause });
 }
 
+// `with_timestamps: true` envelope; every field nullable like @ai-sdk/xai's parser.
+const GrokTtsTimestampsResponse = z.object({
+  audio: z.string().nullish(),
+  content_type: z.string().nullish(),
+  duration: z.number().nullish(),
+  audio_timestamps: z
+    .object({
+      graph_chars: z.array(z.string()),
+      graph_times: z.array(z.tuple([z.number(), z.number()])),
+    })
+    .nullish(),
+});
+
 function invalidBodyError(response: Response, message: string, cause?: unknown): GrokHttpError {
   return new GrokHttpError(
     { ...classifyGrokHttpError(502, "", response.headers), message, shouldRetry: false },
@@ -125,6 +138,44 @@ function invalidBodyError(response: Response, message: string, cause?: unknown):
     readGrokResponseHeaders(response.headers),
     cause === undefined ? undefined : { cause },
   );
+}
+
+/** Decodes the `with_timestamps` JSON envelope into audio bytes plus per-character timing. */
+async function readTimestampsBody(
+  response: Response,
+  format: string,
+  firstByteAt: number,
+): Promise<GrokSpeechResult> {
+  let parsed: z.infer<typeof GrokTtsTimestampsResponse>;
+
+  try {
+    parsed = GrokTtsTimestampsResponse.parse(await response.json());
+  } catch (error) {
+    throw invalidBodyError(response, "invalid timestamped TTS response", error);
+  }
+
+  const audio = new Uint8Array(Buffer.from(parsed.audio ?? "", "base64"));
+
+  if (audio.byteLength === 0) throw invalidBodyError(response, "empty audio body");
+
+  const result: GrokSpeechResult = {
+    audio,
+    mediaType:
+      parsed.content_type ?? MEDIA_TYPE_BY_FORMAT.get(format) ?? "application/octet-stream",
+    firstByteAt,
+  };
+
+  if (parsed.audio_timestamps) {
+    result.audioTimestamps = {
+      graphChars: parsed.audio_timestamps.graph_chars,
+      graphTimes: parsed.audio_timestamps.graph_times,
+    };
+  }
+
+  if (parsed.duration !== null && parsed.duration !== undefined)
+    result.durationSec = parsed.duration;
+
+  return result;
 }
 
 function audioExtension(mediaType: string): string {
@@ -203,6 +254,7 @@ export class GrokVoiceClient implements GrokVoicePort {
       voice: request.voice ?? GROK_TTS_DEFAULT_VOICE,
       language: request.language ?? GROK_TTS_DEFAULT_LANGUAGE,
       format: request.format ?? GROK_TTS_DEFAULT_FORMAT,
+      ...(request.with_timestamps === true && { with_timestamps: true }),
     });
 
     const headers = {
@@ -213,6 +265,8 @@ export class GrokVoiceClient implements GrokVoicePort {
     return this.post("/tts", headers, JSON.stringify(body), request.signal, async (response) => {
       const firstByteAt = Date.now();
       const mediaType = contentMediaType(response);
+
+      if (body.with_timestamps) return readTimestampsBody(response, body.format, firstByteAt);
 
       if (mediaType === "application/json" || mediaType?.startsWith("text/"))
         throw invalidBodyError(response, `expected audio, got ${mediaType}`);

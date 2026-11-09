@@ -394,7 +394,7 @@ Grok language model은 user 이미지 part(https URL 또는 inline bytes)를 버
 | Image | `n`(호출당 최대 3), `aspectRatio`, `xai.resolution`(`1k`/`1.5k`/`2k`), `xai.quality`, `xai.aspect_ratio`(`aspectRatio`가 없을 때) | 참조 `images`는 `referenceImages`(edit endpoint), `xai.output_format`은 `outputFormat`이 되며 `png`, `jpeg`, `webp`만 허용 | `size`, `seed`, `mask`, `xai.sync_mode`, `xai.user` |
 | Video | `duration`(정수 1-15), `aspectRatio`, `xai.resolution`(`480p`/`720p`/`1080p`), `xai.mode: "reference-to-video"`(지원하는 유일한 mode, `xai.referenceImageUrls` 필요), `xai.pollIntervalMs`, `xai.pollTimeoutMs` | `resolution` `WxH`는 `@ai-sdk/xai`와 같이 매핑(`1280x720` → `720p`), prompt `image`는 시작 프레임, `xai.referenceImageUrls`(7개가 아닌 최대 5개)는 `referenceImages`, `xai.lastFrame`(qgrid 확장, `grok-imagine-video-1.5` 전용) | `fps`, `seed`, `xai.keyframes`, `xai.storageOptions`, `xai.referenceVoiceIds`, `xai.user`. `xai.mode` `edit-video`/`extend-video`와 `xai.videoUrl`은 예외 |
 | Transcription | `xai.language` | 오디오 bytes는 base64로, `mediaType`은 파라미터 제거(`audio/webm;codecs=opus` → `audio/webm`) | 나머지 모든 `xai` 키(`audioFormat`, `sampleRate`, `format`, `diarize`, `keyterm`, ...) |
-| Speech | `voice`, `language` | `outputFormat`은 `format`(`mp3`, `wav`, `pcm`, `mulaw`, `alaw`, 그 외 값은 `@ai-sdk/xai`처럼 warning과 함께 `mp3`) | `instructions`, `speed`, 모든 `xai` 키(`sampleRate`, `bitRate`, `withTimestamps`, ...) |
+| Speech | `voice`, `language`, `xai.withTimestamps` | `outputFormat`은 `format`(`mp3`, `wav`, `pcm`, `mulaw`, `alaw`, 그 외 값은 `@ai-sdk/xai`처럼 warning과 함께 `mp3`) | `instructions`, `speed`, 그 밖의 모든 `xai` 키(`sampleRate`, `bitRate`, `replace`, ...) |
 
 **요청 크기.** qgrid 서버는 최대 10 MiB JSON body를 받습니다. inline 미디어는 base64로 전송되어 3분의 1만큼
 커지므로, 서버는 inline 오디오, 각 inline 이미지, 한 요청의 inline 이미지 합계(비디오: `image` + `lastFrame` +
@@ -487,6 +487,7 @@ speech.audio.uint8Array;
 
 - `transcribe`는 bytes로 오디오 형식을 감지하고 실패하면 `audio/wav`를 씁니다. 서버는 `audio/*`가 아닌 값을 거부합니다. transcript에는 segment가 없습니다(`segments: []`).
 - 음성 합성 텍스트는 최대 15,000자입니다. `voice`, `language`, `outputFormat`을 지정하지 않으면 서버 기본값 `ara`, `en`, `mp3`가 쓰이며, live 검증된 조합은 이것뿐입니다. 다른 voice, language(`@ai-sdk/xai`의 `auto` 포함), codec은 그대로 전달되지만 미검증입니다. 서버가 돌려준 오디오 MIME 타입은 `providerMetadata.qgrid.mediaType`에 있고, AI SDK의 `speech.audio.mediaType`은 bytes에서 추정한 값입니다.
+- `providerOptions: { xai: { withTimestamps: true } }`(2.16.0+, Grok 전용)를 주면 글자별 타이밍이 `providerMetadata.qgrid.audioTimestamps`에 담깁니다. `graphChars`는 입력 글자(공백·문장부호·음성 태그 포함), `graphTimes`는 같은 인덱스의 `[start, end]` 초이고, 전체 길이는 `providerMetadata.qgrid.duration`입니다. `@ai-sdk/xai`가 `providerMetadata.xai`에 담는 모양과 같습니다. 텍스트 정규화로 풀린 토큰은 첫 글자가 전체 구간을 가집니다. `qgrid.speech("openai/...")`는 타이밍 데이터가 없어 서버가 `withTimestamps`를 HTTP 400으로 거부합니다.
 
 ### OpenAI 음성 인식과 합성 (ChatGPT 구독)
 

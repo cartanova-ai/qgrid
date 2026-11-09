@@ -404,7 +404,7 @@ Grok language models keep user image parts (https URLs or inline bytes) instead 
 | Image | `n` (up to 3 per call), `aspectRatio`, `xai.resolution` (`1k`/`1.5k`/`2k`), `xai.quality`, `xai.aspect_ratio` (used when `aspectRatio` is unset) | reference `images` become `referenceImages` (edit endpoint); `xai.output_format` becomes `outputFormat` and must be `png`, `jpeg`, or `webp` | `size`, `seed`, `mask`, `xai.sync_mode`, `xai.user` |
 | Video | `duration` (integer 1-15), `aspectRatio`, `xai.resolution` (`480p`/`720p`/`1080p`), `xai.mode: "reference-to-video"` (the only supported mode; needs `xai.referenceImageUrls`), `xai.pollIntervalMs`, `xai.pollTimeoutMs` | `resolution` `WxH` is mapped as in `@ai-sdk/xai` (`1280x720` to `720p`); prompt `image` becomes the start frame; `xai.referenceImageUrls` (up to 5, not 7) become `referenceImages`; `xai.lastFrame` (qgrid extension, `grok-imagine-video-1.5` only) | `fps`, `seed`, `xai.keyframes`, `xai.storageOptions`, `xai.referenceVoiceIds`, `xai.user`. `xai.mode` `edit-video`/`extend-video` and `xai.videoUrl` throw |
 | Transcription | `xai.language` | audio bytes become base64 and `mediaType` loses its parameters (`audio/webm;codecs=opus` to `audio/webm`) | every other `xai` key (`audioFormat`, `sampleRate`, `format`, `diarize`, `keyterm`, ...) |
-| Speech | `voice`, `language` | `outputFormat` becomes `format` (`mp3`, `wav`, `pcm`, `mulaw`, `alaw`; anything else falls back to `mp3` with a warning, as in `@ai-sdk/xai`) | `instructions`, `speed`, every `xai` key (`sampleRate`, `bitRate`, `withTimestamps`, ...) |
+| Speech | `voice`, `language`, `xai.withTimestamps` | `outputFormat` becomes `format` (`mp3`, `wav`, `pcm`, `mulaw`, `alaw`; anything else falls back to `mp3` with a warning, as in `@ai-sdk/xai`) | `instructions`, `speed`, every other `xai` key (`sampleRate`, `bitRate`, `replace`, ...) |
 
 **Request size.** The qgrid server accepts JSON bodies up to 10 MiB. Inline media travels as
 base64, which grows by a third, so the server caps inline audio, each inline image, and all
@@ -499,6 +499,7 @@ speech.audio.uint8Array;
 
 - `transcribe` detects the audio type from its bytes and falls back to `audio/wav`; the server rejects anything that is not `audio/*`. Transcripts carry no segments (`segments: []`).
 - Speech text is limited to 15,000 characters. Unset `voice`, `language` and `outputFormat` use the server defaults `ara`, `en` and `mp3`, the only combination verified live. Other voices, languages (including `@ai-sdk/xai`'s `auto`) and codecs are passed through but unverified. The server's audio MIME type is in `providerMetadata.qgrid.mediaType`; AI SDK's `speech.audio.mediaType` is sniffed from the bytes.
+- `providerOptions: { xai: { withTimestamps: true } }` (2.16.0+, Grok only) returns per-character timing in `providerMetadata.qgrid.audioTimestamps`: `graphChars` (input characters, spaces, punctuation and speech tags included) and the index-aligned `graphTimes` `[start, end]` seconds, plus `providerMetadata.qgrid.duration`. The shape matches what `@ai-sdk/xai` puts under `providerMetadata.xai`. Text normalization gives an expanded token's whole span to its first character. `qgrid.speech("openai/...")` has no timing data and the server rejects `withTimestamps` with HTTP 400.
 
 ### OpenAI transcription and speech (ChatGPT subscription)
 

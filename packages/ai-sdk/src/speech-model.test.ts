@@ -70,6 +70,29 @@ describe("qgrid.speech with AI SDK generateSpeech", () => {
     ]);
   });
 
+  it("honors xai.withTimestamps and returns the character timing in qgrid metadata", async () => {
+    const audioTimestamps = { graphChars: ["H", "i"], graphTimes: [[0.08, 0.2], [0.2, 0.5]] };
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        audio: mp3.toString("base64"),
+        mimeType: "audio/mpeg",
+        tokenName: "grok/main",
+        audioTimestamps,
+        durationSec: 0.5,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await generateSpeech({
+      model: qgrid.speech("grok/grok-tts"),
+      text: "Hi",
+      providerOptions: { xai: { withTimestamps: true } },
+    });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).params).toMatchObject({ withTimestamps: true });
+    expect(result.warnings).toEqual([]);
+    expect(result.providerMetadata.qgrid).toMatchObject({ audioTimestamps, duration: 0.5 });
+  });
+
   it("rejects over-long text before transport", async () => {
     const fetchMock = mockSpeak();
     await expect(generateSpeech({ model: qgrid.speech("grok/grok-tts"), text: "a".repeat(15_001), maxRetries: 0 }))
