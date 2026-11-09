@@ -27,6 +27,10 @@ import {
   type GrokMediaCost,
   grokImageCost,
   grokReportedCost,
+  grokSpeechCost,
+  openaiSpeechCost,
+  sttCost,
+  type VoiceCost,
 } from "../../utils/providers/common/model-cost";
 import {
   type MediaDispatcher,
@@ -826,7 +830,7 @@ type MediaLogSuccess = {
   durationMs: number;
   response: string;
   steps: MediaLogSteps;
-  cost?: GrokMediaCost;
+  cost?: GrokMediaCost | VoiceCost;
   /** Speech only: time to the first audio byte, measured from the same start as `durationMs`. */
   ttftMs?: number;
 };
@@ -874,7 +878,7 @@ type MediaCostFields = Pick<FinishRunParams, "cost_usd" | "cost_source"> &
 function mediaCostFields(
   kind: MediaKind,
   model: string,
-  cost: GrokMediaCost | undefined,
+  cost: GrokMediaCost | VoiceCost | undefined,
 ): MediaCostFields {
   if (kind === "image") {
     return {
@@ -1134,6 +1138,7 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<TranscribeOutpu
     const log: MediaRunLog = {
       tokenName: output.tokenName,
       response: output.text,
+      cost: sttCost(route, durationSec),
       steps: [
         {
           toolCallId: "transcription:0",
@@ -1253,10 +1258,18 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
       }
     }
 
+    const speechCost = openaiSpeechCost(id, usage);
+
+    // The alignment pass is a Grok STT call over the same audio, priced with the speech.
+    const alignCost = alignment
+      ? (sttCost(`grok/${GROK_STT_DEFAULT_MODEL}`, alignment.durationSec)?.costUsd ?? 0)
+      : 0;
+
     const log: MediaRunLog = {
       tokenName: output.tokenName,
       response: audioForLog(logAudio, "audio/wav", audio.byteLength),
       firstOutputAt: firstAudioAt,
+      cost: speechCost && { ...speechCost, costUsd: speechCost.costUsd + alignCost },
       steps: [
         {
           toolCallId: "speech:0",
@@ -2283,6 +2296,7 @@ class QgridFrameClass extends BaseFrameClass {
       const log: MediaRunLog = {
         tokenName: output.tokenName,
         response: output.text,
+        cost: sttCost(route, output.durationSec),
         steps: [
           {
             toolCallId: "transcription:0",
@@ -2361,6 +2375,7 @@ class QgridFrameClass extends BaseFrameClass {
         tokenName: output.tokenName,
         response: audioForLog(output.audio, output.mimeType, audioBytes),
         firstOutputAt: dispatched.result.firstByteAt,
+        cost: grokSpeechCost(input.text.length),
         steps: [
           {
             toolCallId: "speech:0",

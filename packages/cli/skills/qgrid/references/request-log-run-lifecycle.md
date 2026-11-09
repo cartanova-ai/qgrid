@@ -107,6 +107,8 @@ Input images are not stored in `request_logs.user_prompt`; that field remains th
 - `media_kind`: nullable enum (`image`, `video`, `stt`, `tts`) written at `createRun` by `startMediaRun` from the media endpoint's kind; text and chat runs keep NULL (chat-generated images are marked only by `is_image_generation`). The list `Fmt` column reads it, so any new media endpoint must open its run through `startMediaRun` or set it explicitly.
 - Speech `response`: browser-playable audio is embedded as an `<audio>` data URL (see `sonamu-api-web-flow.md`); speech `ttft_ms` is the first audio byte, passed explicitly to `finishRun` because media runs have no generate step to derive it from.
 
+- Voice cost (2.17.1+): subscription voice calls have no per-call bill, so `cost_usd` records the public API list-price estimate with `cost_source: "pricing_table"` (`model-cost.ts`, prices checked 2026-11-09): OpenAI realtime speech from its response usage per token type (cached input is not split out, so all input is charged as uncached text), plus the Grok STT alignment pass when timing was requested; transcription per minute of audio (OpenAI's published per-minute estimates, Grok $0.10/hour); Grok TTS $15 per 1M input characters. Unknown model ids stay unpriced (NULL). The detail page labels the figure "Voice" instead of "Driver".
+
 ## Structured output fields
 
 Structured output requests (those carrying a `jsonSchema`) persist three related fields:

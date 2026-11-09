@@ -2211,9 +2211,10 @@ describe("QgridFrame Grok media and voice (U11)", () => {
     const request = grok.transcribe!.mock.calls[0]![0] as { audio: Uint8Array; mediaType: string; model: string };
     expect(Buffer.from(request.audio).toString()).toBe("RIFFfakewav");
     expect(request).toMatchObject({ mediaType: "audio/wav", model: "grok-voice-transcribe-2.0" });
+    // Priced at the Grok STT list price: $0.10/hour × 1.5 s ≈ 42 micro-USD.
     expect(requestLogFinishRunMock).toHaveBeenCalledWith(
       77,
-      expect.objectContaining({ status: "succeeded", response: "hello there", cost_usd: null, cost_source: null }),
+      expect.objectContaining({ status: "succeeded", response: "hello there", cost_usd: 42, cost_source: "pricing_table" }),
     );
     // The input audio is kept playable in the user prompt, as TTS output is in the response.
     expect(requestLogCreateRunMock).toHaveBeenCalledWith(
@@ -2243,10 +2244,10 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       requestLogId: 77,
     });
     expect(Buffer.from(out.audio, "base64")).toEqual(Buffer.from(bytes));
-    // No ticks reported: the cost is unknown, not a guessed 0.
+    // Priced at the Grok TTS list price: $15 per 1M characters × 2 characters = 30 micro-USD.
     expect(requestLogFinishRunMock).toHaveBeenCalledWith(
       77,
-      expect.objectContaining({ status: "succeeded", cost_usd: null, cost_source: null }),
+      expect.objectContaining({ status: "succeeded", cost_usd: 30, cost_source: "pricing_table" }),
     );
   });
 

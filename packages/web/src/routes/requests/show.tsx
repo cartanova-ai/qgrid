@@ -443,7 +443,8 @@ function MetricsPanel({ data, toolCallCount }: { data: RequestLog; toolCallCount
           )}
         />
         <Metric
-          label="Driver"
+          // Voice rows have no driver model; their cost is the API list-price estimate of the call.
+          label={data.media_kind === "stt" || data.media_kind === "tts" ? "Voice" : "Driver"}
           value={data.cost_usd !== null ? formatMicroUsd(data.cost_usd) : "—"}
         />
         <Metric
