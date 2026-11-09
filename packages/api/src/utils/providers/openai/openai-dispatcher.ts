@@ -1075,8 +1075,13 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     if (token.quotaThreshold === null || token.quotaThreshold === undefined) return true;
     const generation = token.generation;
     const result = await readOpenAIQuotaUsage(async () => this.getRateLimitsByTokenId(id, signal));
+    const current = this.tokenMetadata.get(id);
 
-    if (this.tokenMetadata.get(id) !== token || token.generation !== generation) return false;
+    // A token update (credential refresh, sync) landed mid-lookup: judge the updated token
+    // instead of reporting it over quota.
+    if (current !== token || token.generation !== generation) {
+      return current?.active ? this.isQuotaEligible(id, current, signal) : false;
+    }
 
     if (result.kind === "lookup_failed") {
       this.quotaBlocked.delete(id);

@@ -251,6 +251,24 @@ describe("OpenAIDispatcher direct runtime", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("re-judges a token updated during its quota lookup instead of reporting it over quota", async () => {
+    let finishOld!: (value: Response) => void;
+    const quota = (percent: number) => new Response(JSON.stringify({
+      rate_limits: { primary_window: { used_percent: percent } },
+    }));
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockResolvedValueOnce(quota(65));
+    const d = new OpenAIDispatcher(config(), { fetch: fetchMock });
+    await d.onTokenAdded(1, "one", credentials, 100);
+    const selection = d.selectToken(1, true, new AbortController().signal);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await d.onTokenUpdated(1, "one", { ...credentials, accessToken: "refreshed" }, 100);
+    finishOld(quota(65));
+    await expect(selection).resolves.toMatchObject({ tokenId: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects unsupported image backgrounds", () => {
     expect(QueryInput.safeParse({
       prompt: "a circle", imageGeneration: true,
