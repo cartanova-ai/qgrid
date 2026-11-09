@@ -563,6 +563,8 @@ export const SpeakInput = z.object({
   format: z.enum(["mp3", "wav", "pcm", "mulaw", "alaw"]).optional(),
   // OpenAI realtime speech only: style guidance appended to the verbatim-repeat instruction.
   instructions: z.string().min(1).max(2_000).optional(),
+  // Grok only: speaking rate, xAI's documented 0.7–1.5 (1 = normal).
+  speed: z.number().min(0.7).max(1.5).optional(),
   // Per-character timing in the output (`audioTimestamps`). Grok returns it natively; for OpenAI
   // realtime (no timing data) qgrid transcribes the generated audio with Grok STT and aligns the
   // heard words to the text (`timestampsSource: "aligned"`).

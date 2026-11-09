@@ -723,6 +723,7 @@ Content-Type: application/json
     "language": "LANGUAGE",
     "format": "mp3",
     "instructions": "INSTRUCTIONS",
+    "speed": 0.7,
     "withTimestamps": false,
     "tokenName": "TOKENNAME",
     "projectName": "PROJECTNAME",

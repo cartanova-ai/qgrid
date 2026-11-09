@@ -300,6 +300,7 @@ export const GrokTtsRequest = z.object({
   // true switches /tts to a JSON envelope with per-character timing (verified on the subscription
   // token 2026-11-09).
   with_timestamps: z.boolean().optional(),
+  speed: z.number().optional(),
 });
 
 export type GrokTtsRequest = z.infer<typeof GrokTtsRequest>;

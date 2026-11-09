@@ -255,6 +255,7 @@ export class GrokVoiceClient implements GrokVoicePort {
       language: request.language ?? GROK_TTS_DEFAULT_LANGUAGE,
       format: request.format ?? GROK_TTS_DEFAULT_FORMAT,
       with_timestamps: request.with_timestamps,
+      speed: request.speed,
     });
 
     const headers = {

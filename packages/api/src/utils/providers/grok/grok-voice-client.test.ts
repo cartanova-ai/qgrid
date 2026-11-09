@@ -208,7 +208,7 @@ describe("GrokVoiceClient.speak", () => {
     });
   });
 
-  it("passes explicit language and format and strips content-type parameters", async () => {
+  it("passes explicit language, format and speed and strips content-type parameters", async () => {
     const fake = fakeFetch(
       () =>
         new Response(mp3, { status: 200, headers: { "content-type": "audio/wav; codecs=1" } }),
@@ -219,12 +219,14 @@ describe("GrokVoiceClient.speak", () => {
       voice: "eve",
       language: "fr",
       format: "wav",
+      speed: 0.8,
     });
     expect(result.mediaType).toBe("audio/wav");
     const body = fake.calls[0]!.init.body;
     expect(typeof body === "string" && JSON.parse(body)).toMatchObject({
       language: "fr",
       format: "wav",
+      speed: 0.8,
     });
   });
 

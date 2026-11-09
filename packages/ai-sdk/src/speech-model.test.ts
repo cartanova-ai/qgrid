@@ -50,7 +50,7 @@ describe("qgrid.speech with AI SDK generateSpeech", () => {
     expect(result.providerMetadata.qgrid).toEqual({ mediaType: "audio/mpeg", tokenName: "grok/main", requestLogId: 3 });
   });
 
-  it("omits unset fields so server defaults apply, and warns on unsupported settings", async () => {
+  it("omits unset fields so server defaults apply, passes speed, and warns on unsupported settings", async () => {
     const fetchMock = mockSpeak();
     const result = await generateSpeech({
       model: qgrid.speech("grok/grok-tts"),
@@ -61,11 +61,10 @@ describe("qgrid.speech with AI SDK generateSpeech", () => {
       providerOptions: { xai: { sampleRate: 24000 } },
     });
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(String(init.body)).params).toEqual({ model: "grok/grok-tts", text: "Hello", format: "mp3" });
+    expect(JSON.parse(String(init.body)).params).toEqual({ model: "grok/grok-tts", text: "Hello", speed: 1.2, format: "mp3" });
     expect(result.warnings.map((w) => ("feature" in w ? w.feature : w.message))).toEqual([
       "outputFormat",
       "instructions",
-      "speed",
       "providerOptions.xai.sampleRate",
     ]);
   });

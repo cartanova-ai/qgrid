@@ -1222,6 +1222,12 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
     );
   }
 
+  if (input.speed !== undefined) {
+    throw new BadRequestException(
+      SD("qgrid.openaiVoiceInvalidRequest")("speed is available only on Grok speech"),
+    );
+  }
+
   const request = {
     text: input.text,
     model: id,
@@ -2350,6 +2356,7 @@ class QgridFrameClass extends BaseFrameClass {
       language: input.language ?? GROK_TTS_DEFAULT_LANGUAGE,
       format: input.format ?? GROK_TTS_DEFAULT_FORMAT,
       with_timestamps: input.withTimestamps,
+      speed: input.speed,
     };
 
     const start = {
@@ -2396,6 +2403,7 @@ class QgridFrameClass extends BaseFrameClass {
               language: request.language,
               format: request.format,
               withTimestamps: input.withTimestamps,
+              speed: input.speed,
               characters: input.text.length,
             },
             result: JSON.stringify({

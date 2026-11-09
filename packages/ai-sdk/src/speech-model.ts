@@ -196,12 +196,14 @@ export function createQgridSpeech(
         warnings.push({ type: "unsupported", feature: "instructions" });
       }
 
-      if (options.speed !== undefined) warnings.push({ type: "unsupported", feature: "speed" });
       warnings.push(...xai.warnings);
 
       const requestParams: JSONObject = { model: modelId, text: options.text };
 
       if (options.voice !== undefined) requestParams.voice = options.voice;
+
+      // Passed through like @ai-sdk/xai; the server enforces xAI's 0.7–1.5.
+      if (options.speed !== undefined) requestParams.speed = options.speed;
 
       if (options.language !== undefined) requestParams.language = options.language;
 
