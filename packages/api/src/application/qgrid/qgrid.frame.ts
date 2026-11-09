@@ -834,22 +834,12 @@ type MediaLogSuccess = {
 // Voice rows embed browser-playable audio (TTS output in the response, STT input in the user
 // prompt) so the request-log detail page can play it, as image rows embed their images. Other
 // formats (raw PCM, mu-law, A-law) keep the byte-count placeholder.
-const LOG_PLAYABLE_AUDIO = new Set([
-  "audio/wav",
-  "audio/x-wav",
-  "audio/wave",
-  "audio/mpeg",
-  "audio/mp3",
-  "audio/mp4",
-  "audio/ogg",
-  "audio/webm",
-  "audio/flac",
-]);
+const LOG_PLAYABLE_AUDIO = /^audio\/(wav|x-wav|wave|mpeg|mp3|mp4|ogg|webm|flac)$/;
 
 function audioForLog(b64: string, mimeType: string, byteLength: number): string {
   const base = mimeType.split(";")[0]!.trim().toLowerCase();
 
-  return LOG_PLAYABLE_AUDIO.has(base)
+  return LOG_PLAYABLE_AUDIO.test(base)
     ? `<audio src="data:${base};base64,${b64}"></audio>`
     : `[audio ${mimeType} ${byteLength} bytes]`;
 }
@@ -2335,7 +2325,7 @@ class QgridFrameClass extends BaseFrameClass {
       voice: input.voice ?? GROK_TTS_DEFAULT_VOICE,
       language: input.language ?? GROK_TTS_DEFAULT_LANGUAGE,
       format: input.format ?? GROK_TTS_DEFAULT_FORMAT,
-      ...(input.withTimestamps === true && { with_timestamps: true }),
+      with_timestamps: input.withTimestamps,
     };
 
     const start = {

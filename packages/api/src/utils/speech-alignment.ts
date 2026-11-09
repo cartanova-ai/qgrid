@@ -11,20 +11,11 @@ export interface CharTimestamps {
   graphTimes: Array<[number, number]>;
 }
 
-export interface ScriptAlignment {
-  audioTimestamps: CharTimestamps;
-  /** Script words whose heard word normalized to the same text. */
-  matchedWords: number;
-  scriptWords: number;
-}
-
 const normalize = (word: string) =>
   word
     .normalize("NFKC")
     .toLowerCase()
     .replace(/[^\p{L}\p{N}']/gu, "");
-
-type Op = "match" | "sub" | "skipScript" | "skipHeard";
 
 /**
  * Infers per-character timing for a known script from the words an STT model heard in its audio.
@@ -33,13 +24,9 @@ type Op = "match" | "sub" | "skipScript" | "skipHeard";
  * extra heard words (a spoken preamble) are skipped. Script words left unpaired get the gap
  * between their neighbours; each word's span is split over its characters by position, and the
  * whitespace between words takes the pause between them. `durationSec` bounds leading and
- * trailing gaps.
+ * trailing gaps. `matchedWords` counts script words heard exactly (after normalization).
  */
-export function alignScriptToWords(
-  script: string,
-  words: TimedWord[],
-  durationSec: number,
-): ScriptAlignment {
+export function alignScriptToWords(script: string, words: TimedWord[], durationSec: number) {
   const tokens = [...script.matchAll(/\S+/g)].map((m) => ({
     from: m.index,
     to: m.index + m[0].length,
@@ -80,26 +67,17 @@ export function alignScriptToWords(
   for (let i = n, j = m; i > 0 || j > 0;) {
     const here = cost[i * width + j]!;
     const same = i > 0 && j > 0 && tokens[i - 1]!.norm === heard[j - 1]!.norm;
-    let op: Op;
 
     if (i > 0 && j > 0 && here === cost[(i - 1) * width + (j - 1)]! + (same ? 0 : 1)) {
-      op = same ? "match" : "sub";
-    } else if (i > 0 && here === cost[(i - 1) * width + j]! + 1) {
-      op = "skipScript";
-    } else {
-      op = "skipHeard";
-    }
-
-    if (op === "match" || op === "sub") {
       spans[i - 1] = [heard[j - 1]!.start, heard[j - 1]!.end];
 
-      if (op === "match") matchedWords++;
+      if (same) matchedWords++;
       i--;
       j--;
-    } else if (op === "skipScript") {
-      i--;
+    } else if (i > 0 && here === cost[(i - 1) * width + j]! + 1) {
+      i--; // script word not heard: filled from its neighbours below
     } else {
-      j--;
+      j--; // extra heard word (e.g. a spoken preamble): skipped
     }
   }
 

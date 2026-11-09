@@ -118,9 +118,9 @@ function transportError(message: string, afterSend: boolean, cause: unknown): Gr
   return new GrokHttpError(classification, "", {}, { cause });
 }
 
-// `with_timestamps: true` envelope; every field nullable like @ai-sdk/xai's parser.
+// `with_timestamps: true` envelope; optional fields nullable like @ai-sdk/xai's parser.
 const GrokTtsTimestampsResponse = z.object({
-  audio: z.string().nullish(),
+  audio: z.string(),
   content_type: z.string().nullish(),
   duration: z.number().nullish(),
   audio_timestamps: z
@@ -154,7 +154,7 @@ async function readTimestampsBody(
     throw invalidBodyError(response, "invalid timestamped TTS response", error);
   }
 
-  const audio = new Uint8Array(Buffer.from(parsed.audio ?? "", "base64"));
+  const audio = new Uint8Array(Buffer.from(parsed.audio, "base64"));
 
   if (audio.byteLength === 0) throw invalidBodyError(response, "empty audio body");
 
@@ -254,7 +254,7 @@ export class GrokVoiceClient implements GrokVoicePort {
       voice: request.voice ?? GROK_TTS_DEFAULT_VOICE,
       language: request.language ?? GROK_TTS_DEFAULT_LANGUAGE,
       format: request.format ?? GROK_TTS_DEFAULT_FORMAT,
-      ...(request.with_timestamps === true && { with_timestamps: true }),
+      with_timestamps: request.with_timestamps,
     });
 
     const headers = {

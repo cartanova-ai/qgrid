@@ -34,52 +34,23 @@ const STT_MODELS = [
 
 // OpenAI realtime presets (the server rejects others); default first. No gender split: several are
 // ambiguous (ballad reads as androgynous), so they stay one group.
-const OPENAI_VOICES = [
-  "marin",
-  "cedar",
-  "alloy",
-  "ash",
-  "ballad",
-  "coral",
-  "echo",
-  "sage",
-  "shimmer",
-  "verse",
-];
+const OPENAI_VOICES = "marin cedar alloy ash ballad coral echo sage shimmer verse".split(" ");
 
 // Grok /tts voices listed by xAI for the subscription token (2026-11-06); default first.
 const GROK_VOICE_GROUPS = [
-  {
-    label: "Female",
-    voices: ["ara", "aurora", "carina", "celeste", "eve", "iris", "liora", "luna", "ursa"],
-  },
+  { label: "Female", voices: "ara aurora carina celeste eve iris liora luna ursa".split(" ") },
   {
     label: "Male",
-    voices: [
-      "altair",
-      "atlas",
-      "castor",
-      "cosmo",
-      "helios",
-      "helix",
-      "kepler",
-      "leo",
-      "lumen",
-      "lux",
-      "naksh",
-      "orion",
-      "perseus",
-      "rex",
-      "rigel",
-      "sal",
-      "sirius",
-      "zagan",
-      "zenith",
-    ],
+    voices:
+      "altair atlas castor cosmo helios helix kepler leo lumen lux naksh orion perseus rex rigel sal sirius zagan zenith".split(
+        " ",
+      ),
   },
 ];
 
 const OPENAI_VOICE_GROUPS = [{ label: "", voices: OPENAI_VOICES }];
+
+const TIMING_SOURCE = { provider: "timing from Grok TTS", aligned: "timing aligned via Grok STT" };
 
 const isOpenAI = (model: string) => model.startsWith("openai/");
 
@@ -243,11 +214,7 @@ function TtsPanel() {
             words: wordsFromCharTimes(out.audioTimestamps),
             timing: out.timestampsError
               ? `timing failed: ${out.timestampsError}`
-              : out.timestampsSource === "aligned"
-                ? "timing aligned via Grok STT"
-                : out.timestampsSource === "provider"
-                  ? "timing from Grok TTS"
-                  : undefined,
+              : out.timestampsSource && TIMING_SOURCE[out.timestampsSource],
           };
 
           setHistory((items) => [item, ...items]);

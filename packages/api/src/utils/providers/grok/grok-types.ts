@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { type CharTimestamps } from "../../speech-alignment";
 import { type JsonValue } from "../common/provider-types";
 import { GROK_AUTH_ISSUER } from "./grok-constants";
 
@@ -376,19 +377,11 @@ export interface GrokTranscribeRequest {
   signal?: AbortSignal;
 }
 
-/** Per-character timing of the spoken text, named as `@ai-sdk/xai` exposes it. */
-export interface GrokAudioTimestamps {
-  /** Input characters, including spaces, punctuation and speech tags. */
-  graphChars: string[];
-  /** `[start, end]` seconds for the character at the same index. */
-  graphTimes: Array<[number, number]>;
-}
-
 export interface GrokSpeechResult {
   audio: Uint8Array;
   mediaType: string;
-  /** Only with `with_timestamps`. */
-  audioTimestamps?: GrokAudioTimestamps;
+  /** Only with `with_timestamps`; named as `@ai-sdk/xai` exposes it. */
+  audioTimestamps?: CharTimestamps;
   durationSec?: number;
   /** Epoch ms when the response headers arrived; /tts is not streamed, so this is first byte. */
   firstByteAt?: number;
