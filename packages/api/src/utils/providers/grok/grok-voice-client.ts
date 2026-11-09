@@ -141,6 +141,11 @@ function invalidBodyError(response: Response, message: string, cause?: unknown):
 }
 
 /** Decodes the `with_timestamps` JSON envelope into audio bytes plus per-character timing. */
+// LAME's 1105-sample encoder delay at the 24 kHz /tts output (SON-589 measured ~46-49 ms).
+const MP3_DECODER_DELAY_SEC = 1105 / 24_000;
+
+const roundMs = (seconds: number) => Math.round(seconds * 1000) / 1000;
+
 async function readTimestampsBody(
   response: Response,
   format: string,
@@ -166,9 +171,16 @@ async function readTimestampsBody(
   };
 
   if (parsed.audio_timestamps) {
+    // Timing refers to the audio before mp3 encoding. The mp3 has no gapless tag, so decoders keep
+    // the encoder delay and play the speech later; shift the timing to match what plays.
+    const shift = result.mediaType === "audio/mpeg" ? MP3_DECODER_DELAY_SEC : 0;
+
     result.audioTimestamps = {
       graphChars: parsed.audio_timestamps.graph_chars,
-      graphTimes: parsed.audio_timestamps.graph_times,
+      graphTimes: parsed.audio_timestamps.graph_times.map(([start, end]): [number, number] => [
+        roundMs(start + shift),
+        roundMs(end + shift),
+      ]),
     };
   }
 

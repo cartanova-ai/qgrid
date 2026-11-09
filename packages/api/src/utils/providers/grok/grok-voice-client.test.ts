@@ -230,7 +230,7 @@ describe("GrokVoiceClient.speak", () => {
     });
   });
 
-  it("asks for timestamps and decodes the JSON envelope into audio plus character timing", async () => {
+  it("asks for timestamps and decodes the JSON envelope, shifting mp3 timing by the encoder delay", async () => {
     const fake = fakeFetch(
       () =>
         new Response(
@@ -251,11 +251,12 @@ describe("GrokVoiceClient.speak", () => {
     expect(result.audio).toEqual(mp3);
     expect(result.mediaType).toBe("audio/mpeg");
     expect(result.durationSec).toBe(0.5);
+    // +46 ms: the mp3 decoder delay (1105 samples at 24 kHz).
     expect(result.audioTimestamps).toEqual({
       graphChars: ["H", "i"],
       graphTimes: [
-        [0.08, 0.2],
-        [0.2, 0.5],
+        [0.126, 0.246],
+        [0.246, 0.546],
       ],
     });
   });
