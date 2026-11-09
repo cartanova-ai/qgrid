@@ -58,6 +58,28 @@ describe("qgrid.transcription with AI SDK transcribe", () => {
     expect(result.providerMetadata.qgrid).toEqual({ tokenName: "grok/main", requestLogId: 5 });
   });
 
+  it("maps Grok word timing to AI SDK segments", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          text: "hello world",
+          model: "grok/grok-voice-transcribe-2.0",
+          tokenName: "grok/main",
+          words: [
+            { text: "hello", start: 0.1, end: 0.4 },
+            { text: "world", start: 0.5, end: 0.9 },
+          ],
+        }),
+      ),
+    );
+    const result = await transcribe({ model: qgrid.transcription("grok/grok-voice-transcribe-2.0"), audio: mp3 });
+    expect(result.segments).toEqual([
+      { text: "hello", startSecond: 0.1, endSecond: 0.4 },
+      { text: "world", startSecond: 0.5, endSecond: 0.9 },
+    ]);
+  });
+
   it("passes base64 strings through and strips media type parameters", async () => {
     const fetchMock = mockTranscribe();
     const model = qgrid.transcription("grok/grok-voice-transcribe-2.0");

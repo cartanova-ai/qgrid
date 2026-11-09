@@ -7,9 +7,14 @@ import PlayIcon from "~icons/lucide/play";
 import SquareIcon from "~icons/lucide/square";
 import XIcon from "~icons/lucide/x";
 
-import { type SpeakInput, type TranscribeInput } from "@/services/qgrid/qgrid.types";
+import {
+  type SpeakInput,
+  type SpeakOutput,
+  type TranscribeInput,
+} from "@/services/qgrid/qgrid.types";
 import { QgridService } from "@/services/services.generated";
 
+import { TimedPlayer, type TimedWord } from "./TimedPlayer";
 import { audioToWavBase64 } from "./voice-audio";
 
 const PROJECT_NAME = "qgrid_voice";
@@ -155,6 +160,33 @@ function History({ empty, children }: { empty: string; children: React.ReactNode
   );
 }
 
+/** Words from per-character timing (Grok TTS shape): each run of non-space characters is a word. */
+function wordsFromCharTimes(timestamps: SpeakOutput["audioTimestamps"]): TimedWord[] | undefined {
+  if (!timestamps) return undefined;
+  const words: TimedWord[] = [];
+  let current: TimedWord | undefined;
+
+  timestamps.graphChars.forEach((char, i) => {
+    const [start, end] = timestamps.graphTimes[i]!;
+
+    if (/\s/.test(char)) {
+      current = undefined;
+
+      return;
+    }
+
+    if (current) {
+      current.text += char;
+      current.end = end;
+    } else {
+      current = { text: char, start, end };
+      words.push(current);
+    }
+  });
+
+  return words;
+}
+
 type TtsItem = {
   key: number;
   src: string;
@@ -164,6 +196,8 @@ type TtsItem = {
   text: string;
   elapsedMs: number;
   requestLogId?: number;
+  words?: TimedWord[];
+  timing?: string;
 };
 
 function TtsPanel() {
@@ -172,6 +206,7 @@ function TtsPanel() {
   const [instructions, setInstructions] = useState("");
   const [text, setText] = useState("Hi! What did you do this weekend?");
   const [history, setHistory] = useState<TtsItem[]>([]);
+  const [withTimestamps, setWithTimestamps] = useState(true);
   const nextKey = useRef(0);
   const speak = QgridService.useSpeakMutation();
   const openai = isOpenAI(model);
@@ -190,6 +225,8 @@ function TtsPanel() {
 
     if (style) params.instructions = style;
 
+    if (withTimestamps) params.withTimestamps = true;
+
     speak.mutate(
       { params },
       {
@@ -203,6 +240,14 @@ function TtsPanel() {
             text,
             elapsedMs: performance.now() - startedAt,
             requestLogId: out.requestLogId,
+            words: wordsFromCharTimes(out.audioTimestamps),
+            timing: out.timestampsError
+              ? `timing failed: ${out.timestampsError}`
+              : out.timestampsSource === "aligned"
+                ? "timing aligned via Grok STT"
+                : out.timestampsSource === "provider"
+                  ? "timing from Grok TTS"
+                  : undefined,
           };
 
           setHistory((items) => [item, ...items]);
@@ -329,6 +374,15 @@ function TtsPanel() {
             {speak.isPending && <LoaderIcon className="size-3.5 animate-spin" />}
             Generate with {voice}
           </button>
+          <label className="flex items-center gap-1.5 text-[12px] text-sand-600">
+            <input
+              type="checkbox"
+              checked={withTimestamps}
+              onChange={(e) => setWithTimestamps(e.target.checked)}
+              className="accent-sienna-500"
+            />
+            Word timing
+          </label>
           {speak.isError && (
             <p className="text-[12px] text-danger-500 break-words">{speak.error?.message}</p>
           )}
@@ -340,16 +394,21 @@ function TtsPanel() {
             <HistoryRow
               key={item.key}
               title={`${item.voice} · ${shortModel(item.model)}`}
-              meta={`${(item.elapsedMs / 1000).toFixed(1)}s`}
+              meta={[`${(item.elapsedMs / 1000).toFixed(1)}s`, item.timing]
+                .filter(Boolean)
+                .join(" · ")}
               requestLogId={item.requestLogId}
               onRemove={() => setHistory((items) => items.filter((i) => i.key !== item.key))}
             >
-              <p className="truncate text-[12px] text-sand-600" title={item.text}>
-                {item.text}
-                {item.instructions && <span className="text-sand-400"> — {item.instructions}</span>}
-              </p>
-              {/* oxlint-disable-next-line jsx-a11y/media-has-caption -- the spoken text is printed above the player. */}
-              <audio controls autoPlay src={item.src} className="h-8 w-full" />
+              {(!item.words || item.instructions) && (
+                <p className="truncate text-[12px] text-sand-600" title={item.text}>
+                  {!item.words && item.text}
+                  {item.instructions && (
+                    <span className="text-sand-400"> — {item.instructions}</span>
+                  )}
+                </p>
+              )}
+              <TimedPlayer src={item.src} words={item.words} autoPlay />
             </HistoryRow>
           ))}
         </History>
@@ -368,6 +427,7 @@ type SttItem = {
   elapsedMs: number;
   durationSec?: number;
   requestLogId?: number;
+  words?: TimedWord[];
 };
 
 function SttPanel() {
@@ -470,6 +530,7 @@ function SttPanel() {
             elapsedMs: performance.now() - startedAt,
             durationSec: out.durationSec,
             requestLogId: out.requestLogId,
+            words: out.words,
           };
 
           setHistory((items) => [item, ...items]);
@@ -566,9 +627,13 @@ function SttPanel() {
               requestLogId={item.requestLogId}
               onRemove={() => setHistory((items) => items.filter((i) => i.key !== item.key))}
             >
-              <p className="rounded-lg bg-sand-50 px-3 py-2 text-[13px] text-sand-800 whitespace-pre-wrap">
-                {item.text || "(empty transcript)"}
-              </p>
+              {item.words && item.words.length > 0 ? (
+                <TimedPlayer src={item.clipUrl} words={item.words} />
+              ) : (
+                <p className="rounded-lg bg-sand-50 px-3 py-2 text-[13px] text-sand-800 whitespace-pre-wrap">
+                  {item.text || "(empty transcript)"}
+                </p>
+              )}
             </HistoryRow>
           ))}
         </History>

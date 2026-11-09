@@ -80,9 +80,11 @@ import {
   OPENAI_REALTIME_DEFAULT_SPEECH_MODEL,
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
   OPENAI_REALTIME_DEFAULT_VOICE,
+  OPENAI_REALTIME_SAMPLE_RATE,
   wrapPcmAsWav,
 } from "../../utils/providers/openai/openai-realtime-protocol";
 import { OpenAIVoiceInputError } from "../../utils/providers/openai/openai-voice-client";
+import { alignScriptToWords, wordsFromCharTimestamps } from "../../utils/speech-alignment";
 import {
   type FinishRunParams,
   MICRO_USD,
@@ -1166,6 +1168,35 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<TranscribeOutpu
 }
 
 /**
+ * OpenAI realtime speech carries no timing, so the generated audio is transcribed with Grok STT and
+ * the heard words are aligned to the script (`alignScriptToWords`). The Grok call goes through the
+ * Grok dispatcher on an automatically selected token, like any Grok STT request.
+ */
+async function alignOpenAISpeech(wav: Uint8Array, script: string, signal: AbortSignal) {
+  const selection = await resolveGrokTokenSelection(undefined);
+
+  const dispatched = await grokVoice().transcribe({
+    audio: wav,
+    mediaType: "audio/wav",
+    model: GROK_STT_DEFAULT_MODEL,
+    signal,
+    ...selection,
+  });
+
+  const words = dispatched.result.words ?? [];
+
+  if (words.length === 0) throw new Error("Grok STT returned no word timing");
+  // 44-byte WAV header, PCM16 mono at the realtime sample rate.
+  const durationSec = (wav.byteLength - 44) / (2 * OPENAI_REALTIME_SAMPLE_RATE);
+
+  return {
+    ...alignScriptToWords(script, words, durationSec),
+    durationSec,
+    heard: dispatched.result.text,
+  };
+}
+
+/**
  * OpenAI realtime speech (openai/<id>): a conversational realtime model repeating the text over
  * the direct realtime socket. Output is PCM16 24 kHz, wrapped as WAV unless `format` is pcm.
  */
@@ -1216,10 +1247,21 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
     if (requestLogId !== undefined) output.requestLogId = requestLogId;
 
     // pcm output is always 24 kHz PCM16, so the log copy is wrapped as WAV to stay playable.
-    const logAudio =
-      mediaType === "audio/wav"
-        ? output.audio
-        : Buffer.from(wrapPcmAsWav(audio)).toString("base64");
+    const wav = mediaType === "audio/wav" ? audio : wrapPcmAsWav(audio);
+    const logAudio = mediaType === "audio/wav" ? output.audio : Buffer.from(wav).toString("base64");
+    let alignment: Awaited<ReturnType<typeof alignOpenAISpeech>> | undefined;
+
+    if (input.withTimestamps) {
+      try {
+        alignment = await alignOpenAISpeech(wav, input.text, signal);
+        output.audioTimestamps = alignment.audioTimestamps;
+        output.durationSec = alignment.durationSec;
+        output.timestampsSource = "aligned";
+      } catch (error) {
+        // The speech itself succeeded; timing is best-effort and its failure is reported, not thrown.
+        output.timestampsError = error instanceof Error ? error.message : String(error);
+      }
+    }
 
     const log: MediaRunLog = {
       tokenName: output.tokenName,
@@ -1235,6 +1277,7 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
             voice: request.voice,
             format: request.format ?? "wav",
             instructions: input.instructions,
+            withTimestamps: input.withTimestamps,
             characters: input.text.length,
           },
           result: JSON.stringify({
@@ -1242,6 +1285,14 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
             audioBytes: audio.byteLength,
             transcript,
             usage,
+            alignment: alignment && {
+              heard: alignment.heard,
+              matchedWords: alignment.matchedWords,
+              scriptWords: alignment.scriptWords,
+            },
+            timestampsError: output.timestampsError,
+            // Word timing for the request-log detail player.
+            words: alignment && wordsFromCharTimestamps(alignment.audioTimestamps),
           }),
         },
       ],
@@ -2227,7 +2278,7 @@ class QgridFrameClass extends BaseFrameClass {
         ...selection,
       });
 
-      const { text, language, duration } = dispatched.result;
+      const { text, language, duration, words } = dispatched.result;
 
       const output: TranscribeOutput = { text, model: route, tokenName: dispatched.tokenName };
 
@@ -2236,6 +2287,8 @@ class QgridFrameClass extends BaseFrameClass {
       if (duration !== undefined) output.durationSec = duration;
 
       if (requestLogId !== undefined) output.requestLogId = requestLogId;
+
+      if (words) output.words = words.map((w) => ({ text: w.text, start: w.start, end: w.end }));
 
       const log: MediaRunLog = {
         tokenName: output.tokenName,
@@ -2255,6 +2308,8 @@ class QgridFrameClass extends BaseFrameClass {
               text: output.text,
               language: output.language,
               durationSec: output.durationSec,
+              // Word timing of the input audio for the request-log detail player.
+              words: output.words,
             }),
           },
         ],
@@ -2269,17 +2324,7 @@ class QgridFrameClass extends BaseFrameClass {
   async speak(params: SpeakInput): Promise<SpeakOutput> {
     const input = parseMediaInput(SpeakInput, params);
 
-    if (voiceProvider(input.model) === "openai") {
-      if (input.withTimestamps) {
-        throw new BadRequestException(
-          SD("qgrid.openaiVoiceInvalidRequest")(
-            "withTimestamps is available only for grok/ speech; OpenAI realtime has no timing data",
-          ),
-        );
-      }
-
-      return speakOpenAI(input);
-    }
+    if (voiceProvider(input.model) === "openai") return speakOpenAI(input);
 
     const voice = grokVoice();
     const selection = await resolveGrokTokenSelection(input.tokenName);
@@ -2315,6 +2360,7 @@ class QgridFrameClass extends BaseFrameClass {
 
       if (dispatched.result.audioTimestamps) {
         output.audioTimestamps = dispatched.result.audioTimestamps;
+        output.timestampsSource = "provider";
       }
 
       if (dispatched.result.durationSec !== undefined) {
@@ -2341,7 +2387,8 @@ class QgridFrameClass extends BaseFrameClass {
               mimeType: output.mimeType,
               audioBytes,
               durationSec: output.durationSec,
-              timedCharacters: output.audioTimestamps?.graphChars.length,
+              // Word timing for the request-log detail player.
+              words: output.audioTimestamps && wordsFromCharTimestamps(output.audioTimestamps),
             }),
           },
         ],

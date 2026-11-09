@@ -2179,7 +2179,15 @@ describe("QgridFrame Grok media and voice (U11)", () => {
 
   it("transcribe decodes base64 audio and returns the transcript", async () => {
     grok.transcribe!.mockResolvedValueOnce({
-      result: { text: "hello there", language: "en", duration: 1.5 },
+      result: {
+        text: "hello there",
+        language: "en",
+        duration: 1.5,
+        words: [
+          { text: "hello", start: 0.1, end: 0.5, confidence: 0.9 },
+          { text: "there", start: 0.6, end: 1.0 },
+        ],
+      },
       tokenId: 3,
       tokenName: "grok/a",
     });
@@ -2194,6 +2202,11 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       model: "grok/grok-voice-transcribe-2.0",
       tokenName: "grok/a",
       requestLogId: 77,
+      // Word timing passes through without provider-only extras.
+      words: [
+        { text: "hello", start: 0.1, end: 0.5 },
+        { text: "there", start: 0.6, end: 1.0 },
+      ],
     });
     const request = grok.transcribe!.mock.calls[0]![0] as { audio: Uint8Array; mediaType: string; model: string };
     expect(Buffer.from(request.audio).toString()).toBe("RIFFfakewav");
@@ -2270,14 +2283,51 @@ describe("QgridFrame Grok media and voice (U11)", () => {
     const out = await QgridFrame.speak({ text: "hi", withTimestamps: true });
 
     expect(grok.speak).toHaveBeenCalledWith(expect.objectContaining({ with_timestamps: true }));
-    expect(out).toMatchObject({ audioTimestamps, durationSec: 0.3 });
+    expect(out).toMatchObject({ audioTimestamps, durationSec: 0.3, timestampsSource: "provider" });
+    // The step result keeps word timing for the request-log detail player.
+    const step = appendStepMock.mock.calls.at(-1)![1] as { tool_result: string };
+    expect(JSON.parse(step.tool_result).words).toEqual([{ text: "hi", start: 0, end: 0.3 }]);
   });
 
-  it("speak rejects withTimestamps for OpenAI before any log or dispatch", async () => {
-    await expect(
-      QgridFrame.speak({ model: "openai/gpt-realtime-2.1-mini", text: "hi", withTimestamps: true }),
-    ).rejects.toThrow("withTimestamps is available only for grok/");
-    expect(requestLogCreateRunMock).not.toHaveBeenCalled();
+  describe("OpenAI speech withTimestamps", () => {
+    // 0.5 s of silence: 44-byte header + 24,000 bytes of PCM16 at 24 kHz.
+    const wav = new Uint8Array(44 + 24_000);
+    let openaiSpeak: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      openaiSpeak = vi.fn().mockResolvedValue({
+        result: { audio: wav, mediaType: "audio/wav", transcript: "Hi there.", usage: {}, firstAudioAt: Date.now() },
+        tokenName: "openai/a",
+      });
+      Object.assign(QgridDispatcher, { openaiDispatcher: { speak: openaiSpeak } });
+    });
+
+    it("aligns Grok STT word timing to the script", async () => {
+      grok.transcribe!.mockResolvedValueOnce({
+        result: { text: "Hi there.", words: [{ text: "Hi", start: 0.1, end: 0.2 }, { text: "there.", start: 0.25, end: 0.45 }] },
+        tokenId: 3,
+        tokenName: "grok/a",
+      });
+
+      const out = await QgridFrame.speak({ model: "openai/gpt-realtime-2.1-mini", text: "Hi there.", withTimestamps: true });
+
+      expect(grok.transcribe).toHaveBeenCalledWith(expect.objectContaining({ mediaType: "audio/wav", model: "grok-voice-transcribe-2.0" }));
+      expect(out).toMatchObject({ timestampsSource: "aligned", durationSec: 0.5 });
+      expect(out.audioTimestamps?.graphChars.join("")).toBe("Hi there.");
+      const [start, end] = out.audioTimestamps!.graphTimes[0]!;
+      expect(start).toBe(0.1);
+      expect(end).toBeCloseTo(0.15);
+    });
+
+    it("still returns the audio when the timing step fails", async () => {
+      grok.transcribe!.mockRejectedValueOnce(new Error("grok down"));
+
+      const out = await QgridFrame.speak({ model: "openai/gpt-realtime-2.1-mini", text: "Hi there.", withTimestamps: true });
+
+      expect(out.audio).toBe(Buffer.from(wav).toString("base64"));
+      expect(out.audioTimestamps).toBeUndefined();
+      expect(out.timestampsError).toBe("grok down");
+    });
   });
 
   it("speak keeps the byte-count placeholder for audio a browser cannot play", async () => {

@@ -274,6 +274,18 @@ export const GrokSttResponse = z.looseObject({
   text: z.string(),
   language: z.string().optional(),
   duration: z.number().nonnegative().optional(),
+  // Word-level timing, sent by default (verified on the subscription token 2026-11-09); `speaker`
+  // only with diarize.
+  words: z
+    .array(
+      z.looseObject({
+        text: z.string(),
+        start: z.number(),
+        end: z.number(),
+        speaker: z.number().optional(),
+      }),
+    )
+    .optional(),
 });
 
 export type GrokSttResponse = z.infer<typeof GrokSttResponse>;

@@ -485,9 +485,9 @@ const speech = await generateSpeech({
 speech.audio.uint8Array;
 ```
 
-- `transcribe`는 bytes로 오디오 형식을 감지하고 실패하면 `audio/wav`를 씁니다. 서버는 `audio/*`가 아닌 값을 거부합니다. transcript에는 segment가 없습니다(`segments: []`).
+- `transcribe`는 bytes로 오디오 형식을 감지하고 실패하면 `audio/wav`를 씁니다. 서버는 `audio/*`가 아닌 값을 거부합니다. Grok transcript는 들린 단어마다 segment 하나를 담습니다(`segments: [{ text, startSecond, endSecond }]`, 2.17.0+). OpenAI realtime transcript에는 없습니다.
 - 음성 합성 텍스트는 최대 15,000자입니다. `voice`, `language`, `outputFormat`을 지정하지 않으면 서버 기본값 `ara`, `en`, `mp3`가 쓰이며, live 검증된 조합은 이것뿐입니다. 다른 voice, language(`@ai-sdk/xai`의 `auto` 포함), codec은 그대로 전달되지만 미검증입니다. 서버가 돌려준 오디오 MIME 타입은 `providerMetadata.qgrid.mediaType`에 있고, AI SDK의 `speech.audio.mediaType`은 bytes에서 추정한 값입니다.
-- `providerOptions: { xai: { withTimestamps: true } }`(2.16.0+, Grok 전용)를 주면 글자별 타이밍이 `providerMetadata.qgrid.audioTimestamps`에 담깁니다. `graphChars`는 입력 글자(공백·문장부호·음성 태그 포함), `graphTimes`는 같은 인덱스의 `[start, end]` 초이고, 전체 길이는 `providerMetadata.qgrid.duration`입니다. `@ai-sdk/xai`가 `providerMetadata.xai`에 담는 모양과 같습니다. 텍스트 정규화로 풀린 토큰은 첫 글자가 전체 구간을 가집니다. `qgrid.speech("openai/...")`는 타이밍 데이터가 없어 서버가 `withTimestamps`를 HTTP 400으로 거부합니다.
+- 단어 타이밍: `providerOptions: { xai: { withTimestamps: true } }`(2.16.0+, Grok) 또는 `providerOptions: { qgrid: { withTimestamps: true } }`(2.17.0+, Grok·OpenAI)를 주면 글자별 타이밍이 `providerMetadata.qgrid.audioTimestamps`에 담깁니다. `graphChars`는 입력 글자(공백·문장부호·음성 태그 포함), `graphTimes`는 같은 인덱스의 `[start, end]` 초이고, 전체 길이는 `providerMetadata.qgrid.duration`입니다. `@ai-sdk/xai`가 `providerMetadata.xai`에 담는 모양과 같습니다. `providerMetadata.qgrid.timestampsSource`는 Grok이면 `"provider"`(Grok이 직접 잰 값), OpenAI면 `"aligned"`입니다. OpenAI는 서버가 생성된 오디오를 Grok STT로 받아쓰고 단어 단위로 원문과 짝지어 만듭니다(못 들은 단어는 앞뒤 단어 사이 구간을 나눠 가짐). 타이밍 단계가 실패해도 오디오는 돌려주고, 메타데이터에 `timestampsError`와 AI SDK warning을 남깁니다. 텍스트 정규화로 풀린 토큰은 첫 글자가 전체 구간을 가집니다.
 
 ### OpenAI 음성 인식과 합성 (ChatGPT 구독)
 

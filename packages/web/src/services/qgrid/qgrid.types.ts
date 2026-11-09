@@ -535,6 +535,12 @@ export const TranscribeInput = z.object({
 
 export type TranscribeInput = z.infer<typeof TranscribeInput>;
 
+const TranscribedWord = z.object({
+  text: z.string(),
+  start: z.number(),
+  end: z.number(),
+});
+
 export const TranscribeOutput = z.object({
   text: z.string(),
   language: z.string().optional(),
@@ -542,6 +548,9 @@ export const TranscribeOutput = z.object({
   model: z.string(),
   tokenName: z.string(),
   requestLogId: z.number().optional(),
+  // Grok only: each heard word with its [start, end] seconds. OpenAI realtime transcription
+  // reports no timing.
+  words: z.array(TranscribedWord).optional(),
 });
 
 export type TranscribeOutput = z.infer<typeof TranscribeOutput>;
@@ -554,8 +563,9 @@ export const SpeakInput = z.object({
   format: z.enum(["mp3", "wav", "pcm", "mulaw", "alaw"]).optional(),
   // OpenAI realtime speech only: style guidance appended to the verbatim-repeat instruction.
   instructions: z.string().min(1).max(2_000).optional(),
-  // Grok speech only: per-character timing in the output (`audioTimestamps`). OpenAI realtime has
-  // no timing data and rejects it with 400.
+  // Per-character timing in the output (`audioTimestamps`). Grok returns it natively; for OpenAI
+  // realtime (no timing data) qgrid transcribes the generated audio with Grok STT and aligns the
+  // heard words to the text (`timestampsSource: "aligned"`).
   withTimestamps: z.boolean().optional(),
   ...MediaCallOptions,
 });
@@ -577,6 +587,11 @@ export const SpeakOutput = z.object({
     })
     .optional(),
   durationSec: z.number().optional(),
+  // "provider" when the TTS provider timed the audio itself, "aligned" when qgrid inferred it from
+  // Grok STT word timing.
+  timestampsSource: z.enum(["provider", "aligned"]).optional(),
+  // Set when timestamps were requested but could not be produced; the audio is still returned.
+  timestampsError: z.string().optional(),
 });
 
 export type SpeakOutput = z.infer<typeof SpeakOutput>;

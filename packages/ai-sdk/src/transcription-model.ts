@@ -102,6 +102,7 @@ const transcribeOutputSchema = z.object({
   model: z.string(),
   tokenName: z.string(),
   requestLogId: z.number().optional(),
+  words: z.array(z.object({ text: z.string(), start: z.number(), end: z.number() })).optional(),
 });
 
 // "audio/webm;codecs=opus" → "audio/webm": the server accepts the bare type only.
@@ -194,8 +195,12 @@ export function createQgridTranscription(
 
       return {
         text: data.text,
-        // The qgrid server returns no word or segment timings.
-        segments: [],
+        // Grok reports each heard word's timing; OpenAI realtime transcription reports none.
+        segments: (data.words ?? []).map((word) => ({
+          text: word.text,
+          startSecond: word.start,
+          endSecond: word.end,
+        })),
         // OpenAI: echo of the requested language (the realtime session reports none) and a
         // duration computed from the PCM qgrid sent.
         language: data.language,

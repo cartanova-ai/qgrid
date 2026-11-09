@@ -102,6 +102,44 @@ describe("qgrid.speech with AI SDK generateSpeech", () => {
 });
 
 describe("qgrid.speech with openai/ models", () => {
+  it("asks for aligned timestamps with qgrid.withTimestamps and warns when they are unavailable", async () => {
+    const wav = Buffer.from("RIFF0000WAVEfmt ");
+    const audioTimestamps = { graphChars: ["H", "i"], graphTimes: [[0.1, 0.2], [0.2, 0.3]] };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          audio: wav.toString("base64"),
+          mimeType: "audio/wav",
+          tokenName: "openai/main",
+          audioTimestamps,
+          durationSec: 0.4,
+          timestampsSource: "aligned",
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          audio: wav.toString("base64"),
+          mimeType: "audio/wav",
+          tokenName: "openai/main",
+          timestampsError: "grok down",
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const model = qgrid.speech("openai/gpt-realtime-2.1-mini");
+    const providerOptions = { qgrid: { withTimestamps: true } };
+
+    const aligned = await generateSpeech({ model, text: "Hi", providerOptions });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).params).toMatchObject({ withTimestamps: true });
+    expect(aligned.providerMetadata.qgrid).toMatchObject({ audioTimestamps, duration: 0.4, timestampsSource: "aligned" });
+    expect(aligned.warnings).toEqual([]);
+
+    const failed = await generateSpeech({ model, text: "Hi", providerOptions });
+    expect(failed.providerMetadata.qgrid).toMatchObject({ timestampsError: "grok down" });
+    expect(failed.warnings).toEqual([{ type: "other", message: "timestamps unavailable: grok down" }]);
+  });
+
   it("maps voice, instructions and outputFormat; warns like @ai-sdk/openai for language and speed", async () => {
     vi.stubEnv("QGRID_URL", "https://qgrid.example");
     const wav = Buffer.from("RIFF0000WAVEfmt ");

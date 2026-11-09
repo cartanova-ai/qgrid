@@ -13,6 +13,7 @@ import CopyIcon from "~icons/lucide/copy";
 import XIcon from "~icons/lucide/x";
 import ZapIcon from "~icons/lucide/zap";
 
+import { TimedPlayer, type TimedWord } from "@/components/qgrid/TimedPlayer";
 import { cacheHitRate, formatMicroUsd } from "@/lib/cost";
 import { requestModelDisplay } from "@/lib/request-model";
 import { type ToolDefinitions, type ToolView } from "@/services/request-log/request-log.types";
@@ -134,7 +135,16 @@ function parseImageSegments(text: string): ImageSegment[] {
   return segments.filter((segment) => segment.type !== "text" || segment.text.trim().length > 0);
 }
 
-function ImageAwareContent({ text, markdown }: { text: string; markdown?: boolean }) {
+function ImageAwareContent({
+  text,
+  markdown,
+  audioWords,
+}: {
+  text: string;
+  markdown?: boolean;
+  /** Word timing for an embedded audio clip (voice rows); renders it with clickable words. */
+  audioWords?: TimedWord[];
+}) {
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const segments = parseImageSegments(text);
   const hasImage = segments.some((segment) => segment.type !== "text");
@@ -168,8 +178,14 @@ function ImageAwareContent({ text, markdown }: { text: string; markdown?: boolea
             </pre>
           )
         ) : segment.type === "audio" ? (
-          // oxlint-disable-next-line jsx-a11y/media-has-caption -- the spoken text is the user prompt shown above.
-          <audio key={`audio-${index}`} controls src={segment.src} className="w-full max-w-md" />
+          audioWords ? (
+            <div key={`audio-${index}`} className="flex max-w-xl flex-col gap-2">
+              <TimedPlayer src={segment.src} words={audioWords} className="w-full max-w-md" />
+            </div>
+          ) : (
+            // oxlint-disable-next-line jsx-a11y/media-has-caption -- the spoken text is the user prompt shown above.
+            <audio key={`audio-${index}`} controls src={segment.src} className="w-full max-w-md" />
+          )
         ) : (
           <button
             key={`image-${index}`}
@@ -214,7 +230,15 @@ function ImageAwareContent({ text, markdown }: { text: string; markdown?: boolea
   );
 }
 
-function FormattedContent({ text, markdown }: { text: string; markdown?: boolean }) {
+function FormattedContent({
+  text,
+  markdown,
+  audioWords,
+}: {
+  text: string;
+  markdown?: boolean;
+  audioWords?: TimedWord[];
+}) {
   const parsed = tryParseJson(text);
   const [mode, setMode] = useState<"pretty" | "plain">("pretty");
 
@@ -223,7 +247,7 @@ function FormattedContent({ text, markdown }: { text: string; markdown?: boolean
 
   if (!parsed.ok || jsonContainer === null) {
     if (markdown) {
-      return <ImageAwareContent text={text} markdown />;
+      return <ImageAwareContent text={text} markdown audioWords={audioWords} />;
     }
 
     return <ImageAwareContent text={parsed.ok ? JSON.stringify(parsed.value, null, 2) : text} />;
@@ -695,6 +719,27 @@ function ToolInputImages({ images }: { images: ToolInputImage[] }) {
       </div>
     </div>
   );
+}
+
+const VoiceStepResult = z.object({
+  words: z.array(z.object({ text: z.string(), start: z.number(), end: z.number() })).optional(),
+});
+
+/**
+ * Voice rows keep their word timing in the speech/transcription step result (TTS output words, or
+ * the words heard in the STT input). The step is fetched once so the embedded clip can show its
+ * words; rows without timing render as plain content.
+ */
+function VoiceAwareContent({ text, stepId }: { text: string; stepId: number | null }) {
+  const { data: detail } = RequestLogStepService.useRequestLogStep("A", stepId ?? 0, {
+    enabled: stepId !== null,
+  });
+
+  const words = detail
+    ? VoiceStepResult.safeParse(safeParseJson(detail.tool_result)).data?.words
+    : undefined;
+
+  return <FormattedContent text={text} markdown audioWords={words} />;
 }
 
 // run.input_images가 없는 이전 이미지 생성 로그는 첫 image_generation step에서 읽는다.
@@ -1399,6 +1444,11 @@ function RequestDetail({ id }: { id: number }) {
   const firstImageGenerationStepId =
     toolCalls.find((toolCall) => toolCall.toolName === "image_generation")?.id ?? null;
 
+  const voiceStepId =
+    toolCalls.find(
+      (toolCall) => toolCall.toolName === "speech" || toolCall.toolName === "transcription",
+    )?.id ?? null;
+
   const hasSteps = stepTree.length > 0;
   const tokensPerSecEnabled = isTokensPerSecEnabled(data);
   const history = data.history ?? null;
@@ -1421,7 +1471,11 @@ function RequestDetail({ id }: { id: number }) {
         <div className="space-y-3">
           <div className="relative">
             <CopyButton text={data.user_prompt ?? "null"} />
-            <FormattedContent text={data.user_prompt ?? "null"} markdown />
+            {data.media_kind === "stt" ? (
+              <VoiceAwareContent text={data.user_prompt ?? "null"} stepId={voiceStepId} />
+            ) : (
+              <FormattedContent text={data.user_prompt ?? "null"} markdown />
+            )}
           </div>
           <RequestInputImages images={data.input_images} stepId={firstImageGenerationStepId} />
         </div>
@@ -1467,7 +1521,11 @@ function RequestDetail({ id }: { id: number }) {
       <Section title="Response">
         <div className="relative">
           <CopyButton text={data.response} />
-          <FormattedContent text={data.response} markdown />
+          {data.media_kind === "tts" ? (
+            <VoiceAwareContent text={data.response} stepId={voiceStepId} />
+          ) : (
+            <FormattedContent text={data.response} markdown />
+          )}
         </div>
       </Section>
 

@@ -96,7 +96,37 @@ const speakOutputSchema = z.object({
     })
     .optional(),
   durationSec: z.number().optional(),
+  timestampsSource: z.enum(["provider", "aligned"]).optional(),
+  timestampsError: z.string().optional(),
 });
+
+/**
+ * `providerOptions.qgrid.withTimestamps` works for both providers (OpenAI has no official option
+ * for it). `parse*QgridOptions` drop unknown keys, so it is read here directly.
+ */
+const qgridTimestampsOptionSchema = z.looseObject({ withTimestamps: z.boolean().optional() });
+
+function qgridWantsTimestamps(raw: JSONObject | undefined): boolean {
+  return qgridTimestampsOptionSchema.safeParse(raw).data?.withTimestamps === true;
+}
+
+/** Shared speech metadata: timing fields plus a warning when requested timing could not be made. */
+function speechTimingMetadata(
+  data: z.infer<typeof speakOutputSchema>,
+  metadata: JSONObject,
+  warnings: SharedV3Warning[],
+): void {
+  if (data.audioTimestamps) metadata.audioTimestamps = data.audioTimestamps;
+
+  if (data.durationSec !== undefined) metadata.duration = data.durationSec;
+
+  if (data.timestampsSource) metadata.timestampsSource = data.timestampsSource;
+
+  if (data.timestampsError) {
+    metadata.timestampsError = data.timestampsError;
+    warnings.push({ type: "other", message: `timestamps unavailable: ${data.timestampsError}` });
+  }
+}
 
 function base64ToBytes(data: string): Uint8Array {
   if (typeof Buffer !== "undefined") return new Uint8Array(Buffer.from(data, "base64"));
@@ -177,7 +207,12 @@ export function createQgridSpeech(
 
       if (format !== undefined) requestParams.format = format;
 
-      if (xai.options?.withTimestamps === true) requestParams.withTimestamps = true;
+      if (
+        xai.options?.withTimestamps === true ||
+        qgridWantsTimestamps(options.providerOptions?.qgrid)
+      ) {
+        requestParams.withTimestamps = true;
+      }
 
       if (projectName) requestParams.projectName = projectName;
       const params: JSONObject = { ...requestParams, ...qgridOptions };
@@ -199,9 +234,7 @@ export function createQgridSpeech(
 
       if (data.requestLogId !== undefined) qgridMetadata.requestLogId = data.requestLogId;
 
-      if (data.audioTimestamps) qgridMetadata.audioTimestamps = data.audioTimestamps;
-
-      if (data.durationSec !== undefined) qgridMetadata.duration = data.durationSec;
+      speechTimingMetadata(data, qgridMetadata, warnings);
 
       return {
         audio: base64ToBytes(data.audio),
@@ -220,6 +253,8 @@ export function createQgridSpeech(
  * (default `marin`, Codex v2 list), `outputFormat` `wav` (default) or `pcm` — other formats
  * warn and fall back to wav, as the official provider falls back to mp3 — `openai.instructions`
  * as style guidance, `openai.speed` and `language` unsupported with the official warning text.
+ * `providerOptions.qgrid.withTimestamps` returns timing the server infers by aligning a Grok STT
+ * pass over the generated audio (`providerMetadata.qgrid.timestampsSource: "aligned"`).
  */
 function createOpenAISpeech(
   modelId: QgridSpeechModel,
@@ -284,6 +319,8 @@ function createOpenAISpeech(
 
       if (instructions !== undefined) requestParams.instructions = instructions;
 
+      if (qgridWantsTimestamps(options.providerOptions?.qgrid)) requestParams.withTimestamps = true;
+
       if (projectName) requestParams.projectName = projectName;
       const params: JSONObject = { ...requestParams, ...qgridOptions };
 
@@ -303,6 +340,8 @@ function createOpenAISpeech(
       const qgridMetadata: JSONObject = { mediaType: data.mimeType, tokenName: data.tokenName };
 
       if (data.requestLogId !== undefined) qgridMetadata.requestLogId = data.requestLogId;
+
+      speechTimingMetadata(data, qgridMetadata, warnings);
 
       return {
         audio: base64ToBytes(data.audio),
