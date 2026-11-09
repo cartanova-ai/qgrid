@@ -104,32 +104,40 @@ function CopyButton({ text, dark }: { text: string; dark?: boolean }) {
   );
 }
 
-type ImageSegment = { type: "text"; text: string } | { type: "image"; src: string; alt: string };
+type ImageSegment =
+  | { type: "text"; text: string }
+  | { type: "image"; src: string; alt: string }
+  | { type: "audio"; src: string };
 
-const DATA_IMAGE_TAG_RE =
-  /<img\s+[^>]*src=["'](data:image\/[^"']+;base64,[^"']+)["'][^>]*(?:alt=["']([^"']*)["'][^>]*)?\/?>/gi;
+// Image rows embed `<img src="data:image/...">`; speech rows embed `<audio src="data:audio/...">`.
+const DATA_MEDIA_TAG_RE =
+  /<img\s+[^>]*src=["'](data:image\/[^"']+;base64,[^"']+)["'][^>]*(?:alt=["']([^"']*)["'][^>]*)?\/?>|<audio\s+[^>]*src=["'](data:audio\/[^"']+;base64,[^"']+)["'][^>]*>(?:<\/audio>)?/gi;
 
 function parseImageSegments(text: string): ImageSegment[] {
   const segments: ImageSegment[] = [];
   let cursor = 0;
 
-  for (const match of text.matchAll(DATA_IMAGE_TAG_RE)) {
+  for (const match of text.matchAll(DATA_MEDIA_TAG_RE)) {
     const index = match.index ?? 0;
 
     if (index > cursor) segments.push({ type: "text", text: text.slice(cursor, index) });
-    segments.push({ type: "image", src: match[1], alt: match[2] ?? "generated image" });
+    segments.push(
+      match[3]
+        ? { type: "audio", src: match[3] }
+        : { type: "image", src: match[1], alt: match[2] ?? "generated image" },
+    );
     cursor = index + match[0].length;
   }
 
   if (cursor < text.length) segments.push({ type: "text", text: text.slice(cursor) });
 
-  return segments.filter((segment) => segment.type === "image" || segment.text.trim().length > 0);
+  return segments.filter((segment) => segment.type !== "text" || segment.text.trim().length > 0);
 }
 
 function ImageAwareContent({ text, markdown }: { text: string; markdown?: boolean }) {
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const segments = parseImageSegments(text);
-  const hasImage = segments.some((segment) => segment.type === "image");
+  const hasImage = segments.some((segment) => segment.type !== "text");
 
   if (!hasImage) {
     return markdown ? (
@@ -159,6 +167,9 @@ function ImageAwareContent({ text, markdown }: { text: string; markdown?: boolea
               {segment.text}
             </pre>
           )
+        ) : segment.type === "audio" ? (
+          // oxlint-disable-next-line jsx-a11y/media-has-caption -- the spoken text is the user prompt shown above.
+          <audio key={`audio-${index}`} controls src={segment.src} className="w-full max-w-md" />
         ) : (
           <button
             key={`image-${index}`}

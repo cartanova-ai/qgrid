@@ -22,7 +22,11 @@ import {
   type ProviderId,
 } from "../../utils/providers/common/provider-types";
 import { type RequestLogStepSaveParams } from "../request-log-step/request-log-step.types";
-import { type RequestLogSubsetKey, type RequestLogSubsetMapping } from "../sonamu.generated";
+import {
+  type RequestLogMediaKind,
+  type RequestLogSubsetKey,
+  type RequestLogSubsetMapping,
+} from "../sonamu.generated";
 import { requestLogLoaderQueries, requestLogSubsetQueries } from "../sonamu.generated.sso";
 import { renderJsonSchemaZodText, renderParsedJsonSchemaTypeText } from "./json-schema-type-text";
 import {
@@ -111,9 +115,11 @@ export interface FinishRunParams {
   image_cost_method?: string | null;
   is_image_generation?: boolean;
   response_json_ok?: boolean | null;
+  /** Explicit TTFT for runs without generate steps (speech); otherwise derived from the steps. */
+  ttft_ms?: number;
 }
 
-type FinishRunUpdate = Partial<FinishRunParams> & { id: number; ttft_ms?: number };
+type FinishRunUpdate = Partial<FinishRunParams> & { id: number };
 
 export type RunProgressUpdate = { token_name?: string; model_name?: string; ttft_ms?: number };
 
@@ -544,6 +550,7 @@ class RequestLogModelClass extends BaseModelClass<
     is_image_generation?: boolean;
     is_structured?: boolean;
     json_schema?: string | null;
+    media_kind?: RequestLogMediaKind | null;
   }): Promise<number> {
     const wdb = this.getPuri("w");
 
@@ -569,6 +576,7 @@ class RequestLogModelClass extends BaseModelClass<
       json_schema: params.json_schema ?? null,
       is_structured:
         params.is_structured ?? (params.json_schema !== null && params.json_schema !== undefined),
+      media_kind: params.media_kind ?? null,
     };
 
     if (params.history !== undefined) row.history = params.history;
@@ -643,7 +651,7 @@ class RequestLogModelClass extends BaseModelClass<
     for (const key of fields) copyDefined(update, params, key);
 
     if (params.history !== undefined) update.history = params.history;
-    update.ttft_ms = (await this.firstGenerateStepTtft(requestLogId)) ?? 0;
+    update.ttft_ms = params.ttft_ms ?? (await this.firstGenerateStepTtft(requestLogId)) ?? 0;
 
     // 서버 run 경로는 step 에서 확정한 exact cost 와 출처를 넘긴다. 출처 없이 끝난 외부/legacy
     // run 은 저장된 모델+usage 로 여기서 확정해, 읽기 경로가 다시 계산하지 않게 한다.

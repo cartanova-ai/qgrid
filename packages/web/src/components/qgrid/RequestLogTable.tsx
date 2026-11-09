@@ -106,8 +106,8 @@ const COLUMNS: {
   { label: "Project", align: "left", width: "w-20" },
   { label: "Token", align: "left", width: "w-24" },
   { label: "Model", align: "left", width: "w-20" },
-  // 이미지, structured output(jsonSchema), plain text 를 구분한다.
-  { label: "Fmt", align: "left", width: "w-12" },
+  // 음성(voice/stt·voice/tts), 비디오, 이미지, structured output(jsonSchema), plain text 를 구분한다.
+  { label: "Fmt", align: "left", width: "w-20" },
   // 숫자는 오른쪽 정렬해야 자릿수가 세로로 맞는다 — 6,317 과 34,897 이 왼쪽 정렬이면
   // 끝자리가 어긋나 열이 들쭉날쭉해 보인다.
   { label: "TTFT", align: "right", width: "w-16", sortKey: "ttft_ms" },
@@ -415,7 +415,15 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                       )}
                     </td>
                     <td className="px-4 py-1.5 whitespace-nowrap">
-                      {row.is_image_generation ? (
+                      {row.media_kind === "stt" || row.media_kind === "tts" ? (
+                        <span className="rounded bg-blue-100 px-1.5 py-0.5 font-mono text-[10px] text-blue-700">
+                          voice/{row.media_kind}
+                        </span>
+                      ) : row.media_kind === "video" ? (
+                        <span className="rounded bg-sand-100 px-1.5 py-0.5 font-mono text-[10px] text-sand-700">
+                          video
+                        </span>
+                      ) : row.is_image_generation ? (
                         <span className="rounded bg-sage-100 px-1.5 py-0.5 font-mono text-[10px] text-sage-700">
                           img
                         </span>

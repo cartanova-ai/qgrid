@@ -364,6 +364,8 @@ export interface GrokTranscribeRequest {
 export interface GrokSpeechResult {
   audio: Uint8Array;
   mediaType: string;
+  /** Epoch ms when the response headers arrived; /tts is not streamed, so this is first byte. */
+  firstByteAt?: number;
 }
 
 export interface GrokVoicePort {

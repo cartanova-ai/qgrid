@@ -211,6 +211,7 @@ export class GrokVoiceClient implements GrokVoicePort {
     };
 
     return this.post("/tts", headers, JSON.stringify(body), request.signal, async (response) => {
+      const firstByteAt = Date.now();
       const mediaType = contentMediaType(response);
 
       if (mediaType === "application/json" || mediaType?.startsWith("text/"))
@@ -228,6 +229,7 @@ export class GrokVoiceClient implements GrokVoicePort {
       return {
         audio,
         mediaType: mediaType ?? MEDIA_TYPE_BY_FORMAT.get(body.format) ?? "application/octet-stream",
+        firstByteAt,
       };
     });
   }

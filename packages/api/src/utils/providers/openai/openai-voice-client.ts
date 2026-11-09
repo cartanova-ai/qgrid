@@ -110,6 +110,8 @@ export interface OpenAISpeechResult {
   /** What the model said, from response.output_audio_transcript.done; compare with the input. */
   transcript: string;
   usage: { textTokens: number; audioTokens: number; inputTokens: number; outputTokens: number };
+  /** Epoch ms of the first response.output_audio.delta. */
+  firstAudioAt: number;
 }
 
 export class OpenAIVoiceInputError extends Error {
@@ -548,6 +550,7 @@ export class OpenAIVoiceClient {
         mediaType: format === "wav" ? "audio/wav" : `audio/pcm;rate=${OPENAI_REALTIME_SAMPLE_RATE}`,
         transcript: result.transcript,
         usage: result.usage,
+        firstAudioAt: result.firstAudioAt,
       };
     } catch (error) {
       socket.terminate();
@@ -649,6 +652,7 @@ export class OpenAIVoiceClient {
   private async awaitSpeech(next: () => Promise<SocketRecord>) {
     const chunks: Buffer[] = [];
     let transcript = "";
+    let firstAudioAt = 0;
 
     for (;;) {
       const record = await next();
@@ -670,6 +674,7 @@ export class OpenAIVoiceClient {
       const delta = outputAudioDeltaEvent.safeParse(record.event);
 
       if (delta.success) {
+        if (chunks.length === 0) firstAudioAt = Date.now();
         chunks.push(Buffer.from(delta.data.delta, "base64"));
         continue;
       }
@@ -700,6 +705,7 @@ export class OpenAIVoiceClient {
       return {
         audio,
         transcript,
+        firstAudioAt,
         usage: {
           textTokens: usage?.output_token_details?.text_tokens ?? 0,
           audioTokens: usage?.output_token_details?.audio_tokens ?? 0,

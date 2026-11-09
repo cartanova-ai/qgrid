@@ -154,6 +154,23 @@ describe("RequestLogModel TTFT", () => {
       }),
     );
   });
+
+  it("prefers an explicit ttft_ms for runs without generate steps", async () => {
+    const ubRegister = vi.fn();
+    const transaction = vi.fn(async (cb: (trx: { ubUpsert: () => Promise<number[]> }) => void) =>
+      cb({ ubUpsert: vi.fn(async () => [7]) }),
+    );
+    const derived = vi.spyOn(RequestLogModel, "firstGenerateStepTtft").mockResolvedValue(55);
+    vi.spyOn(
+      RequestLogModel as unknown as { getPuri: () => { ubRegister: typeof ubRegister; transaction: typeof transaction } },
+      "getPuri",
+    ).mockReturnValue({ ubRegister, transaction });
+
+    await RequestLogModel.finishRun(7, { status: "error", error_message: "boom", ttft_ms: 240 });
+
+    expect(ubRegister).toHaveBeenCalledWith("request_logs", expect.objectContaining({ id: 7, ttft_ms: 240 }));
+    expect(derived).not.toHaveBeenCalled();
+  });
 });
 
 describe("RequestLogModel toolsView", () => {

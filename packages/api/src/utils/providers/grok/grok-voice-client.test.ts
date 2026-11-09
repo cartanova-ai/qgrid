@@ -187,10 +187,12 @@ describe("GrokVoiceClient.speak", () => {
       () => new Response(mp3, { status: 200, headers: { "content-type": "audio/mpeg" } }),
     );
     const client = new GrokVoiceClient({ fetch: fake.impl, platform });
+    const before = Date.now();
     const result = await client.speak("tok", { text: "hello", voice: "ara" });
 
     expect(result.mediaType).toBe("audio/mpeg");
     expect(result.audio).toEqual(mp3);
+    expect(result.firstByteAt).toBeGreaterThanOrEqual(before);
     expect(fake.calls).toHaveLength(1);
     const { url, init } = fake.calls[0]!;
     expect(url).toBe("https://api.x.ai/v1/tts");

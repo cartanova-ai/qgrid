@@ -520,7 +520,10 @@ describe("OpenAIVoiceClient.speak", () => {
 
     const pcm = Buffer.alloc(4800, 1);
     socket.message({ type: "response.created" });
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     socket.message({ type: "response.output_audio.delta", delta: pcm.subarray(0, 2400).toString("base64") });
+    await tick();
+    now.mockReturnValue(2_000);
     socket.message({ type: "response.output_audio.delta", delta: pcm.subarray(2400).toString("base64") });
     socket.message({ type: "response.output_audio_transcript.done", transcript: "Hello from qgrid." });
     socket.message({
@@ -537,6 +540,9 @@ describe("OpenAIVoiceClient.speak", () => {
     expect(decodeWav(speech.audio).samples.length).toBe(2400);
     expect(speech.transcript).toBe("Hello from qgrid.");
     expect(speech.usage).toEqual({ textTokens: 30, audioTokens: 32, inputTokens: 30, outputTokens: 62 });
+    // First delta, not the last one or response.done.
+    expect(speech.firstAudioAt).toBe(1_000);
+    now.mockRestore();
   });
 
   it("rejects voices outside the Codex v2 list and empty text before connecting", async () => {

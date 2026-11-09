@@ -80,6 +80,7 @@ import {
   OPENAI_REALTIME_DEFAULT_SPEECH_MODEL,
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
   OPENAI_REALTIME_DEFAULT_VOICE,
+  wrapPcmAsWav,
 } from "../../utils/providers/openai/openai-realtime-protocol";
 import { OpenAIVoiceInputError } from "../../utils/providers/openai/openai-voice-client";
 import {
@@ -784,6 +785,7 @@ async function startMediaRun(
     requested_model_name: start.model,
     project_name: start.projectName,
     is_image_generation: start.kind === "image",
+    media_kind: start.kind,
   });
 }
 
@@ -823,7 +825,19 @@ type MediaLogSuccess = {
   response: string;
   steps: MediaLogSteps;
   cost?: GrokMediaCost;
+  /** Speech only: time to the first audio byte, measured from the same start as `durationMs`. */
+  ttftMs?: number;
 };
+
+// Speech rows embed browser-playable audio so the request-log detail page can play it, as image
+// rows embed their images. Other formats (raw PCM, mu-law, A-law) keep the byte-count placeholder.
+const LOG_PLAYABLE_AUDIO = new Set(["audio/wav", "audio/mpeg"]);
+
+function speechResponseForLog(b64: string, mimeType: string, byteLength: number): string {
+  return LOG_PLAYABLE_AUDIO.has(mimeType)
+    ? `<audio src="data:${mimeType};base64,${b64}"></audio>`
+    : `[audio ${mimeType} ${byteLength} bytes]`;
+}
 
 function mediaToolSteps(
   kind: MediaKind,
@@ -884,6 +898,7 @@ function mediaFinishFields(success: Omit<MediaLogSuccess, "steps">): FinishRunPa
     cache_read_tokens: 0,
     cache_creation_tokens: 0,
     duration_ms: success.durationMs,
+    ...(success.ttftMs !== undefined && { ttft_ms: success.ttftMs }),
     ...mediaCostFields(success.kind, success.model, success.cost),
   };
 }
@@ -952,7 +967,10 @@ async function dispatchMediaCall<T>(
   return result;
 }
 
-type MediaRunLog = Omit<MediaLogSuccess, "kind" | "model" | "durationMs">;
+/** `firstOutputAt` is the epoch-ms first audio byte; the endpoint turns it into `ttftMs`. */
+type MediaRunLog = Omit<MediaLogSuccess, "kind" | "model" | "durationMs" | "ttftMs"> & {
+  firstOutputAt?: number;
+};
 
 /**
  * A one-shot media endpoint: open the run, make the provider call, then log the result. `dispatch`
@@ -968,15 +986,17 @@ async function runMediaEndpoint<T>(
   const requestLogId = await startMediaRun(start.logger, start);
   const startedAt = Date.now();
 
-  const { output, log } = await dispatchMediaCall(requestLogId, (signal) =>
-    dispatch(signal, requestLogId),
-  );
+  const {
+    output,
+    log: { firstOutputAt, ...log },
+  } = await dispatchMediaCall(requestLogId, (signal) => dispatch(signal, requestLogId));
 
   await finishMediaRun(requestLogId, {
     ...log,
     kind: start.kind,
     model: start.model,
     durationMs: Date.now() - startedAt,
+    ...(firstOutputAt !== undefined && { ttftMs: Math.max(0, firstOutputAt - startedAt) }),
   });
 
   return output;
@@ -1172,7 +1192,7 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
 
   return runMediaEndpoint(start, async (signal, requestLogId) => {
     const dispatched = await dispatcher.speak({ ...request, signal, ...selection });
-    const { audio, mediaType, transcript, usage } = dispatched.result;
+    const { audio, mediaType, transcript, usage, firstAudioAt } = dispatched.result;
 
     const output: SpeakOutput = {
       audio: Buffer.from(audio).toString("base64"),
@@ -1182,9 +1202,16 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
 
     if (requestLogId !== undefined) output.requestLogId = requestLogId;
 
+    // pcm output is always 24 kHz PCM16, so the log copy is wrapped as WAV to stay playable.
+    const logAudio =
+      mediaType === "audio/wav"
+        ? output.audio
+        : Buffer.from(wrapPcmAsWav(audio)).toString("base64");
+
     const log: MediaRunLog = {
       tokenName: output.tokenName,
-      response: `[audio ${mediaType} ${audio.byteLength} bytes]`,
+      response: speechResponseForLog(logAudio, "audio/wav", audio.byteLength),
+      firstOutputAt: firstAudioAt,
       steps: [
         {
           toolCallId: "speech:0",
@@ -2263,7 +2290,8 @@ class QgridFrameClass extends BaseFrameClass {
 
       const log: MediaRunLog = {
         tokenName: output.tokenName,
-        response: `[audio ${output.mimeType} ${audioBytes} bytes]`,
+        response: speechResponseForLog(output.audio, output.mimeType, audioBytes),
+        firstOutputAt: dispatched.result.firstByteAt,
         steps: [
           {
             toolCallId: "speech:0",

@@ -140,6 +140,16 @@ export const RequestLogStatusLabel = {
   error: "에러",
   aborted: "중단",
 };
+export const RequestLogMediaKind = z
+  .enum(["image", "video", "stt", "tts"])
+  .describe("RequestLogMediaKind");
+export type RequestLogMediaKind = z.infer<typeof RequestLogMediaKind>;
+export const RequestLogMediaKindLabel = {
+  image: "이미지",
+  video: "비디오",
+  stt: "음성 인식",
+  tts: "음성 합성",
+};
 
 // Enums: RequestLogStep
 export const RequestLogStepType = z.enum(["generate", "tool_call"]).describe("RequestLogStepType");
@@ -204,6 +214,7 @@ export const RequestLogBaseSchema = z.object({
   tool_call_count: z.int(),
   is_image_generation: z.boolean(),
   is_structured: z.boolean(),
+  media_kind: RequestLogMediaKind.nullable(),
 });
 export type RequestLogBaseSchema = z.infer<typeof RequestLogBaseSchema> & {
   readonly __hasDefault__: readonly [
@@ -240,6 +251,7 @@ export type RequestLogBaseSchema = z.infer<typeof RequestLogBaseSchema> & {
     "tool_call_count",
     "is_image_generation",
     "is_structured",
+    "media_kind",
     "id",
   ];
   readonly __json__: readonly ["history", "input_images", "tools"];
@@ -446,6 +458,7 @@ export const RequestLogSubsetA = z.object({
   tool_call_count: z.int(),
   is_image_generation: z.boolean(),
   is_structured: z.boolean(),
+  media_kind: RequestLogMediaKind.nullable(),
 });
 export type RequestLogSubsetA = z.infer<typeof RequestLogSubsetA>;
 export const RequestLogSubsetP = z.object({
@@ -475,6 +488,7 @@ export const RequestLogSubsetP = z.object({
   tool_call_count: z.int(),
   is_image_generation: z.boolean(),
   is_structured: z.boolean(),
+  media_kind: RequestLogMediaKind.nullable(),
 });
 export type RequestLogSubsetP = z.infer<typeof RequestLogSubsetP>;
 export const RequestLogSubsetC = z.object({

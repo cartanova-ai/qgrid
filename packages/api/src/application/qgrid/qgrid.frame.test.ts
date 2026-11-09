@@ -2233,6 +2233,43 @@ describe("QgridFrame Grok media and voice (U11)", () => {
     );
   });
 
+  it("speak logs a tts row with playable audio and time to first byte", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: 10_000 });
+    const bytes = new Uint8Array([0xff, 0xfb, 1, 2]);
+    grok.speak!.mockResolvedValueOnce({
+      result: { audio: bytes, mediaType: "audio/mpeg", firstByteAt: 10_250 },
+      tokenId: 3,
+      tokenName: "grok/a",
+    });
+
+    await QgridFrame.speak({ text: "hi" });
+    vi.useRealTimers();
+
+    expect(requestLogCreateRunMock).toHaveBeenCalledWith(expect.objectContaining({ media_kind: "tts" }));
+    expect(requestLogFinishRunMock).toHaveBeenCalledWith(
+      77,
+      expect.objectContaining({
+        response: `<audio src="data:audio/mpeg;base64,${Buffer.from(bytes).toString("base64")}"></audio>`,
+        ttft_ms: 250,
+      }),
+    );
+  });
+
+  it("speak keeps the byte-count placeholder for audio a browser cannot play", async () => {
+    grok.speak!.mockResolvedValueOnce({
+      result: { audio: new Uint8Array(6), mediaType: "audio/pcm" },
+      tokenId: 3,
+      tokenName: "grok/a",
+    });
+
+    await QgridFrame.speak({ text: "hi", format: "pcm" });
+
+    expect(requestLogFinishRunMock).toHaveBeenCalledWith(
+      77,
+      expect.objectContaining({ response: "[audio audio/pcm 6 bytes]" }),
+    );
+  });
+
   it("media endpoints answer not-ready when no Grok media dispatcher is registered", async () => {
     Object.assign(QgridDispatcher, { grokDispatcher: null });
     await expect(QgridFrame.speak({ text: "hi" })).rejects.toThrow(SD("qgrid.dispatcherStarting")("Grok"));

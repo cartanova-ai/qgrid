@@ -102,6 +102,11 @@ If the auto image stage fails or is cancelled after the chat driver has complete
 
 Input images are not stored in `request_logs.user_prompt`; that field remains the text prompt. `beforeQuery` stores the current turn's `args.input` images on the run as `request_logs.input_images` (`{ mediaType, data, byteSize }` or `{ url }`), for text and image runs alike. Earlier-turn images in `history` stay in `request_logs.history`. For inspection in the detail view, qgrid stores reference image metadata/base64 in the synthetic `image_generation` step's `tool_args.inputImages`. If Codex returns multiple image outputs, store `inputImages` only on the first synthetic image tool step so multi-output logs do not duplicate the same input payload on every output.
 
+## Media fields
+
+- `media_kind`: nullable enum (`image`, `video`, `stt`, `tts`) written at `createRun` by `startMediaRun` from the media endpoint's kind; text and chat runs keep NULL (chat-generated images are marked only by `is_image_generation`). The list `Fmt` column reads it, so any new media endpoint must open its run through `startMediaRun` or set it explicitly.
+- Speech `response`: browser-playable audio is embedded as an `<audio>` data URL (see `sonamu-api-web-flow.md`); speech `ttft_ms` is the first audio byte, passed explicitly to `finishRun` because media runs have no generate step to derive it from.
+
 ## Structured output fields
 
 Structured output requests (those carrying a `jsonSchema`) persist three related fields:
