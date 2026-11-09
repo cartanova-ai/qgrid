@@ -72,10 +72,10 @@ describe("speech aligner check", () => {
     vi.restoreAllMocks();
   });
 
-  it("warns when the aligner model is not configured", () => {
+  it("warns when the aligner model is missing", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    warnMissingSpeechAligner({});
+    warnMissingSpeechAligner({ QGRID_ALIGNER_MODEL: "/nonexistent/mms-300m-fa-int8.onnx" });
 
     expect(warn.mock.calls.join("\n")).toContain("speech aligner not installed");
   });

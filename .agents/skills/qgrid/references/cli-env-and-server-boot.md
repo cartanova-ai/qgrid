@@ -44,7 +44,7 @@ Sonamu's native `SONAMU_DB_HOST`, `SONAMU_DB_PORT`, `SONAMU_DB_USER`,
 | `HOST` | `localhost` | Sonamu server listen host when running API directly. |
 | `PORT` | `44900` | Sonamu server listen port. In CLI mode this is derived from `--port`, not read as user input. |
 | `PROJECT_NAME` | `Qgrid` | Sonamu project name. Not the same as request log `projectName`. |
-| `QGRID_ALIGNER_MODEL` | Docker image: `/opt/qgrid/models/mms-300m-fa-int8.onnx`; otherwise unset | Speech aligner model for OpenAI speech `withTimestamps` (`openai-codex-runtime.md`, Realtime voice). Unset or missing file, or no `onnxruntime-node`: the CLI warns at startup and OpenAI speech returns `timestampsError`. |
+| `QGRID_ALIGNER_MODEL` | `~/.cache/qgrid/models/mms-300m-fa-int8.onnx` (download the `aligner-model-v1` release asset there by hand; a source checkout's `sonamu dev` already has `onnxruntime-node` as an api devDependency); the Docker image sets `/opt/qgrid/models/mms-300m-fa-int8.onnx` | Speech aligner model for OpenAI speech `withTimestamps` and OpenAI transcript `words` (`openai-codex-runtime.md`, Realtime voice). Missing file or no `onnxruntime-node`: the CLI warns at startup (`packages/cli/src/cli.ts`), OpenAI speech returns `timestampsError`, and OpenAI transcripts omit `words`. |
 
 Do not treat CLI bundle bootstrapping internals as user-facing qgrid configuration.
 The packaged CLI accepts only `staging` and `production`; `development` and `test`

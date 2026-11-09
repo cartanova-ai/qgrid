@@ -195,7 +195,7 @@ export function createQgridTranscription(
 
       return {
         text: data.text,
-        // Grok reports each heard word's timing; OpenAI realtime transcription reports none.
+        // Grok times each heard word itself; for OpenAI the server's aligner places them (2.19.0+).
         segments: (data.words ?? []).map((word) => ({
           text: word.text,
           startSecond: word.start,

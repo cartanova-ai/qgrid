@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { Command } from "commander";
@@ -76,16 +77,19 @@ export function warnMissingRuntimeCliDependencies(): void {
 }
 
 /**
- * OpenAI speech timing (`withTimestamps`) needs the speech aligner model and onnxruntime-node, which
- * only the Docker image ships. Without them the server returns `timestampsError`, so warn once here.
+ * OpenAI speech and transcription timing need the speech aligner model and onnxruntime-node, which
+ * only the Docker image ships. Without them the server returns no timing, so warn once here. Keep the
+ * default model path in sync with packages/api/src/utils/speech-aligner.ts.
  */
 export function warnMissingSpeechAligner(env: NodeJS.ProcessEnv = process.env): void {
-  const model = env.QGRID_ALIGNER_MODEL;
+  const model =
+    env.QGRID_ALIGNER_MODEL ||
+    join(homedir(), ".cache", "qgrid", "models", "mms-300m-fa-int8.onnx");
 
-  if (model && existsSync(model) && canResolve("onnxruntime-node")) return;
+  if (existsSync(model) && canResolve("onnxruntime-node")) return;
 
   console.warn(
-    "Warning: speech aligner not installed. OpenAI TTS withTimestamps returns no timing.",
+    "Warning: speech aligner not installed. OpenAI speech and transcription return no timing.",
   );
   console.warn("Install: see the Speech aligner section of the @cartanova/qgrid-cli README.");
 }

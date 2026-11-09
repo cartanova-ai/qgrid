@@ -550,8 +550,9 @@ export const TranscribeOutput = z.object({
   model: z.string(),
   tokenName: z.string(),
   requestLogId: z.number().optional(),
-  // Grok only: each heard word with its [start, end] seconds. OpenAI realtime transcription
-  // reports no timing.
+  // Each heard word with its [start, end] seconds. Grok times its own transcript; for OpenAI qgrid's
+  // aligner places the transcript in the input audio (omitted without the aligner model, or when the
+  // clip is too long to align).
   words: z.array(TranscribedWord).optional(),
 });
 
@@ -569,7 +570,7 @@ export const SpeakInput = z.object({
   speed: z.number().min(0.7).max(1.5).optional(),
   // Per-character timing in the output (`audioTimestamps`). Grok returns it natively; for OpenAI
   // realtime (no timing data) qgrid force-aligns the text to the generated audio with its built-in
-  // aligner (`timestampsSource: "aligned"`; Docker image only, otherwise `timestampsError`).
+  // aligner (`timestampsSource: "aligned"`; without the aligner model, `timestampsError`).
   withTimestamps: z.boolean().optional(),
   ...MediaCallOptions,
 });

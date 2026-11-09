@@ -4,7 +4,7 @@ FROM node:26.12.1-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
 
-# Speech aligner for OpenAI speech timing: onnxruntime-node (linux-x64 binaries only; keep the version
+# Speech aligner for OpenAI speech and transcription timing: onnxruntime-node (linux-x64 binaries only; keep the version
 # equal to packages/api's devDependency) and the MMS-FA int8 model (CC BY-NC 4.0, see NOTICE). These
 # layers come before Claude Code and qgrid so a release does not make servers download them again.
 ARG ONNXRUNTIME_VERSION=1.31.1

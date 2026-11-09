@@ -2344,6 +2344,45 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       expect(requestLogCreateRunMock).toHaveBeenCalledWith(expect.objectContaining({ system_prompt: "qgrid, Kuma", media_kind: "stt" }));
     });
 
+    describe("OpenAI transcription word timing", () => {
+      // 0.5 s of raw PCM16 at the realtime sample rate.
+      const pcm = new Uint8Array(24_000);
+      const transcribeOnce = () => {
+        const transcribe = vi.fn().mockResolvedValue({
+          result: { text: "hi", durationSec: 0.5, callId: "c", transport: "realtime-calls" },
+          tokenName: "openai/a",
+        });
+        Object.assign(QgridDispatcher, { openaiDispatcher: { transcribe } });
+
+        return QgridFrame.transcribe({
+          model: "openai/gpt-4o-transcribe",
+          audio: Buffer.from(pcm).toString("base64"),
+          mediaType: "audio/pcm",
+        });
+      };
+      const stepResult = () => JSON.parse((appendStepMock.mock.calls.at(-1)![1] as { tool_result: string }).tool_result);
+
+      it("aligns the transcript in the input audio", async () => {
+        alignSpeechMock.mockResolvedValueOnce({ graphChars: Array.from("hi"), graphTimes: [[0.1, 0.2], [0.2, 0.3]] });
+
+        const out = await transcribeOnce();
+
+        expect(alignSpeechMock).toHaveBeenCalledWith(pcm, 24_000, "hi");
+        expect(out.words).toEqual([{ text: "hi", start: 0.1, end: 0.3 }]);
+        expect(stepResult().words).toEqual(out.words);
+      });
+
+      it("returns the transcript without words when alignment fails", async () => {
+        alignSpeechMock.mockRejectedValueOnce(new Error("speech is too long to align"));
+
+        const out = await transcribeOnce();
+
+        expect(out).toMatchObject({ text: "hi" });
+        expect(out.words).toBeUndefined();
+        expect(stepResult().wordsError).toBe("speech is too long to align");
+      });
+    });
+
     it("still returns the audio when the timing step fails", async () => {
       alignSpeechMock.mockRejectedValueOnce(new Error("speech aligner model is not installed"));
 

@@ -101,7 +101,7 @@ Server behavior variables:
 | Variable | Description | Default |
 |------|------|--------|
 | `NODE_ENV` | Sonamu runtime profile. Set `staging` for a remote non-production deployment | `production` |
-| `QGRID_ALIGNER_MODEL` | Path to the speech aligner model (see below) | set in the Docker image |
+| `QGRID_ALIGNER_MODEL` | Path to the speech aligner model (see below) | `~/.cache/qgrid/models/mms-300m-fa-int8.onnx`; the Docker image sets its own |
 
 ## Prerequisites
 
@@ -112,21 +112,27 @@ Server behavior variables:
 
 ## Speech aligner
 
-OpenAI realtime speech carries no timing, so for `withTimestamps` qgrid force-aligns the text to the
-generated audio with a built-in aligner: the MMS-FA model (Meta, CC BY-NC 4.0, non-commercial) quantized
-to int8, run by `onnxruntime-node`. The Docker image includes both. An npm install has neither; the CLI
-warns at startup and OpenAI speech then returns `timestampsError` instead of timing (Grok speech timing
-is unaffected). To enable it on an npm install:
+OpenAI realtime speech and transcription carry no timing, so qgrid force-aligns the text to the audio
+with a built-in aligner: speech `withTimestamps` and transcript word timing (`words`). The aligner is
+the MMS-FA model (Meta, CC BY-NC 4.0, non-commercial) quantized to int8, run by `onnxruntime-node`. The
+Docker image includes both. On an npm install, download the model (355 MB) to its default path and
+install the runtime:
 
 ```bash
-npm install --global --ignore-scripts onnxruntime-node@1.31.1
 mkdir -p ~/.cache/qgrid/models
 curl -fL -o ~/.cache/qgrid/models/mms-300m-fa-int8.onnx \
   https://github.com/cartanova-ai/qgrid/releases/download/aligner-model-v1/mms-300m-fa-int8.onnx
-export QGRID_ALIGNER_MODEL=~/.cache/qgrid/models/mms-300m-fa-int8.onnx
+npm install --global --ignore-scripts onnxruntime-node@1.31.1
 ```
 
-The model loads on the first timed request (about 640 MB of memory) and unloads after 10 idle minutes.
+A source checkout run with `sonamu dev` needs only the model file: `onnxruntime-node` is an api
+devDependency there.
+
+`QGRID_ALIGNER_MODEL` overrides the model path. Without the aligner the CLI warns at startup, OpenAI
+speech returns `timestampsError`, and OpenAI transcripts come without word timing (Grok timing is
+unaffected). Alignment adds about 5% of the clip length to a request and covers about 4 minutes of
+dense speech; longer audio gets no timing. The model loads on first use (about 640 MB of memory at rest,
+1.4-1.8 GB while aligning 1-4 minute clips) and unloads after 10 idle minutes.
 
 ## How it works
 

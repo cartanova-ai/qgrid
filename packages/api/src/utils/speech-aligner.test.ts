@@ -91,7 +91,7 @@ describe("alignSpeech", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it("reports a missing model as unavailable", async () => {
-    vi.stubEnv("QGRID_ALIGNER_MODEL", "");
+    vi.stubEnv("QGRID_ALIGNER_MODEL", "/nonexistent/mms-300m-fa-int8.onnx");
 
     await expect(alignSpeech(new Uint8Array(4800), 24_000, "hi")).rejects.toBeInstanceOf(
       SpeechAlignerUnavailableError,

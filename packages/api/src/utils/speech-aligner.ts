@@ -1,17 +1,20 @@
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import type * as Ort from "onnxruntime-node";
 
 import { type CharTimestamps } from "./speech-alignment";
 
 /**
- * In-process forced alignment of a known script to its speech, used for OpenAI realtime speech,
- * which carries no timing. The model is MMS-FA (Meta's CTC forced aligner, 1,130 languages,
+ * In-process forced alignment of a known script to its speech, used for OpenAI realtime speech and
+ * transcription, which carry no timing. The model is MMS-FA (Meta's CTC forced aligner, 1,130 languages,
  * CC-BY-NC 4.0) quantized to int8 ONNX: it scores every 20 ms frame of 16 kHz audio against 28
  * letters, and a Viterbi pass walks the script's letters through those scores in order.
  *
- * The model file (`QGRID_ALIGNER_MODEL`) and `onnxruntime-node` ship only in the Docker image; any
- * other install lacks them and the caller reports the error as `timestampsError`.
+ * The model file and `onnxruntime-node` ship in the Docker image. Elsewhere the model is read from
+ * `QGRID_ALIGNER_MODEL`, else DEFAULT_MODEL_PATH (where the CLI README says to download it); without
+ * them alignment throws and callers return the result without timing.
  */
 
 const SAMPLE_RATE = 16_000;
@@ -30,9 +33,12 @@ const WINDOW_SAMPLES = 30 * SAMPLE_RATE;
 const CONTEXT_SAMPLES = 2 * SAMPLE_RATE;
 const IDLE_UNLOAD_MS = 10 * 60_000;
 
-// Viterbi back-pointers take frames x (2 x tokens + 1) bytes; 100 MB covers about 5 minutes of
-// ordinary speech.
+// Viterbi back-pointers take frames x (2 x tokens + 1) bytes. Frames and tokens both grow with the
+// audio, so the table grows with its square: 100 MB fits about 4 minutes of dense English speech.
 const MAX_TRELLIS_CELLS = 100_000_000;
+
+// Keep in sync with the qgrid CLI's missing-aligner warning (packages/cli/src/cli.ts).
+const DEFAULT_MODEL_PATH = join(homedir(), ".cache", "qgrid", "models", "mms-300m-fa-int8.onnx");
 
 export class SpeechAlignerUnavailableError extends Error {}
 
@@ -126,20 +132,24 @@ function emissionRows(logits: Float32Array, frames: number, classes: number): Fl
   });
 }
 
+function assertTrellisFits(frames: number, tokens: number): void {
+  const states = 2 * tokens + 1;
+
+  if (frames * states <= MAX_TRELLIS_CELLS) return;
+  const limitSec = Math.floor((MAX_TRELLIS_CELLS / states) * (SAMPLES_PER_FRAME / SAMPLE_RATE));
+
+  throw new Error(
+    `speech is too long to align: this script can be timed in up to ${limitSec} s of audio`,
+  );
+}
+
 /** CTC Viterbi forced alignment: the [startFrame, endFrame) span of each target token. */
 export function forcedAlign(emissions: Float64Array[], targets: number[]): Array<[number, number]> {
   const frames = emissions.length;
   const states = 2 * targets.length + 1;
 
   if (frames < targets.length) throw new Error("speech is too short for its script");
-
-  if (frames * states > MAX_TRELLIS_CELLS) {
-    const limitSec = Math.floor((MAX_TRELLIS_CELLS / states) * (SAMPLES_PER_FRAME / SAMPLE_RATE));
-
-    throw new Error(
-      `speech is too long to align: this script can be timed in up to ${limitSec} s of audio`,
-    );
-  }
+  assertTrellisFits(frames, targets.length);
 
   const label = (s: number) => (s % 2 === 0 ? BLANK : targets[(s - 1) / 2]!);
   const back = new Uint8Array(frames * states);
@@ -296,11 +306,11 @@ let idleTimer: NodeJS.Timeout | undefined;
 
 /** Loads the session on first use; it is released after IDLE_UNLOAD_MS without requests. */
 async function loadModel(): Promise<LoadedModel> {
-  const path = process.env.QGRID_ALIGNER_MODEL;
+  const path = process.env.QGRID_ALIGNER_MODEL || DEFAULT_MODEL_PATH;
 
-  if (!path || !existsSync(path)) {
+  if (!existsSync(path)) {
     throw new SpeechAlignerUnavailableError(
-      "speech aligner model is not installed (set QGRID_ALIGNER_MODEL)",
+      `speech aligner model not found at ${path} (download it there or set QGRID_ALIGNER_MODEL)`,
     );
   }
 
@@ -382,6 +392,13 @@ export async function alignSpeech(
   const { ids, owners } = scriptTargets(chars);
 
   if (!ids.some((id) => id !== STAR)) throw new Error("script has no letters to align");
+  // Edge stars, unless the script already starts or ends with one (repeated labels need a blank).
+  const lead = ids[0] === STAR ? [] : [STAR];
+  const tail = ids.at(-1) === STAR ? [] : [STAR];
+  const targets = [...lead, ...ids, ...tail];
+  const durationSec = pcm.byteLength / 2 / sampleRate;
+  // Rejected before the model runs: emissions for a long clip take seconds of CPU.
+  assertTrellisFits(Math.ceil((durationSec * SAMPLE_RATE) / SAMPLES_PER_FRAME), targets.length);
   // Counted before the model is awaited, so the idle unload cannot release it under this request.
   inFlight++;
 
@@ -389,12 +406,7 @@ export async function alignSpeech(
     const loaded = await loadModel();
     const samples = to16kFloat(pcm, sampleRate);
     const emissions = await emissionsFor(loaded, samples);
-    const durationSec = pcm.byteLength / 2 / sampleRate;
     const secondsPerFrame = samples.length / SAMPLE_RATE / emissions.length;
-    // Edge stars, unless the script already starts or ends with one (repeated labels need a blank).
-    const lead = ids[0] === STAR ? [] : [STAR];
-    const tail = ids.at(-1) === STAR ? [] : [STAR];
-    const targets = [...lead, ...ids, ...tail];
     const spans = forcedAlign(emissions, targets).slice(lead.length, lead.length + ids.length);
 
     return charTimestamps(chars, owners, spans, secondsPerFrame, durationSec);

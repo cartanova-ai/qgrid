@@ -85,6 +85,7 @@ import {
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
   OPENAI_REALTIME_DEFAULT_VOICE,
   OPENAI_REALTIME_SAMPLE_RATE,
+  prepareRealtimeInput,
   wrapPcmAsWav,
 } from "../../utils/providers/openai/openai-realtime-protocol";
 import { OpenAIVoiceInputError } from "../../utils/providers/openai/openai-voice-client";
@@ -1144,6 +1145,20 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<TranscribeOutpu
     if (input.language) output.language = input.language;
 
     if (requestLogId !== undefined) output.requestLogId = requestLogId;
+    let alignMs: number | undefined;
+    let wordsError: string | undefined;
+
+    // Realtime transcription carries no timing: the in-process aligner places the transcript in the
+    // input audio. Best-effort like speech timing: without it the transcript returns with no words.
+    try {
+      const alignStart = performance.now();
+      const pcm = prepareRealtimeInput(audio, input.mediaType);
+      const timestamps = await alignSpeech(pcm, OPENAI_REALTIME_SAMPLE_RATE, text);
+      output.words = wordsFromCharTimestamps(timestamps);
+      alignMs = Math.round(performance.now() - alignStart);
+    } catch (error) {
+      wordsError = error instanceof Error ? error.message : String(error);
+    }
 
     const log: MediaRunLog = {
       tokenName: output.tokenName,
@@ -1163,7 +1178,15 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<TranscribeOutpu
             prompt: input.prompt,
             durationSec,
           },
-          result: JSON.stringify({ text, durationSec, callId }),
+          result: JSON.stringify({
+            text,
+            durationSec,
+            callId,
+            alignMs,
+            wordsError,
+            // Word timing of the input audio for the request-log detail player.
+            words: output.words,
+          }),
         },
       ],
     };
