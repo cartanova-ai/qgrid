@@ -12,7 +12,10 @@ RUN npm install --global --ignore-scripts "onnxruntime-node@${ONNXRUNTIME_VERSIO
     && cd /usr/local/lib/node_modules/onnxruntime-node/bin/napi-v6 \
     && rm -rf darwin win32 linux/arm64 \
     && npm cache clean --force
-ADD --checksum=sha256:d93c3b2f62e9fc42a61964867944ecb8733069882ed9352b5ad2df9ce26e198a \
+# URL sources default to mode 600 and the server runs as `node`, so the file gets 644. The directory
+# is created first: ADD would otherwise create /opt/qgrid with the same 644 mode (no traversal).
+RUN mkdir -p /opt/qgrid/models
+ADD --chmod=644 --checksum=sha256:d93c3b2f62e9fc42a61964867944ecb8733069882ed9352b5ad2df9ce26e198a \
     https://github.com/cartanova-ai/qgrid/releases/download/aligner-model-v1/mms-300m-fa-int8.onnx \
     /opt/qgrid/models/mms-300m-fa-int8.onnx
 COPY MODEL-NOTICE.md /opt/qgrid/models/NOTICE.md
