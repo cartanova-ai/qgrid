@@ -371,8 +371,10 @@ function rejectImageGenerationStream(args: QueryInput): void {
 
 function rejectInvalidImageQuery(args: QueryInput): void {
   const standalone = args.model === `openai/${CODEX_IMAGE_GENERATION_MODEL}`;
+  // OpenAI chat models also run explicit image requests through standalone Images.
+  const openaiImage = args.imageGeneration === true && args.model?.startsWith("openai/") === true;
 
-  if (!standalone && args.imageGeneration !== "auto") return;
+  if (!standalone && !openaiImage && args.imageGeneration !== "auto") return;
 
   if (standalone && args.imageGeneration !== true) {
     throw new BadRequestException(
@@ -385,7 +387,7 @@ function rejectInvalidImageQuery(args: QueryInput): void {
   if (args.tools?.length || args.jsonSchema !== undefined) {
     throw new BadRequestException(
       SD("error.detail")(
-        "qgrid: automatic and standalone image generation do not support caller tools or structured output.",
+        "qgrid: OpenAI and automatic image generation do not support caller tools or structured output.",
       ),
     );
   }
@@ -395,9 +397,7 @@ function rejectInvalidImageQuery(args: QueryInput): void {
     args.imageGenerationOptions.outputFormat !== "png"
   ) {
     throw new BadRequestException(
-      SD("error.detail")(
-        "qgrid: automatic and standalone image generation only support PNG output.",
-      ),
+      SD("error.detail")("qgrid: OpenAI and automatic image generation only support PNG output."),
     );
   }
 }

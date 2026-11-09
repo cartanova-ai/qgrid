@@ -1,10 +1,7 @@
 import { getLogger } from "@logtape/logtape";
 import { z } from "zod";
 
-import {
-  type ImageGenerationMetadata,
-  QuotaThresholdExceededError,
-} from "../../../application/qgrid/qgrid.types";
+import { QuotaThresholdExceededError } from "../../../application/qgrid/qgrid.types";
 import { TokenModel } from "../../../application/token/token.model";
 import { type OpenAICredentials } from "../../../application/token/token.types";
 import { isOpenAICredentials } from "../common/credentials";
@@ -673,14 +670,9 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             streamedMessageIds.add(itemId);
           }
         } else if (event.type === "image") {
-          if (auto)
-            throw new ImageGenerationError("incomplete", "Unexpected hosted image generation");
+          if (auto) throw new ImageGenerationError("incomplete", "Unexpected image output");
           imageAttempted = true;
           images.push(generatedImageFrom(event));
-        } else if (event.type === "output-item" && event.item.type === "image_generation_call") {
-          if (auto)
-            throw new ImageGenerationError("incomplete", "Unexpected hosted image generation");
-          imageAttempted = true;
         } else if (auto && event.type === "output-item" && event.item.type === "function_call") {
           if (event.item.name !== IMAGE_TOOL) {
             throw new ImageGenerationError("incomplete", "Unexpected automatic image tool call");
@@ -727,17 +719,6 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             num_last_images_to_include: args.num_last_images_to_include,
           });
         } else if (event.type === "completed") {
-          const imageUsage = event.imageGeneration?.usage;
-
-          // The backend also reports all-zero image usage for text-only responses.
-          if (
-            auto &&
-            imageUsage &&
-            (imageUsage.input_tokens > 0 ||
-              imageUsage.output_tokens > 0 ||
-              imageUsage.total_tokens > 0)
-          )
-            throw new ImageGenerationError("incomplete", "Unexpected hosted image generation");
           driverCompleted = true;
           servingModel = event.model ?? servingModel;
 
@@ -749,31 +730,6 @@ export class OpenAIDispatcher implements ProviderDispatcher {
               cachedInputTokens: event.usage.cachedInputTokens,
               reasoningOutputTokens: event.usage.reasoningTokens,
             };
-          }
-
-          if (event.imageGeneration) {
-            const hostedImages = images.filter(
-              (image) => image.generation?.route === "codex-responses",
-            );
-
-            for (const [index, image] of hostedImages.entries()) {
-              const generation: ImageGenerationMetadata = {
-                route: "codex-responses",
-                ...image.generation,
-              };
-
-              // The image's own model wins; the response-level model only fills a gap.
-              if (generation.model === undefined && event.imageGeneration.model) {
-                generation.model = event.imageGeneration.model;
-              }
-
-              // Tool usage covers the whole response, not each returned image.
-              if (index === 0 && event.imageGeneration.usage) {
-                generation.usage = event.imageGeneration.usage;
-              }
-
-              image.generation = generation;
-            }
           }
         } else if (event.type === "error") {
           if (req.imageGeneration)

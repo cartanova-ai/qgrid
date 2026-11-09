@@ -535,7 +535,9 @@ export class OpenAIDirectClient {
   }
 
   responses(options: OpenAIResponsesOptions, signal?: AbortSignal): OpenAIEventStream {
-    if (options.model === "gpt-image-2" || requestsTransparentImage(options.imageGeneration)) {
+    // Hosted Responses image tools turn driver reasoning effort into an unsupported
+    // `complexity` (2026-11-09 probe), so every image request uses standalone Images.
+    if (options.model === "gpt-image-2" || options.imageGeneration) {
       return this.standaloneImages(options, signal);
     }
 

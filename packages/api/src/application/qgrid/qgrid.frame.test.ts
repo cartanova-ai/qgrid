@@ -900,13 +900,13 @@ describe("QgridFrame.query request logging", () => {
     expect(dispatcherQueryMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { imageGenerationOptions: { outputFormat: "webp" as const } },
-    { tools: [{ name: "lookup", inputSchema: { type: "object" } }] },
-    { jsonSchema: '{"type":"object"}' },
-  ])("rejects unsupported auto image controls before logging: %j", async (options) => {
+  it.each(["auto" as const, true].flatMap((imageGeneration) => [
+    { imageGeneration, imageGenerationOptions: { outputFormat: "webp" as const } },
+    { imageGeneration, tools: [{ name: "lookup", inputSchema: { type: "object" } }] },
+    { imageGeneration, jsonSchema: '{"type":"object"}' },
+  ]))("rejects unsupported OpenAI chat-model image controls before logging: %j", async (options) => {
     await expect(QgridFrame.query({
-      prompt: "draw", model: "openai/gpt-6-luna", imageGeneration: "auto", ...options,
+      prompt: "draw", model: "openai/gpt-6-luna", ...options,
     })).rejects.toMatchObject({ statusCode: 400 });
     expect(beforeQueryMock).not.toHaveBeenCalled();
     expect(dispatcherQueryMock).not.toHaveBeenCalled();

@@ -56,12 +56,10 @@ On the Anthropic route qgrid instead renders the schema — the consumer's origi
 ## Image generation
 
 ### Image turn
-A turn whose request carries the image-generation opt-in flag, enabling codex's built-in image tool for that turn only. Image turns are validated twice — capability before the turn, at-least-one-completed-image after — because codex silently returns text-only when its gates are unmet, and a silent fallback would masquerade as success. Image turns never participate in thread reuse: their payloads would otherwise sit in thread memory and the cacheable prefix. A request without the flag is unchanged in tool surface and cache behavior.
+A turn whose request carries the image-generation opt-in flag. Image turns are validated twice — capability before the turn, at-least-one-completed-image after — so a text-only result never masquerades as success. Image turns never participate in thread reuse: their payloads would otherwise sit in thread memory and the cacheable prefix. A request without the flag is unchanged in tool surface and cache behavior.
 
 ### Image tool model
-For ordinary image requests, the model is the Codex/Responses driver (for example `openai/gpt-5.5`), and the hosted image tool's model/usage are not exposed. qgrid records image cost separately from driver cost using explicit pricing assumptions.
-
-An explicit `background: "transparent"` instead selects Codex's standalone Images endpoint with `gpt-image-2` and the same subscription token. It uses no text driver: ordinary usage/cost are zero, actual model metadata is `gpt-image-2`, and image usage is retained separately. Logs distinguish requested options from observed dimensions, quality, and usage; the image cost is an API-price estimate, not subscription billing. This route preserves PNG alpha, rejects outputs without a transparent background or visible content, and performs no background-removal fallback. Requested size/quality may differ from the generated result.
+Explicit image requests — `imageGeneration: true` on a chat model, or the `openai/gpt-image-2` image model — call Codex's standalone Images endpoint with `gpt-image-2` and the same subscription token. They use no text driver: ordinary usage/cost are zero, actual model metadata is `gpt-image-2`, and image usage is retained separately. Logs distinguish requested options from observed dimensions, quality, and usage; the image cost is an API-price estimate, not subscription billing. When transparency is requested, the route preserves PNG alpha, rejects outputs without a transparent background or visible content, and performs no background-removal fallback. Until 2026-11-09, non-transparent chat-model requests used the hosted Responses image tool instead; older logs keep that route. Requested size/quality may differ from the generated result.
 
 ## Token accounting
 

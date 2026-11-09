@@ -2,7 +2,7 @@ import os from "node:os";
 
 import { z } from "zod";
 
-import { ImageGenerationMetadata } from "../../../application/qgrid/qgrid.types";
+import { type ImageGenerationMetadata } from "../../../application/qgrid/qgrid.types";
 import { type OpenAIEffort } from "../common/effort";
 import {
   isJsonObject,
@@ -73,6 +73,7 @@ export interface OpenAIResponsesOptions {
   serviceTier?: string;
   promptCacheKey?: string;
   outputSchema?: OpenAIOutputSchema;
+  /** Sends the request to standalone Images instead of Responses; see `OpenAIDirectClient`. */
   imageGeneration?: boolean | OpenAIResponseItem;
 }
 
@@ -106,14 +107,6 @@ export function buildOpenAIResponsesRequest(
   options: OpenAIResponsesOptions,
 ): OpenAIResponsesRequest {
   const tools = options.tools ? [...options.tools] : [];
-
-  if (options.imageGeneration) {
-    tools.push(
-      options.imageGeneration === true
-        ? { type: "image_generation" }
-        : { type: "image_generation", ...options.imageGeneration },
-    );
-  }
 
   const request: OpenAIResponsesRequest = {
     model: options.model,
@@ -216,7 +209,6 @@ export type OpenAINormalizedEvent =
       responseId: string;
       usage?: OpenAIUsage;
       model?: string;
-      imageGeneration?: ImageGenerationMetadata;
     }
   | { type: "error"; error: OpenAIProtocolError };
 
@@ -275,68 +267,9 @@ export function imageMimeType(
   throw new OpenAIProtocolError(`Unsupported image output format: ${label}`);
 }
 
-type OpenAIImageEvent = Extract<OpenAINormalizedEvent, { type: "image" }>;
-
-function imageEvent(item: JsonObject, result: string): OpenAIImageEvent {
-  // PNG exposes dimensions in its fixed header. Other formats retain the
-  // backend's observed size; never substitute requested image controls.
-  const header = Buffer.from(result.slice(0, 32), "base64");
-
-  const pngSize =
-    header.length >= 24 &&
-    header.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex")) &&
-    header.readUInt32BE(16) > 0 &&
-    header.readUInt32BE(20) > 0
-      ? `${header.readUInt32BE(16)}x${header.readUInt32BE(20)}`
-      : undefined;
-
-  const reportedSize = jsonString(item.size);
-
-  const size =
-    pngSize ??
-    (reportedSize !== undefined && /^[1-9]\d*x[1-9]\d*$/.test(reportedSize)
-      ? reportedSize
-      : undefined);
-
-  const id = jsonString(item.id);
-  const model = jsonString(item.model);
-  const quality = jsonString(item.quality);
-  const background = jsonString(item.background);
-  const revisedPrompt = jsonString(item.revised_prompt) ?? jsonString(item.revisedPrompt);
-  const generation: ImageGenerationMetadata = { route: "codex-responses" };
-
-  if (size) generation.size = size;
-
-  if (model !== undefined) generation.model = model;
-
-  if (quality !== undefined) generation.quality = quality;
-
-  if (background !== undefined) generation.background = background;
-
-  const event: OpenAIImageEvent = { type: "image", base64: result, mimeType: "image/png" };
-
-  if (id !== undefined) event.id = id;
-  event.base64 = result;
-  event.mimeType = imageMimeType(result, item.output_format);
-  event.generation = generation;
-
-  if (revisedPrompt !== undefined) event.revisedPrompt = revisedPrompt;
-
-  return event;
-}
-
 type OpenAICompletedEvent = Extract<OpenAINormalizedEvent, { type: "completed" }>;
 
 function completedEvent(response: JsonObject): OpenAICompletedEvent {
-  const toolUsage = jsonObjectOrEmpty(response.tool_usage);
-  const parsedImageUsage = ImageGenerationMetadata.shape.usage.safeParse(toolUsage.image_gen);
-  const imageUsage = parsedImageUsage.success ? parsedImageUsage.data : undefined;
-
-  const imageTool = Array.isArray(response.tools)
-    ? response.tools.find((tool) => isJsonObject(tool) && tool.type === "image_generation")
-    : undefined;
-
-  const imageModel = isJsonObject(imageTool) ? jsonString(imageTool.model) : undefined;
   const model = jsonString(response.model);
 
   const event: OpenAICompletedEvent = {
@@ -347,15 +280,6 @@ function completedEvent(response: JsonObject): OpenAICompletedEvent {
   if (isJsonObject(response.usage)) event.usage = usageFrom(response.usage);
 
   if (model !== undefined) event.model = model;
-
-  if (imageUsage || imageModel) {
-    const imageGeneration: ImageGenerationMetadata = { route: "codex-responses" };
-
-    if (imageModel) imageGeneration.model = imageModel;
-
-    if (imageUsage) imageGeneration.usage = imageUsage;
-    event.imageGeneration = imageGeneration;
-  }
 
   return event;
 }
@@ -385,14 +309,11 @@ export function normalizeOpenAIEvent(raw: JsonValue): OpenAINormalizedEvent | un
     (type === "response.output_item.added" || type === "response.output_item.done") &&
     isJsonObject(event.item)
   ) {
-    const item = event.item;
-    const result = jsonString(item.result);
-
-    if (item.type === "image_generation_call" && result !== undefined) {
-      return imageEvent(item, result);
-    }
-
-    return { type: "output-item", item, completed: type === "response.output_item.done" };
+    return {
+      type: "output-item",
+      item: event.item,
+      completed: type === "response.output_item.done",
+    };
   }
 
   if (type === "response.completed") return completedEvent(jsonObjectOrEmpty(event.response));

@@ -58,7 +58,7 @@ Provider-qualified ids widen `model_name` and `requested_model_name` from 50 to 
 
 Image-generation request logs add `is_image_generation`, `image_cost_usd`, and `image_cost_method`. The list view displays driver plus image cost as the total cost cell; the detail view shows driver cost and image cost separately and renders generated image data URLs from response/tool-step content.
 
-In 2.9.8, list and detail model labels show requested model to image model for generated-image results, using an image serving model or the model recorded in `image_cost_method`. The cost fallback is an estimate, not an upstream version guarantee. Preserve the actual driver in stored `model_name` for hosted/auto turns. Do not hardcode a display version or render an image-generation/assumption badge. Auto text-only replies are not marked `is_image_generation`.
+In 2.9.8, list and detail model labels show requested model to image model for generated-image results, using an image serving model or the model recorded in `image_cost_method`. The cost fallback is an estimate, not an upstream version guarantee. Preserve the actual driver in stored `model_name` for auto turns and older hosted-route rows. Do not hardcode a display version or render an image-generation/assumption badge. Auto text-only replies are not marked `is_image_generation`.
 
 The list header ends its filter row with a reload button (2.10.2+) that calls the generated hooks' `refresh()` for the list and the total-cost query with the current filters; it does not refetch the token/project/model filter options, and TanStack Query's `isRefreshing` disables it while a reload is in flight.
 
