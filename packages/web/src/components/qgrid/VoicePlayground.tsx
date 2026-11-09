@@ -162,6 +162,7 @@ type TtsItem = {
   model: string;
   voice: string;
   instructions?: string;
+  speed?: number;
   text: string;
   elapsedMs: number;
   requestLogId?: number;
@@ -176,6 +177,8 @@ function TtsPanel() {
   const [text, setText] = useState("Hi! What did you do this weekend?");
   const [history, setHistory] = useState<TtsItem[]>([]);
   const [withTimestamps, setWithTimestamps] = useState(true);
+  // Grok only; 1 is the provider default and is not sent.
+  const [speed, setSpeed] = useState(1);
   const nextKey = useRef(0);
   const speak = QgridService.useSpeakMutation();
   const openai = isOpenAI(model);
@@ -196,6 +199,8 @@ function TtsPanel() {
 
     if (withTimestamps) params.withTimestamps = true;
 
+    if (!openai && speed !== 1) params.speed = speed;
+
     speak.mutate(
       { params },
       {
@@ -206,6 +211,7 @@ function TtsPanel() {
             model,
             voice: voiceId,
             instructions: params.instructions,
+            speed: params.speed,
             text,
             elapsedMs: performance.now() - startedAt,
             requestLogId: out.requestLogId,
@@ -263,13 +269,25 @@ function TtsPanel() {
               ))}
             </select>
           </Field>
-          {openai && (
+          {openai ? (
             <Field label="Style instructions (OpenAI only)">
               <input
                 value={instructions}
                 onChange={(e) => setInstructions(e.target.value)}
                 placeholder="e.g. Speak with a gentle Irish accent."
                 className={CONTROL}
+              />
+            </Field>
+          ) : (
+            <Field label={`Speed (Grok only) — ${speed.toFixed(2)}×`}>
+              <input
+                type="range"
+                min={0.7}
+                max={1.5}
+                step={0.05}
+                value={speed}
+                onChange={(e) => setSpeed(Number(e.target.value))}
+                className="h-8 accent-sienna-500"
               />
             </Field>
           )}
@@ -358,7 +376,9 @@ function TtsPanel() {
           {history.map((item) => (
             <HistoryRow
               key={item.key}
-              title={`${item.voice} · ${shortModel(item.model)}`}
+              title={[item.voice, shortModel(item.model), item.speed && `${item.speed}×`]
+                .filter(Boolean)
+                .join(" · ")}
               meta={[`${(item.elapsedMs / 1000).toFixed(1)}s`, item.timing]
                 .filter(Boolean)
                 .join(" · ")}
