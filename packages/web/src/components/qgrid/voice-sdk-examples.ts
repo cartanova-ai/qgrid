@@ -3,7 +3,8 @@
 
 const literal = (value: string) => JSON.stringify(value);
 
-const QGRID_IMPORT = 'import { qgrid } from "@cartanova/qgrid-ai-sdk";';
+const qgridImport = (...types: string[]) =>
+  `import { ${["qgrid", ...types.map((type) => `type ${type}`)].join(", ")} } from "@cartanova/qgrid-ai-sdk";`;
 
 export type TtsExampleOptions = {
   model: string;
@@ -16,11 +17,12 @@ export type TtsExampleOptions = {
 
 export function ttsExample(options: TtsExampleOptions): string {
   const openai = options.model.startsWith("openai/");
+  const voiceType = openai ? "QgridOpenAISpeechVoice" : "QgridGrokVoice";
 
   const lines = [
     `  model: qgrid.speech(${literal(options.model)}),`,
     `  text: ${literal(options.text)},`,
-    `  voice: ${literal(options.voice)},`,
+    `  voice: ${literal(options.voice)} satisfies ${voiceType},`,
   ];
 
   if (options.instructions) lines.push(`  instructions: ${literal(options.instructions)},`);
@@ -32,7 +34,7 @@ export function ttsExample(options: TtsExampleOptions): string {
 
   return [
     'import { generateSpeech } from "ai";',
-    QGRID_IMPORT,
+    qgridImport(voiceType),
     "",
     "const speech = await generateSpeech({",
     ...lines,
@@ -59,7 +61,7 @@ export function sttExample(options: SttExampleOptions): string {
   return [
     'import { readFile } from "node:fs/promises";',
     'import { transcribe } from "ai";',
-    QGRID_IMPORT,
+    qgridImport(),
     "",
     "const transcript = await transcribe({",
     ...lines,
@@ -77,7 +79,7 @@ export type LiveExampleOptions = {
 };
 
 export function liveExample(options: LiveExampleOptions): string {
-  const config = [`voice: ${literal(options.voice)}`];
+  const config = [`voice: ${literal(options.voice)} satisfies QgridLiveVoice`];
 
   if (options.instructions) config.push(`instructions: ${literal(options.instructions)}`);
   const { model, effort, webSearch } = options.delegation;
@@ -96,7 +98,7 @@ export function liveExample(options: LiveExampleOptions): string {
 
   return [
     "// Browser",
-    'import { createQgridRealtime } from "@cartanova/qgrid-ai-sdk/realtime";',
+    'import { createQgridRealtime, type QgridLiveVoice } from "@cartanova/qgrid-ai-sdk/realtime";',
     'import { experimental_useRealtime } from "@ai-sdk/react";',
     "",
     "// Module scope: a new model or sessionConfig object starts a new session.",
@@ -110,7 +112,7 @@ export function liveExample(options: LiveExampleOptions): string {
     "});",
     "",
     "// Server: POST /api/live",
-    QGRID_IMPORT,
+    qgridImport("QgridLiveVoice"),
     "",
     'const answer = await qgrid.realtime("openai/gpt-live-1").doCreateWebRTCSession({',
     "  sdp,",

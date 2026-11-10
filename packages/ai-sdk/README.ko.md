@@ -466,7 +466,7 @@ import {
   generateSpeech,
   transcribe,
 } from "ai";
-import { qgrid } from "@cartanova/qgrid-ai-sdk";
+import { qgrid, type QgridGrokVoice } from "@cartanova/qgrid-ai-sdk";
 
 const transcript = await transcribe({
   model: qgrid.transcription("grok/grok-voice-transcribe-2.0"),
@@ -479,7 +479,7 @@ transcript.durationInSeconds;
 const speech = await generateSpeech({
   model: qgrid.speech("grok/grok-tts"),
   text: "Your build is ready.",
-  voice: "ara",
+  voice: "ara" satisfies QgridGrokVoice,
   language: "en",
   outputFormat: "mp3",
 });
@@ -495,6 +495,8 @@ speech.audio.uint8Array;
 `openai/` 음성 ID는 qgrid가 Codex에 쓰는 ChatGPT 구독 토큰으로 OpenAI realtime 세션을 사용합니다. 음성 인식은 Codex의 `/realtime/calls` 흐름을, 음성 합성은 텍스트를 그대로 읽는 realtime 대화 모델을 씁니다(구독에는 `gpt-4o-mini-tts`, `tts-1`이 없습니다). 옵션은 `providerOptions.openai` 아래 `@ai-sdk/openai` 이름을 따르고, `providerOptions.qgrid.tokenName`은 `openai/` 접두사가 필요합니다.
 
 ```typescript
+import { type QgridOpenAISpeechVoice } from "@cartanova/qgrid-ai-sdk";
+
 const transcript = await transcribe({
   model: qgrid.transcription("openai/gpt-transcribe"),
   audio: await readFile("meeting.wav"), // PCM16 WAV 또는 raw PCM만
@@ -504,7 +506,7 @@ const transcript = await transcribe({
 const speech = await generateSpeech({
   model: qgrid.speech("openai/gpt-realtime-2.1-mini"),
   text: "Your build is ready.",
-  voice: "marin",
+  voice: "marin" satisfies QgridOpenAISpeechVoice,
   outputFormat: "wav",
   providerOptions: { openai: { instructions: "Calm and brisk." } },
 });
@@ -532,12 +534,12 @@ const speech = await generateSpeech({
 
 ```tsx
 // 브라우저: Node 전용 코드가 없는 /realtime 진입점에서 import합니다.
-import { createQgridRealtime } from "@cartanova/qgrid-ai-sdk/realtime";
+import { createQgridRealtime, type QgridLiveVoice } from "@cartanova/qgrid-ai-sdk/realtime";
 import { experimental_useRealtime } from "@ai-sdk/react";
 
 // 모듈 최상단에 둡니다. model이나 sessionConfig 객체가 바뀌면 훅의 세션도 새로 만들어집니다.
 const model = createQgridRealtime("openai/gpt-live-1");
-const sessionConfig = { voice: "cove", instructions: "You are a friendly English tutor." };
+const sessionConfig = { voice: "cove" satisfies QgridLiveVoice, instructions: "You are a friendly English tutor." };
 
 function LiveConversation() {
   const realtime = experimental_useRealtime({ model, api: { session: "/api/live" }, sessionConfig });

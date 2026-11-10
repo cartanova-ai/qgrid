@@ -13,6 +13,8 @@ describe("voice SDK examples", () => {
     });
 
     expect(code).toContain('import { generateSpeech } from "ai";');
+    expect(code).toContain('import { qgrid, type QgridGrokVoice } from "@cartanova/qgrid-ai-sdk";');
+    expect(code).toContain('voice: "ara" satisfies QgridGrokVoice,');
     expect(code).toContain("const speech = await generateSpeech({");
     expect(code).toContain('model: qgrid.speech("grok/grok-tts"),');
     expect(code).toContain('text: "Say \\"hi\\"",');
@@ -30,6 +32,7 @@ describe("voice SDK examples", () => {
       withTimestamps: false,
     });
 
+    expect(code).toContain('voice: "marin" satisfies QgridOpenAISpeechVoice,');
     expect(code).toContain('instructions: "Calm.",');
     expect(code).toContain('outputFormat: "wav",');
     expect(code).not.toContain("withTimestamps");
@@ -54,8 +57,13 @@ describe("voice SDK examples", () => {
       continues: true,
     });
 
-    expect(code).toContain('import { createQgridRealtime } from "@cartanova/qgrid-ai-sdk/realtime";');
-    expect(code).toContain('const sessionConfig = { voice: "cove", instructions: "Be brief." };');
+    expect(code).toContain(
+      'import { createQgridRealtime, type QgridLiveVoice } from "@cartanova/qgrid-ai-sdk/realtime";',
+    );
+    expect(code).toContain(
+      'const sessionConfig = { voice: "cove" satisfies QgridLiveVoice, instructions: "Be brief." };',
+    );
+    expect(code).toContain('    voice: "cove" satisfies QgridLiveVoice,');
     expect(code).toContain('qgrid.realtime("openai/gpt-live-1").doCreateWebRTCSession({');
     expect(code).toContain('model: "openai/gpt-6-luna",');
     expect(code).toContain("webSearch: true,");

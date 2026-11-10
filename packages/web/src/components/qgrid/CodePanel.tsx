@@ -38,7 +38,7 @@ export function CopyButton({ text, dark }: { text: string; dark?: boolean }) {
 // regex splits it without a highlighting library. A comment needs whitespace or a line start
 // before `//`, so a zod regex literal ending in `\//` stays code.
 const CODE_TOKEN_RE =
-  /((?:^|(?<=\s))\/\/[^\n]*)|("(?:[^"\\]|\\.)*")|(\b\d+(?:\.\d+)?\b)|(\btype\b|\bz\b(?=\.)|\b(?:import|from|const|await|return)\b(?!\??:))|(\b(?:string|number|boolean|null|unknown|Record|true|false)\b)|([{}[\]()<>|?:,.=;])|([A-Za-z_$][\w$]*)|(\s+|.)/gm;
+  /((?:^|(?<=\s))\/\/[^\n]*)|("(?:[^"\\]|\\.)*")|(\b\d+(?:\.\d+)?\b)|(\btype\b|\bz\b(?=\.)|\b(?:import|from|const|await|return|satisfies)\b(?!\??:))|(\b(?:string|number|boolean|null|unknown|Record|true|false)\b)|([{}[\]()<>|?:,.=;])|([A-Za-z_$][\w$]*)|(\s+|.)/gm;
 
 export function highlightCode(text: string): ReactNode[] {
   const nodes: ReactNode[] = [];

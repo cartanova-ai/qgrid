@@ -11,7 +11,13 @@ import {
 } from "ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { qgrid, QgridVideoTimeoutError, resumeQgridVideo } from "./index";
+import {
+  qgrid,
+  QgridVideoTimeoutError,
+  resumeQgridVideo,
+  type QgridGrokVoice,
+  type QgridOpenAISpeechVoice,
+} from "./index";
 
 const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]).toString("base64");
 const mp3 = new Uint8Array([0xff, 0xfb, 0x90, 0x64, 0, 0, 0, 0]);
@@ -132,7 +138,7 @@ async function grokVoiceExample() {
   const speech = await generateSpeech({
     model: qgrid.speech("grok/grok-tts"),
     text: "Your build is ready.",
-    voice: "ara",
+    voice: "ara" satisfies QgridGrokVoice,
     language: "en",
     outputFormat: "mp3",
   });
@@ -150,7 +156,7 @@ async function openaiVoiceExample() {
   const speech = await generateSpeech({
     model: qgrid.speech("openai/gpt-realtime-2.1-mini"),
     text: "Your build is ready.",
-    voice: "marin",
+    voice: "marin" satisfies QgridOpenAISpeechVoice,
     outputFormat: "wav",
     providerOptions: { openai: { instructions: "Calm and brisk." } },
   });

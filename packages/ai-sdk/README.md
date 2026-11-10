@@ -478,7 +478,7 @@ import {
   generateSpeech,
   transcribe,
 } from "ai";
-import { qgrid } from "@cartanova/qgrid-ai-sdk";
+import { qgrid, type QgridGrokVoice } from "@cartanova/qgrid-ai-sdk";
 
 const transcript = await transcribe({
   model: qgrid.transcription("grok/grok-voice-transcribe-2.0"),
@@ -491,7 +491,7 @@ transcript.durationInSeconds;
 const speech = await generateSpeech({
   model: qgrid.speech("grok/grok-tts"),
   text: "Your build is ready.",
-  voice: "ara",
+  voice: "ara" satisfies QgridGrokVoice,
   language: "en",
   outputFormat: "mp3",
 });
@@ -507,6 +507,8 @@ speech.audio.uint8Array;
 `openai/` voice ids run on OpenAI realtime sessions with the same ChatGPT subscription tokens qgrid uses for Codex: transcription through the Codex `/realtime/calls` flow, speech through a realtime conversational model that repeats the text verbatim (there is no `gpt-4o-mini-tts` or `tts-1` on subscription). Options follow `@ai-sdk/openai` under `providerOptions.openai`; `providerOptions.qgrid.tokenName` must carry the `openai/` prefix.
 
 ```typescript
+import { type QgridOpenAISpeechVoice } from "@cartanova/qgrid-ai-sdk";
+
 const transcript = await transcribe({
   model: qgrid.transcription("openai/gpt-transcribe"),
   audio: await readFile("meeting.wav"), // PCM16 WAV or raw PCM only
@@ -516,7 +518,7 @@ const transcript = await transcribe({
 const speech = await generateSpeech({
   model: qgrid.speech("openai/gpt-realtime-2.1-mini"),
   text: "Your build is ready.",
-  voice: "marin",
+  voice: "marin" satisfies QgridOpenAISpeechVoice,
   outputFormat: "wav",
   providerOptions: { openai: { instructions: "Calm and brisk." } },
 });
@@ -544,12 +546,12 @@ The audio never passes through qgrid. The browser's own WebRTC peer makes an SDP
 
 ```tsx
 // Browser: import from the /realtime entry, which carries no Node-only code.
-import { createQgridRealtime } from "@cartanova/qgrid-ai-sdk/realtime";
+import { createQgridRealtime, type QgridLiveVoice } from "@cartanova/qgrid-ai-sdk/realtime";
 import { experimental_useRealtime } from "@ai-sdk/react";
 
 // Module scope: replacing the model or sessionConfig object replaces the hook's session.
 const model = createQgridRealtime("openai/gpt-live-1");
-const sessionConfig = { voice: "cove", instructions: "You are a friendly English tutor." };
+const sessionConfig = { voice: "cove" satisfies QgridLiveVoice, instructions: "You are a friendly English tutor." };
 
 function LiveConversation() {
   const realtime = experimental_useRealtime({ model, api: { session: "/api/live" }, sessionConfig });
