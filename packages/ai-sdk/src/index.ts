@@ -1101,6 +1101,15 @@ export {
 
 export { type QgridOpenAISpeechProviderOptions } from "./speech-model";
 
+export {
+  QGRID_GROK_VOICES,
+  QGRID_LIVE_VOICES,
+  QGRID_OPENAI_SPEECH_VOICES,
+  type QgridGrokVoice,
+  type QgridLiveVoice,
+  type QgridOpenAISpeechVoice,
+} from "./voices";
+
 export { createQgridLogger } from "./logger";
 
 export { QgridXaiOptionsError, type QgridGrokEffort } from "./grok-options";

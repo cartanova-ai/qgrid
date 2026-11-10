@@ -11,8 +11,11 @@ import XIcon from "~icons/lucide/x";
 import { VOICE_TAB_IDS, VOICE_TAB_TITLES, type VoiceTab } from "@/components/nav-items";
 import {
   Effort,
+  GROK_TTS_VOICES,
   type LiveCallInput,
   type LiveHistoryItem,
+  OPENAI_LIVE_VOICES,
+  OPENAI_SPEECH_VOICES,
   QGRID_MODEL_GROUPS,
   type SpeakInput,
   type SpeakOutput,
@@ -33,23 +36,14 @@ const TTS_MODELS = ["grok/grok-tts", "openai/gpt-realtime-2.1-mini", "openai/gpt
 // the server still accepts every id.
 const STT_MODELS = ["openai/gpt-transcribe", "grok/grok-voice-transcribe-2.0"];
 
-// OpenAI realtime presets (the server rejects others); default first. No gender split: several are
-// ambiguous (ballad reads as androgynous), so they stay one group.
-const OPENAI_VOICES = "marin cedar alloy ash ballad coral echo sage shimmer verse".split(" ");
-
-// Grok /tts voices listed by xAI for the subscription token (2026-11-06); default first.
+// Voice lists come from the server (qgrid.types.ts), default first. OpenAI has no gender split:
+// several are ambiguous (ballad reads as androgynous), so they stay one group.
 const GROK_VOICE_GROUPS = [
-  { label: "Female", voices: "ara aurora carina celeste eve iris liora luna ursa".split(" ") },
-  {
-    label: "Male",
-    voices:
-      "altair atlas castor cosmo helios helix kepler leo lumen lux naksh orion perseus rex rigel sal sirius zagan zenith".split(
-        " ",
-      ),
-  },
+  { label: "Female", voices: GROK_TTS_VOICES.female },
+  { label: "Male", voices: GROK_TTS_VOICES.male },
 ];
 
-const OPENAI_VOICE_GROUPS = [{ label: "", voices: OPENAI_VOICES }];
+const OPENAI_VOICE_GROUPS = [{ label: "", voices: OPENAI_SPEECH_VOICES }];
 
 const TIMING_SOURCE = { provider: "timing from Grok TTS", aligned: "timing from qgrid aligner" };
 
@@ -203,7 +197,7 @@ type TtsItem = {
 
 function TtsPanel() {
   const [model, setModel] = useState(TTS_MODELS[0]!);
-  const [voice, setVoice] = useState("ara");
+  const [voice, setVoice] = useState<string>(GROK_TTS_VOICES.female[0]);
   const [instructions, setInstructions] = useState("");
   const [text, setText] = useState("Hi! What did you do this weekend?");
   const [history, setHistory] = useState<TtsItem[]>([]);
@@ -216,7 +210,8 @@ function TtsPanel() {
 
   const changeModel = (next: string) => {
     // Voice ids are provider-specific, so switching provider resets to that provider's default.
-    if (isOpenAI(next) !== openai) setVoice(isOpenAI(next) ? OPENAI_VOICES[0]! : "ara");
+    if (isOpenAI(next) !== openai)
+      setVoice(isOpenAI(next) ? OPENAI_SPEECH_VOICES[0] : GROK_TTS_VOICES.female[0]);
     setModel(next);
   };
 
@@ -676,12 +671,6 @@ function SttPanel() {
   );
 }
 
-// GPT-Live voices (Codex's live list; the server rejects others); default first.
-const LIVE_VOICES =
-  "cove juniper maple spruce ember vale breeze arbor sol aube bubbie haetsal hanul himari leher miko neer porto rindo rio rivage selva sonna tinta viola".split(
-    " ",
-  );
-
 // What qgrid runs when the voice hands work off (lookups, reasoning): any model the chat offers.
 // The server default; Claude Code has no web search.
 const DEFAULT_DELEGATION_MODEL = "openai/gpt-6-luna";
@@ -713,7 +702,7 @@ function endLiveSession({ pc, channel, mic }: LiveSession) {
  * SDP offer with the subscription token and logs the transcript when the session ends.
  */
 function LivePanel() {
-  const [voice, setVoice] = useState(LIVE_VOICES[0]!);
+  const [voice, setVoice] = useState<string>(OPENAI_LIVE_VOICES[0]);
   const [instructions, setInstructions] = useState("");
   const [delegateModel, setDelegateModel] = useState(DEFAULT_DELEGATION_MODEL);
   const [effort, setEffort] = useState<Effort>("low");
@@ -868,7 +857,7 @@ function LivePanel() {
               disabled={status !== "idle"}
               className={CONTROL}
             >
-              {LIVE_VOICES.map((v) => (
+              {OPENAI_LIVE_VOICES.map((v) => (
                 <option key={v} value={v}>
                   {v}
                 </option>

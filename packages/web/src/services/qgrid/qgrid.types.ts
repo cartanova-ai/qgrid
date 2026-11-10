@@ -617,6 +617,78 @@ export const TranscribeOutput = z.object({
 
 export type TranscribeOutput = z.infer<typeof TranscribeOutput>;
 
+// Voice ids, default first. Synced to the dashboard; the AI SDK mirrors them (voices.ts).
+// OpenAI realtime speech presets (Codex v2 list, protocol.rs); the server rejects any other.
+export const OPENAI_SPEECH_VOICES = [
+  "marin",
+  "cedar",
+  "alloy",
+  "ash",
+  "ballad",
+  "coral",
+  "echo",
+  "sage",
+  "shimmer",
+  "verse",
+] as const;
+
+// GPT-Live voices (Codex v3 list, RealtimeVoicesList::builtin). Any other voice still gets a 201
+// from /calls, but the session never starts (sideband 404), so the server rejects it first.
+export const OPENAI_LIVE_VOICES = [
+  "cove",
+  "juniper",
+  "maple",
+  "spruce",
+  "ember",
+  "vale",
+  "breeze",
+  "arbor",
+  "sol",
+  "aube",
+  "bubbie",
+  "haetsal",
+  "hanul",
+  "himari",
+  "leher",
+  "miko",
+  "neer",
+  "porto",
+  "rindo",
+  "rio",
+  "rivage",
+  "selva",
+  "sonna",
+  "tinta",
+  "viola",
+] as const;
+
+// Grok /tts voices xAI lists for the subscription token (2026-11-06). Not validated: other ids
+// pass through to xAI.
+export const GROK_TTS_VOICES = {
+  female: ["ara", "aurora", "carina", "celeste", "eve", "iris", "liora", "luna", "ursa"],
+  male: [
+    "altair",
+    "atlas",
+    "castor",
+    "cosmo",
+    "helios",
+    "helix",
+    "kepler",
+    "leo",
+    "lumen",
+    "lux",
+    "naksh",
+    "orion",
+    "perseus",
+    "rex",
+    "rigel",
+    "sal",
+    "sirius",
+    "zagan",
+    "zenith",
+  ],
+} as const;
+
 export const SpeakInput = z.object({
   model: VoiceModelId.optional(),
   text: z.string().min(1).max(15_000),

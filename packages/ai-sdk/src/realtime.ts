@@ -12,6 +12,16 @@ import { DEFAULT_QGRID_SERVER_URL, QGRID_PROVIDER_NAME } from "./qgrid.constant"
 // This module is also the browser entry (`@cartanova/qgrid-ai-sdk/realtime`): it must not import
 // the HTTP transport or anything else that pulls in undici.
 
+// Voice lists, for pickers in the browser as well.
+export {
+  QGRID_GROK_VOICES,
+  QGRID_LIVE_VOICES,
+  QGRID_OPENAI_SPEECH_VOICES,
+  type QgridGrokVoice,
+  type QgridLiveVoice,
+  type QgridOpenAISpeechVoice,
+} from "./voices";
+
 /** GPT-Live on a ChatGPT subscription token (server 2.19.2+; `history` needs 2.19.3+). */
 export type QgridRealtimeModel = "openai/gpt-live-1";
 

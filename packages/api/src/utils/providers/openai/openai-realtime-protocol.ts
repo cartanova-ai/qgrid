@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { OPENAI_LIVE_VOICES, OPENAI_SPEECH_VOICES } from "../../../application/qgrid/qgrid.types";
 import { CODEX_CLI_ORIGINATOR, codexCliUserAgent, type JsonValue } from "./openai-backend-protocol";
 
 // Wire contract for OpenAI realtime audio on a ChatGPT subscription, mirroring Codex
@@ -39,24 +40,10 @@ export const OPENAI_REALTIME_DEFAULT_SPEECH_MODEL = "gpt-realtime-2.1-mini";
 /** protocol/src/protocol.rs:408 (RealtimeVoicesList::builtin default_v2) */
 export const OPENAI_REALTIME_DEFAULT_VOICE = "marin";
 
-/** protocol/src/protocol.rs:368-379 (v2 voice list) */
-export const OPENAI_REALTIME_VOICES = [
-  "alloy",
-  "ash",
-  "ballad",
-  "coral",
-  "echo",
-  "sage",
-  "shimmer",
-  "verse",
-  "marin",
-  "cedar",
-] as const;
-
-export type OpenAIRealtimeVoice = (typeof OPENAI_REALTIME_VOICES)[number];
+export type OpenAIRealtimeVoice = (typeof OPENAI_SPEECH_VOICES)[number];
 
 export function isOpenAIRealtimeVoice(value: string): value is OpenAIRealtimeVoice {
-  return OPENAI_REALTIME_VOICES.some((voice) => voice === value);
+  return OPENAI_SPEECH_VOICES.some((voice) => voice === value);
 }
 
 /**
@@ -115,38 +102,6 @@ export const OPENAI_LIVE_MODEL = "gpt-live-1";
  * field on this route: made-up names opened a session too (2026-11-10).
  */
 const OPENAI_LIVE_WIRE_MODEL = "gpt-live-1-codex";
-
-/**
- * protocol/src/protocol.rs RealtimeVoicesList::builtin v3; Codex's live default is cove. Any other
- * voice still gets a 201 from /calls, but the session never starts (sideband 404).
- */
-export const OPENAI_LIVE_VOICES = [
-  "cove",
-  "juniper",
-  "maple",
-  "spruce",
-  "ember",
-  "vale",
-  "breeze",
-  "arbor",
-  "sol",
-  "aube",
-  "bubbie",
-  "haetsal",
-  "hanul",
-  "himari",
-  "leher",
-  "miko",
-  "neer",
-  "porto",
-  "rindo",
-  "rio",
-  "rivage",
-  "selva",
-  "sonna",
-  "tinta",
-  "viola",
-] as const;
 
 export const OPENAI_LIVE_DEFAULT_VOICE = "cove";
 
