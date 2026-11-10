@@ -197,7 +197,10 @@ describe("README Grok examples", () => {
     const readme = await readTextFile(new URL(`../${file}`, import.meta.url), "utf8");
     const self = await readTextFile(new URL(import.meta.url), "utf8");
     const start = readme.indexOf(file === "README.md" ? "## Using Grok" : "## Grok 사용");
-    const section = readme.slice(start, readme.indexOf("## Telemetry Logger", start));
+    // The GPT-Live section after the voice examples is browser and server code for the HTTP API,
+    // not an SDK example, so the checked section ends before it.
+    const live = file === "README.md" ? "### OpenAI live voice conversation" : "### OpenAI 실시간 음성 대화";
+    const section = readme.slice(start, readme.indexOf(live, start));
     const blocks = [...section.matchAll(/```typescript\n([\s\S]*?)```/g)].map((m) => m[1]!);
     expect(blocks).toHaveLength(5);
     // Comments differ between languages and the examples add `return` lines; compare the code.
