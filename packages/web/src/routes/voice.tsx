@@ -15,7 +15,7 @@ function VoicePage() {
   const { tab = "tts" } = Route.useSearch();
 
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="max-w-3xl mx-auto xl:max-w-6xl">
       <VoicePlayground tab={tab} />
     </div>
   );

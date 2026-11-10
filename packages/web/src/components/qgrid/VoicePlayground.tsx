@@ -1,6 +1,8 @@
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
+import CheckIcon from "~icons/lucide/check";
+import CopyIcon from "~icons/lucide/copy";
 import ExternalLinkIcon from "~icons/lucide/external-link";
 import LoaderIcon from "~icons/lucide/loader-circle";
 import MicIcon from "~icons/lucide/mic";
@@ -22,6 +24,13 @@ import { QgridService } from "@/services/services.generated";
 
 import { TimedPlayer, type TimedWord } from "./TimedPlayer";
 import { audioToWavBase64, bytesToBase64 } from "./voice-audio";
+import {
+  type CodeToken,
+  codeTokens,
+  liveExample,
+  sttExample,
+  ttsExample,
+} from "./voice-sdk-examples";
 
 const PROJECT_NAME = "qgrid_voice_playground";
 
@@ -119,6 +128,68 @@ function HistoryRow({
       </div>
       {children}
     </li>
+  );
+}
+
+// The request-log JSON view's light theme (@uiw/react-json-view), so the call reads the same way.
+const TOKEN_COLOR: Record<NonNullable<CodeToken["kind"]>, string> = {
+  string: "#cb4b16",
+  number: "#268bd2",
+  boolean: "#2aa198",
+  brace: "#236a7c",
+  comment: "#0000004d",
+};
+
+/** The @cartanova/qgrid-ai-sdk call for the panel's current settings, beside the panel. */
+function WithSdkExample({
+  code,
+  note,
+  children,
+}: {
+  code: string;
+  note?: string;
+  children: React.ReactNode;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = () => {
+    void navigator.clipboard.writeText(code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  return (
+    <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(0,31rem)]">
+      <div className="min-w-0">{children}</div>
+      <aside className="min-w-0 border-t border-sand-100 xl:border-t-0 xl:border-l">
+        <div className="xl:sticky xl:top-0">
+          <div className="flex items-center gap-2 px-4 pt-3">
+            <span className="text-[11px] font-medium text-sand-500">AI SDK</span>
+            {note && <span className="text-[11px] text-sand-400">{note}</span>}
+            <button
+              type="button"
+              onClick={copy}
+              className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-sand-500 hover:bg-sand-100 hover:text-sand-800"
+            >
+              {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <pre className="px-4 py-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap wrap-break-word text-[#002b36]">
+            {codeTokens(code).map((token, i) =>
+              token.kind ? (
+                <span key={i} style={{ color: TOKEN_COLOR[token.kind] }}>
+                  {token.text}
+                </span>
+              ) : (
+                token.text
+              ),
+            )}
+          </pre>
+        </div>
+      </aside>
+    </div>
   );
 }
 
@@ -257,8 +328,17 @@ function TtsPanel() {
     void audio.play();
   };
 
+  const ttsCode = ttsExample({
+    model,
+    text,
+    voice,
+    instructions: style,
+    speed: !openai && speed !== 1 ? speed : undefined,
+    withTimestamps,
+  });
+
   return (
-    <>
+    <WithSdkExample code={ttsCode}>
       <div className="flex flex-col gap-3 p-4">
         <div className="grid grid-cols-2 gap-2">
           <Field label="Model">
@@ -399,7 +479,7 @@ function TtsPanel() {
           ))}
         </History>
       </div>
-    </>
+    </WithSdkExample>
   );
 }
 
@@ -529,8 +609,13 @@ function SttPanel() {
     );
   };
 
+  const sttCode = sttExample({
+    model,
+    prompt: openai && prompt.trim() ? prompt.trim() : undefined,
+  });
+
   return (
-    <>
+    <WithSdkExample code={sttCode}>
       <div className="flex flex-col gap-3 p-4">
         <div className="grid grid-cols-2 gap-2">
           <Field label="Model">
@@ -628,7 +713,7 @@ function SttPanel() {
           ))}
         </History>
       </div>
-    </>
+    </WithSdkExample>
   );
 }
 
@@ -805,173 +890,185 @@ function LivePanel() {
     }
   };
 
+  const liveCode = liveExample({
+    voice,
+    instructions: instructions.trim() || undefined,
+    delegation: { model: delegateModel, effort, webSearch: searchable && webSearch },
+    logged,
+    continues: earlier.length > 0,
+  });
+
   return (
-    <div className="flex flex-col gap-3 p-4">
-      <div className="grid grid-cols-2 gap-2">
-        <Field label="Voice">
-          <select
-            value={voice}
-            onChange={(e) => setVoice(e.target.value)}
-            disabled={status !== "idle"}
-            className={CONTROL}
-          >
-            {LIVE_VOICES.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Instructions">
-          <input
-            value={instructions}
-            onChange={(e) => setInstructions(e.target.value)}
-            disabled={status !== "idle"}
-            placeholder="e.g. You are a friendly English tutor. Keep answers short."
-            className={CONTROL}
-          />
-        </Field>
-        <Field label="Delegation model (answers lookups and reasoning)">
-          <select
-            value={delegateModel}
-            onChange={(e) => setDelegateModel(e.target.value)}
-            disabled={status !== "idle"}
-            className={CONTROL}
-          >
-            {QGRID_MODEL_GROUPS.map((group) => (
-              <optgroup key={group.label} label={group.label}>
-                {group.models.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </Field>
-        <div className="flex items-end gap-3">
-          <Field label="Effort">
+    <WithSdkExample code={liveCode} note="SDK 2.20.0+, experimental">
+      <div className="flex flex-col gap-3 p-4">
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="Voice">
             <select
-              value={effort}
-              onChange={(e) => setEffort(Effort.options.find((v) => v === e.target.value) ?? "low")}
+              value={voice}
+              onChange={(e) => setVoice(e.target.value)}
               disabled={status !== "idle"}
               className={CONTROL}
             >
-              {Effort.options.map((v) => (
+              {LIVE_VOICES.map((v) => (
                 <option key={v} value={v}>
                   {v}
                 </option>
               ))}
             </select>
           </Field>
-          <label className="flex h-8 items-center gap-1.5 text-[12px] text-sand-600">
+          <Field label="Instructions">
             <input
-              type="checkbox"
-              checked={searchable && webSearch}
-              onChange={(e) => setWebSearch(e.target.checked)}
-              disabled={status !== "idle" || !searchable}
-              className="accent-sienna-500"
-            />
-            Web search
-          </label>
-          <label className="flex h-8 items-center gap-1.5 text-[12px] text-sand-600">
-            <input
-              type="checkbox"
-              checked={logged}
-              onChange={(e) => setLogged(e.target.checked)}
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
               disabled={status !== "idle"}
-              className="accent-sienna-500"
+              placeholder="e.g. You are a friendly English tutor. Keep answers short."
+              className={CONTROL}
             />
-            Request log
-          </label>
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-3">
-        {status === "idle" ? (
-          <>
-            <button type="button" onClick={() => start(false)} className={BUTTON}>
-              <MicIcon className="size-3.5" />
-              Start conversation
-            </button>
-            {turns.length > 0 && (
-              <button
-                type="button"
-                onClick={() => start(true)}
-                className="text-[12px] font-medium text-sienna-600 hover:text-sienna-700"
+          </Field>
+          <Field label="Delegation model (answers lookups and reasoning)">
+            <select
+              value={delegateModel}
+              onChange={(e) => setDelegateModel(e.target.value)}
+              disabled={status !== "idle"}
+              className={CONTROL}
+            >
+              {QGRID_MODEL_GROUPS.map((group) => (
+                <optgroup key={group.label} label={group.label}>
+                  {group.models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </Field>
+          <div className="flex items-end gap-3">
+            <Field label="Effort">
+              <select
+                value={effort}
+                onChange={(e) =>
+                  setEffort(Effort.options.find((v) => v === e.target.value) ?? "low")
+                }
+                disabled={status !== "idle"}
+                className={CONTROL}
               >
-                Continue this conversation
+                {Effort.options.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <label className="flex h-8 items-center gap-1.5 text-[12px] text-sand-600">
+              <input
+                type="checkbox"
+                checked={searchable && webSearch}
+                onChange={(e) => setWebSearch(e.target.checked)}
+                disabled={status !== "idle" || !searchable}
+                className="accent-sienna-500"
+              />
+              Web search
+            </label>
+            <label className="flex h-8 items-center gap-1.5 text-[12px] text-sand-600">
+              <input
+                type="checkbox"
+                checked={logged}
+                onChange={(e) => setLogged(e.target.checked)}
+                disabled={status !== "idle"}
+                className="accent-sienna-500"
+              />
+              Request log
+            </label>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          {status === "idle" ? (
+            <>
+              <button type="button" onClick={() => start(false)} className={BUTTON}>
+                <MicIcon className="size-3.5" />
+                Start conversation
               </button>
-            )}
-          </>
+              {turns.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => start(true)}
+                  className="text-[12px] font-medium text-sienna-600 hover:text-sienna-700"
+                >
+                  Continue this conversation
+                </button>
+              )}
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={stop}
+              disabled={status === "connecting"}
+              className={`${BUTTON} bg-danger-500 hover:bg-danger-500`}
+            >
+              {status === "connecting" ? (
+                <LoaderIcon className="size-3.5 animate-spin" />
+              ) : (
+                <SquareIcon className="size-3.5" />
+              )}
+              {status === "connecting" ? "Connecting" : "End"}
+            </button>
+          )}
+          {status === "live" && (
+            <span className="tabular-nums text-[12px] text-sand-500">
+              {clock(elapsedSec)} · openai/gpt-live-1 · speak any time (ends by itself after 2 h)
+            </span>
+          )}
+          {requestLogId !== undefined && (
+            <Link
+              to="/requests/show"
+              search={{ id: requestLogId }}
+              target="_blank"
+              className="inline-flex items-center gap-1 text-[12px] tabular-nums text-sand-500 hover:text-sienna-500"
+            >
+              request log #{requestLogId}
+              <ExternalLinkIcon className="size-3" />
+            </Link>
+          )}
+          {error && <p className="text-[12px] text-danger-500 break-words">{error}</p>}
+        </div>
+        {/* oxlint-disable-next-line jsx-a11y/media-has-caption -- live speech; the transcript is shown below. */}
+        <audio ref={audioRef} autoPlay />
+        {earlier.length === 0 && turns.length === 0 ? (
+          <p className="py-6 text-center text-[12px] text-sand-400">
+            Start a conversation and talk; both sides of the transcript appear here.
+          </p>
         ) : (
-          <button
-            type="button"
-            onClick={stop}
-            disabled={status === "connecting"}
-            className={`${BUTTON} bg-danger-500 hover:bg-danger-500`}
-          >
-            {status === "connecting" ? (
-              <LoaderIcon className="size-3.5 animate-spin" />
-            ) : (
-              <SquareIcon className="size-3.5" />
-            )}
-            {status === "connecting" ? "Connecting" : "End"}
-          </button>
+          <ul className="flex flex-col gap-1.5">
+            {/* What this session started from, dimmed above its own turns. */}
+            {earlier.map((item, index) => (
+              <li
+                key={`earlier-${index}`}
+                className="rounded-lg bg-sand-50/60 px-3 py-2 text-[13px] text-sand-500"
+              >
+                <span className="mr-2 text-[10px] font-medium uppercase tracking-wider text-sand-400">
+                  {item.role}
+                </span>
+                {item.text}
+              </li>
+            ))}
+            {turns.map((turn) => (
+              <li
+                key={turn.id}
+                className={`rounded-lg px-3 py-2 text-[13px] text-sand-800 ${
+                  turn.role === "assistant" ? "bg-sage-50" : "bg-sand-50"
+                }`}
+              >
+                <span className="mr-2 text-[10px] font-medium uppercase tracking-wider text-sand-500">
+                  {turn.role}
+                </span>
+                {turn.text.trim()}
+              </li>
+            ))}
+          </ul>
         )}
-        {status === "live" && (
-          <span className="tabular-nums text-[12px] text-sand-500">
-            {clock(elapsedSec)} · openai/gpt-live-1 · speak any time (ends by itself after 2 h)
-          </span>
-        )}
-        {requestLogId !== undefined && (
-          <Link
-            to="/requests/show"
-            search={{ id: requestLogId }}
-            target="_blank"
-            className="inline-flex items-center gap-1 text-[12px] tabular-nums text-sand-500 hover:text-sienna-500"
-          >
-            request log #{requestLogId}
-            <ExternalLinkIcon className="size-3" />
-          </Link>
-        )}
-        {error && <p className="text-[12px] text-danger-500 break-words">{error}</p>}
       </div>
-      {/* oxlint-disable-next-line jsx-a11y/media-has-caption -- live speech; the transcript is shown below. */}
-      <audio ref={audioRef} autoPlay />
-      {earlier.length === 0 && turns.length === 0 ? (
-        <p className="py-6 text-center text-[12px] text-sand-400">
-          Start a conversation and talk; both sides of the transcript appear here.
-        </p>
-      ) : (
-        <ul className="flex flex-col gap-1.5">
-          {/* What this session started from, dimmed above its own turns. */}
-          {earlier.map((item, index) => (
-            <li
-              key={`earlier-${index}`}
-              className="rounded-lg bg-sand-50/60 px-3 py-2 text-[13px] text-sand-500"
-            >
-              <span className="mr-2 text-[10px] font-medium uppercase tracking-wider text-sand-400">
-                {item.role}
-              </span>
-              {item.text}
-            </li>
-          ))}
-          {turns.map((turn) => (
-            <li
-              key={turn.id}
-              className={`rounded-lg px-3 py-2 text-[13px] text-sand-800 ${
-                turn.role === "assistant" ? "bg-sage-50" : "bg-sand-50"
-              }`}
-            >
-              <span className="mr-2 text-[10px] font-medium uppercase tracking-wider text-sand-500">
-                {turn.role}
-              </span>
-              {turn.text.trim()}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    </WithSdkExample>
   );
 }
 
