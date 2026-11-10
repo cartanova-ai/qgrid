@@ -534,15 +534,15 @@ const speech = await generateSpeech({
 
 ```tsx
 // 브라우저: Node 전용 코드가 없는 /realtime 진입점에서 import합니다.
-import { createQgridRealtime, type QgridLiveVoice } from "@cartanova/qgrid-ai-sdk/realtime";
+import { createQgridRealtime } from "@cartanova/qgrid-ai-sdk/realtime";
 import { experimental_useRealtime } from "@ai-sdk/react";
 
-// 모듈 최상단에 둡니다. model이나 sessionConfig 객체가 바뀌면 훅의 세션도 새로 만들어집니다.
+// 모듈 최상단에 둡니다. 훅은 model 객체가 바뀌면 세션을 새로 만듭니다.
 const model = createQgridRealtime("openai/gpt-live-1");
-const sessionConfig = { voice: "cove" satisfies QgridLiveVoice, instructions: "You are a friendly English tutor." };
 
 function LiveConversation() {
-  const realtime = experimental_useRealtime({ model, api: { session: "/api/live" }, sessionConfig });
+  // sessionConfig는 넘기지 않습니다. 보이스와 지시문은 서버 라우트가 정합니다.
+  const realtime = experimental_useRealtime({ model, api: { session: "/api/live" } });
 
   return (
     <>
@@ -559,16 +559,15 @@ function LiveConversation() {
 
 ```typescript
 // 앱 서버 라우트: 훅이 { sdp, sessionConfig }를 보내고 { sdp, sessionId }를 기대합니다.
-import { qgrid, type QgridRealtimeProviderOptions } from "@cartanova/qgrid-ai-sdk";
+import { qgrid, type QgridLiveVoice, type QgridRealtimeProviderOptions } from "@cartanova/qgrid-ai-sdk";
 
 app.post("/api/live", async (req, res) => {
-  const { sdp, sessionConfig } = req.body;
   const answer = await qgrid.realtime("openai/gpt-live-1").doCreateWebRTCSession({
-    sdp,
+    sdp: req.body.sdp,
+    // 서버에서 정합니다. 브라우저가 보낸 sessionConfig는 믿지 않습니다.
     sessionConfig: {
-      voice: sessionConfig?.voice,
-      instructions: sessionConfig?.instructions,
-      // qgrid 옵션은 서버에서 만듭니다. 브라우저가 보낸 providerOptions를 그대로 넘기지 마세요.
+      voice: "cove" satisfies QgridLiveVoice,
+      instructions: "You are a friendly English tutor.",
       providerOptions: {
         qgrid: { delegation: { model: "openai/gpt-6-luna", webSearch: true } } satisfies QgridRealtimeProviderOptions,
       },
@@ -578,7 +577,7 @@ app.post("/api/live", async (req, res) => {
 });
 ```
 
-- `providerOptions.qgrid`(`QgridRealtimeProviderOptions`): `delegation`, `history`, `tokenName`, `logger`이며 아래 HTTP `params`와 같은 필드입니다. `sessionConfig.voice`와 `sessionConfig.instructions`는 `voice`, `instructions`로 보내고, 나머지 `sessionConfig` 필드는 보내지 않습니다. `serverUrl`과 `projectName`은 `createQgridRealtime(id, config)` 또는 `QGRID_URL` / `QGRID_PROJECT_NAME`에서 가져옵니다.
+- `providerOptions.qgrid`(`QgridRealtimeProviderOptions`): `delegation`, `history`, `tokenName`, `logger`이며 아래 HTTP `params`와 같은 필드입니다. `sessionConfig.voice`와 `sessionConfig.instructions`는 `voice`, `instructions`로 보내고, 나머지 `sessionConfig` 필드는 보내지 않습니다. 이 값은 훅이 아니라 서버 호출에서 정하세요. 훅은 `sessionConfig` 객체가 바뀌면 세션을 새로 만들기 때문에, 호출부에 객체를 바로 쓰면 렌더할 때마다 세션이 다시 시작됩니다. `serverUrl`과 `projectName`은 `createQgridRealtime(id, config)` 또는 `QGRID_URL` / `QGRID_PROJECT_NAME`에서 가져옵니다.
 - 음성 모델의 위임은 qgrid 서버가 답합니다. 그래서 각 `delegation-created` 이벤트는 `target: "provider"`로 표시되며, 앱이 돌려보낼 것은 없습니다. 세션은 `delegationMode`를 알리지 않습니다. AI SDK 런타임이 `"provider"`를 거부하고, `"client"`는 앱이 답해야 한다는 뜻이기 때문입니다.
 - 지원하는 명령: `close()`(`session.close`를 보내고 최종 사용량을 기다림)와 `sendEvent({ type: "context-append", content, delegationId })`(음성이 쓸 텍스트 추가, 세션 전체에는 `delegationId: null`). 마이크 끄기, 세션 변경 등 나머지 명령은 `UnsupportedFunctionalityError`를 던집니다.
 - 이벤트: `session.transcripts`에 말한 텍스트가 `transcript-fragment` 이벤트(`speaker`, `delta`, `startMs`, `endMs`)로 쌓입니다. 조각은 턴의 일부이지 턴 전체가 아닙니다. `session.usage.seconds`는 세션 오디오 시간입니다. GPT-Live 원본 이벤트는 각 이벤트의 `raw`에 있습니다.

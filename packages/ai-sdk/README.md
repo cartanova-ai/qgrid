@@ -546,15 +546,15 @@ The audio never passes through qgrid. The browser's own WebRTC peer makes an SDP
 
 ```tsx
 // Browser: import from the /realtime entry, which carries no Node-only code.
-import { createQgridRealtime, type QgridLiveVoice } from "@cartanova/qgrid-ai-sdk/realtime";
+import { createQgridRealtime } from "@cartanova/qgrid-ai-sdk/realtime";
 import { experimental_useRealtime } from "@ai-sdk/react";
 
-// Module scope: replacing the model or sessionConfig object replaces the hook's session.
+// Module scope: the hook starts a new session whenever it gets a new model object.
 const model = createQgridRealtime("openai/gpt-live-1");
-const sessionConfig = { voice: "cove" satisfies QgridLiveVoice, instructions: "You are a friendly English tutor." };
 
 function LiveConversation() {
-  const realtime = experimental_useRealtime({ model, api: { session: "/api/live" }, sessionConfig });
+  // No sessionConfig: the server route sets the voice and instructions.
+  const realtime = experimental_useRealtime({ model, api: { session: "/api/live" } });
 
   return (
     <>
@@ -571,16 +571,15 @@ function LiveConversation() {
 
 ```typescript
 // Your server route: the hook posts { sdp, sessionConfig } and expects { sdp, sessionId }.
-import { qgrid, type QgridRealtimeProviderOptions } from "@cartanova/qgrid-ai-sdk";
+import { qgrid, type QgridLiveVoice, type QgridRealtimeProviderOptions } from "@cartanova/qgrid-ai-sdk";
 
 app.post("/api/live", async (req, res) => {
-  const { sdp, sessionConfig } = req.body;
   const answer = await qgrid.realtime("openai/gpt-live-1").doCreateWebRTCSession({
-    sdp,
+    sdp: req.body.sdp,
+    // Set on the server; the browser's sessionConfig is not trusted.
     sessionConfig: {
-      voice: sessionConfig?.voice,
-      instructions: sessionConfig?.instructions,
-      // Build the qgrid options here; do not forward the browser's providerOptions.
+      voice: "cove" satisfies QgridLiveVoice,
+      instructions: "You are a friendly English tutor.",
       providerOptions: {
         qgrid: { delegation: { model: "openai/gpt-6-luna", webSearch: true } } satisfies QgridRealtimeProviderOptions,
       },
@@ -590,7 +589,7 @@ app.post("/api/live", async (req, res) => {
 });
 ```
 
-- `providerOptions.qgrid` (`QgridRealtimeProviderOptions`): `delegation`, `history`, `tokenName` and `logger`, the same fields as the HTTP `params` below. `sessionConfig.voice` and `sessionConfig.instructions` map to `voice` and `instructions`; other `sessionConfig` fields are not sent. `serverUrl` and `projectName` come from `createQgridRealtime(id, config)` or `QGRID_URL` / `QGRID_PROJECT_NAME`.
+- `providerOptions.qgrid` (`QgridRealtimeProviderOptions`): `delegation`, `history`, `tokenName` and `logger`, the same fields as the HTTP `params` below. `sessionConfig.voice` and `sessionConfig.instructions` map to `voice` and `instructions`; other `sessionConfig` fields are not sent. Set them in the server call rather than in the hook: the hook starts a new session whenever it gets a new `sessionConfig` object, so an inline object would restart the session on every render. `serverUrl` and `projectName` come from `createQgridRealtime(id, config)` or `QGRID_URL` / `QGRID_PROJECT_NAME`.
 - qgrid answers the voice's delegations on the server, so each `delegation-created` event has `target: "provider"`: there is nothing for the app to send back. The session reports no `delegationMode`: AI SDK's runtime rejects `"provider"`, and `"client"` would mean the app must answer.
 - Supported commands: `close()` (sends `session.close` and waits for the final usage) and `sendEvent({ type: "context-append", content, delegationId })`, which adds text the voice can use (`delegationId: null` for the whole session). Microphone mute, session updates and the other commands throw `UnsupportedFunctionalityError`.
 - Events: `session.transcripts` holds the spoken text as `transcript-fragment` events (`speaker`, `delta`, `startMs`, `endMs`); fragments are pieces of a turn, not whole turns. `session.usage.seconds` is the session's audio time. The raw GPT-Live events are in each event's `raw`.

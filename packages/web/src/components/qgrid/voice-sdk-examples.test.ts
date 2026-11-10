@@ -57,13 +57,12 @@ describe("voice SDK examples", () => {
       continues: true,
     });
 
-    expect(code).toContain(
-      'import { createQgridRealtime, type QgridLiveVoice } from "@cartanova/qgrid-ai-sdk/realtime";',
-    );
-    expect(code).toContain(
-      'const sessionConfig = { voice: "cove" satisfies QgridLiveVoice, instructions: "Be brief." };',
-    );
+    expect(code).toContain('import { createQgridRealtime } from "@cartanova/qgrid-ai-sdk/realtime";');
+    // The browser hook takes no sessionConfig (a new object per render restarts the session); the
+    // server call sets the voice and instructions inline.
+    expect(code).not.toContain("const sessionConfig");
     expect(code).toContain('    voice: "cove" satisfies QgridLiveVoice,');
+    expect(code).toContain('    instructions: "Be brief.",');
     expect(code).toContain('qgrid.realtime("openai/gpt-live-1").doCreateWebRTCSession({');
     expect(code).toContain('model: "openai/gpt-6-luna",');
     expect(code).toContain("webSearch: true,");
