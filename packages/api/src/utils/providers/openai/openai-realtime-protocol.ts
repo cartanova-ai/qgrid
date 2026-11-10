@@ -146,14 +146,49 @@ export function isOpenAILiveVoice(value: string): boolean {
   return OPENAI_LIVE_VOICES.some((voice) => voice === value);
 }
 
-/** codex-api methods_frameless_bidi.rs session_json, without initial items or handoffs. */
-export function buildLiveSession(options: { voice: string; instructions?: string }): JsonValue {
-  return {
+/** A message the session starts from; user and developer text is input, assistant text output. */
+export interface LiveHistoryMessage {
+  role: "user" | "assistant" | "developer";
+  text: string;
+}
+
+type LiveInitialItem = {
+  type: "message";
+  role: LiveHistoryMessage["role"];
+  content: Array<{ type: "input_text" | "output_text"; text: string }>;
+};
+
+/** The session sent with the call: codex-api methods_frameless_bidi.rs session_json. */
+export type LiveSessionPayload = {
+  model: string;
+  instructions: string;
+  audio: { output: { voice: string } };
+  delegation: { type: "client" };
+  /** The history, as Codex's initial items. */
+  initial_items?: LiveInitialItem[];
+};
+
+export function buildLiveSession(options: {
+  voice: string;
+  instructions?: string;
+  history?: readonly LiveHistoryMessage[];
+}): LiveSessionPayload {
+  const session: LiveSessionPayload = {
     model: OPENAI_LIVE_WIRE_MODEL,
     instructions: options.instructions ?? "",
     audio: { output: { voice: options.voice } },
     delegation: { type: "client" },
   };
+
+  if (options.history?.length) {
+    session.initial_items = options.history.map(({ role, text }) => ({
+      type: "message",
+      role,
+      content: [{ type: role === "assistant" ? "output_text" : "input_text", text }],
+    }));
+  }
+
+  return session;
 }
 
 /** One finished turn; the sideband also mirrors both audio streams, which qgrid skips. */

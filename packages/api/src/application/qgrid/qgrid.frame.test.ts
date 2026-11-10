@@ -2531,6 +2531,42 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       expect(requestLogFinishRunMock).toHaveBeenCalledWith(77, expect.objectContaining({ cost_usd: 52_000 }));
     });
 
+    it("starts from a history, logs it, and gives it to delegations before the session's turns", async () => {
+      const history = [
+        { role: "user" as const, text: "My dog is Kuma." },
+        { role: "assistant" as const, text: "Kuma is a lovely name." },
+      ];
+
+      await QgridFrame.liveCall({ sdp: "v=0 offer", history });
+
+      expect(startLive).toHaveBeenCalledWith(expect.objectContaining({ history }));
+      expect(requestLogCreateRunMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          history: [
+            { type: "message", role: "user", content: "My dog is Kuma." },
+            { type: "message", role: "assistant", content: "Kuma is a lovely name." },
+          ],
+        }),
+      );
+
+      dispatcherQueryMock.mockResolvedValueOnce({ text: "ok", usage: {}, costUsd: 0 });
+      hooks().onTurn([{ role: "user", transcript: "What's his name?", startMs: 0, endMs: 1 }]);
+      await hooks().onDelegation({ itemId: "item_d", text: "Recall the dog's name" });
+
+      expect(dispatcherQueryMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt:
+            "Conversation so far:\nuser: My dog is Kuma.\nassistant: Kuma is a lovely name.\nuser: What's his name?\n\nRequest from the voice assistant:\nRecall the dog's name",
+        }),
+      );
+
+      // Past 128 items OpenAI never starts the session, so qgrid refuses first.
+      const tooLong = Array.from({ length: 129 }, () => ({ role: "user" as const, text: "hi" }));
+      await expect(QgridFrame.liveCall({ sdp: "v=0", history: tooLong })).rejects.toMatchObject({
+        statusCode: 400,
+      });
+    });
+
     it("tells the voice when a delegation fails instead of leaving it waiting", async () => {
       await QgridFrame.liveCall({ sdp: "v=0 offer" });
       dispatcherQueryMock.mockRejectedValueOnce(new Error("quota exceeded"));

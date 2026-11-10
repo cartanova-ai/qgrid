@@ -12,6 +12,7 @@ import { VOICE_TAB_IDS, VOICE_TAB_TITLES, type VoiceTab } from "@/components/nav
 import {
   Effort,
   type LiveCallInput,
+  type LiveHistoryItem,
   QGRID_MODEL_GROUPS,
   type SpeakInput,
   type SpeakOutput,
@@ -680,6 +681,7 @@ function LivePanel() {
   const [webSearch, setWebSearch] = useState(false);
   // Off sends logger: false, so the session leaves no request log at all.
   const [logged, setLogged] = useState(true);
+  const [earlier, setEarlier] = useState<LiveHistoryItem[]>([]);
   const searchable = !delegateModel.startsWith("anthropic/");
   const [status, setStatus] = useState<"idle" | "connecting" | "live">("idle");
   const [error, setError] = useState<string>();
@@ -747,7 +749,20 @@ function LivePanel() {
     }
   };
 
-  const start = async () => {
+  // "Continue" starts a new session from everything said so far (OpenAI takes at most 128 items).
+  const start = async (continueConversation: boolean) => {
+    const history: LiveHistoryItem[] = continueConversation
+      ? [
+          ...earlier,
+          ...turns.flatMap((turn): LiveHistoryItem[] =>
+            turn.text.trim()
+              ? [{ role: turn.role === "assistant" ? "assistant" : "user", text: turn.text.trim() }]
+              : [],
+          ),
+        ].slice(-128)
+      : [];
+
+    setEarlier(history);
     setError(undefined);
     setTurns([]);
     setRequestLogId(undefined);
@@ -778,6 +793,8 @@ function LivePanel() {
       };
 
       if (instructions.trim()) params.instructions = instructions.trim();
+
+      if (history.length) params.history = history;
 
       if (!logged) params.logger = false;
       const out = await liveCall.mutateAsync({ params });
@@ -876,10 +893,21 @@ function LivePanel() {
       </div>
       <div className="flex flex-wrap items-center gap-3">
         {status === "idle" ? (
-          <button type="button" onClick={start} className={BUTTON}>
-            <MicIcon className="size-3.5" />
-            Start conversation
-          </button>
+          <>
+            <button type="button" onClick={() => start(false)} className={BUTTON}>
+              <MicIcon className="size-3.5" />
+              Start conversation
+            </button>
+            {turns.length > 0 && (
+              <button
+                type="button"
+                onClick={() => start(true)}
+                className="text-[12px] font-medium text-sienna-600 hover:text-sienna-700"
+              >
+                Continue this conversation
+              </button>
+            )}
+          </>
         ) : (
           <button
             type="button"
@@ -915,12 +943,24 @@ function LivePanel() {
       </div>
       {/* oxlint-disable-next-line jsx-a11y/media-has-caption -- live speech; the transcript is shown below. */}
       <audio ref={audioRef} autoPlay />
-      {turns.length === 0 ? (
+      {earlier.length === 0 && turns.length === 0 ? (
         <p className="py-6 text-center text-[12px] text-sand-400">
           Start a conversation and talk; both sides of the transcript appear here.
         </p>
       ) : (
         <ul className="flex flex-col gap-1.5">
+          {/* What this session started from, dimmed above its own turns. */}
+          {earlier.map((item, index) => (
+            <li
+              key={`earlier-${index}`}
+              className="rounded-lg bg-sand-50/60 px-3 py-2 text-[13px] text-sand-500"
+            >
+              <span className="mr-2 text-[10px] font-medium uppercase tracking-wider text-sand-400">
+                {item.role}
+              </span>
+              {item.text}
+            </li>
+          ))}
           {turns.map((turn) => (
             <li
               key={turn.id}

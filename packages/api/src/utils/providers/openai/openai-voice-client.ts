@@ -20,6 +20,7 @@ import {
   liveDelegationCreatedEvent,
   liveSessionClosedEvent,
   liveTurnDoneEvent,
+  type LiveHistoryMessage,
   liveUsageUpdatedEvent,
   OPENAI_LIVE_ALPHA_HEADER,
   OPENAI_LIVE_CALLS_QUERY,
@@ -148,6 +149,8 @@ export interface OpenAILiveCallRequest {
   sdp: string;
   voice?: string;
   instructions?: string;
+  /** An earlier conversation the session starts from. */
+  history?: readonly LiveHistoryMessage[];
   signal?: AbortSignal;
   /** Called with the conversation so far after each finished turn; must not throw. */
   onTurn?: (turns: readonly OpenAILiveTurn[]) => void;
@@ -687,7 +690,11 @@ export class OpenAIVoiceClient {
         headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify({
           sdp: request.sdp,
-          session: buildLiveSession({ voice, instructions: request.instructions }),
+          session: buildLiveSession({
+            voice,
+            instructions: request.instructions,
+            history: request.history,
+          }),
         }),
         signal,
       });

@@ -712,6 +712,27 @@ describe("OpenAIVoiceClient.createLiveCall", () => {
     ]);
   });
 
+  it("seeds the session with history as Codex's initial_items", async () => {
+    const fetchMock = vi.fn(async () => callsResponse("rtc_live"));
+    const client = new OpenAIVoiceClient({ fetch: fetchMock as unknown as typeof fetch });
+
+    await client.createLiveCall(credentials, {
+      sdp: "v=0",
+      history: [
+        { role: "developer", text: "Stay in character as Kuma." },
+        { role: "user", text: "My name is Dongseon." },
+        { role: "assistant", text: "Nice to meet you!" },
+      ],
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).session.initial_items).toEqual([
+      { type: "message", role: "developer", content: [{ type: "input_text", text: "Stay in character as Kuma." }] },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "My name is Dongseon." }] },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "Nice to meet you!" }] },
+    ]);
+  });
+
   it("ends at a bare sideband close with the last reported usage", async () => {
     const ws = mockedWebSocket();
 

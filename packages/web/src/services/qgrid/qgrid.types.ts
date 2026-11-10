@@ -665,6 +665,16 @@ export type SpeakOutput = z.infer<typeof SpeakOutput>;
 // conversation when the session ends. Audio flows between the caller and OpenAI only. The caller
 // ends the session by sending {"type":"session.close"} on its "oai-events" data channel; a dropped
 // peer keeps the session (and its billed time) running for about 30 s.
+// An earlier conversation the session starts from: a past live session's turns or a text chat
+// alike. Measured on the subscription route (2026-11-10): past 128 items, or with a system role,
+// OpenAI accepts the call but never starts the session; 1,000,000 characters still opened.
+export const LiveHistoryItem = z.object({
+  role: z.enum(["user", "assistant", "developer"]),
+  text: z.string().min(1),
+});
+
+export type LiveHistoryItem = z.infer<typeof LiveHistoryItem>;
+
 export const LiveCallInput = z.object({
   model: z.literal("openai/gpt-live-1").optional(),
   sdp: z
@@ -674,6 +684,14 @@ export const LiveCallInput = z.object({
   // One of the live voices (cove by default); the realtime TTS voices do not apply.
   voice: z.string().min(1).max(64).optional(),
   instructions: z.string().min(1).max(8_000).optional(),
+  history: z
+    .array(LiveHistoryItem)
+    .max(128, "history holds at most 128 items")
+    .refine(
+      (items) => items.reduce((total, item) => total + item.text.length, 0) <= 1_000_000,
+      "history text exceeds 1,000,000 characters",
+    )
+    .optional(),
   // What the voice hands off (lookups, reasoning) runs as a qgrid query on this model, chosen per
   // session: any served model in QGRID_MODELS (default openai/gpt-6-luna at low effort).
   // webSearch turns on the provider's hosted web search (openai/ and grok/ only).

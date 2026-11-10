@@ -742,6 +742,12 @@ Content-Type: application/json
     "sdp": "SDP",
     "voice": "VOICE",
     "instructions": "INSTRUCTIONS",
+    "history": [
+      {
+        "role": "user",
+        "text": "TEXT"
+      }
+    ],
     "delegation": {
       "model": "MODEL",
       "effort": "low",

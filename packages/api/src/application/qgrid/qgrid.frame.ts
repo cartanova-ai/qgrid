@@ -105,7 +105,7 @@ import {
   RequestLogModel,
   type RequestLogStepFields,
 } from "../request-log/request-log.model";
-import { type RequestLogListParams } from "../request-log/request-log.types";
+import { type HistoryItems, type RequestLogListParams } from "../request-log/request-log.types";
 import { type TokenSubsetA } from "../sonamu.generated";
 
 /** Fields token refresh reads; dispatchers pass their pooled view of a token. */
@@ -147,6 +147,7 @@ import {
   type GenerateImagesOutput,
   LiveCallInput,
   type LiveCallOutput,
+  type LiveHistoryItem,
   SpeakInput,
   type SpeakOutput,
   TranscribeInput,
@@ -798,6 +799,8 @@ type MediaLogStart = {
   projectName?: string;
   /** OpenAI speech style instructions or STT prompt, shown as the run's system prompt. */
   systemPrompt?: string;
+  /** The earlier conversation a live session starts from. */
+  history?: HistoryItems;
 };
 
 // Creating the running row is a precondition of a logged provider call, as for query.
@@ -814,6 +817,7 @@ async function startMediaRun(
     project_name: start.projectName,
     is_image_generation: start.kind === "image",
     media_kind: start.kind,
+    history: start.history,
   });
 }
 
@@ -1364,9 +1368,19 @@ const LIVE_DELEGATION_SYSTEM =
 
 type LiveDelegationOptions = { model: string; effort: string; webSearch: boolean };
 
-/** The backend sees the conversation so far, as Codex's agent has it in its own thread. */
-function delegationPrompt(turns: readonly OpenAILiveTurn[], request: string): string {
-  const conversation = turns.map((turn) => `${turn.role}: ${turn.transcript.trim()}`).join("\n");
+/**
+ * The backend sees the conversation so far, the seeded history first, as Codex's agent has it in
+ * its own thread.
+ */
+function delegationPrompt(
+  history: readonly LiveHistoryItem[],
+  turns: readonly OpenAILiveTurn[],
+  request: string,
+): string {
+  const conversation = [
+    ...history.map((item) => `${item.role}: ${item.text.trim()}`),
+    ...turns.map((turn) => `${turn.role}: ${turn.transcript.trim()}`),
+  ].join("\n");
 
   return [
     conversation && `Conversation so far:\n${conversation}`,
@@ -1383,6 +1397,7 @@ function delegationPrompt(turns: readonly OpenAILiveTurn[], request: string): st
 function liveDelegationHandler(
   options: LiveDelegationOptions,
   instructions: string | undefined,
+  history: readonly LiveHistoryItem[],
   turnsSoFar: () => readonly OpenAILiveTurn[],
   log: { requestLogId: number; costs: { delegationUsd: number } } | undefined,
 ): (delegation: OpenAILiveDelegation) => Promise<string> {
@@ -1395,7 +1410,7 @@ function liveDelegationHandler(
 
     try {
       const result = await QgridDispatcher.query({
-        prompt: delegationPrompt(turnsSoFar(), text),
+        prompt: delegationPrompt(history, turnsSoFar(), text),
         system: [
           LIVE_DELEGATION_SYSTEM,
           instructions && `The voice assistant's instructions:\n${instructions}`,
@@ -2621,6 +2636,7 @@ class QgridFrameClass extends BaseFrameClass {
       prompt: "",
       systemPrompt: input.instructions,
       projectName: input.projectName,
+      history: input.history?.map(({ role, text }) => ({ type: "message", role, content: text })),
     });
 
     const startedAt = Date.now();
@@ -2633,6 +2649,7 @@ class QgridFrameClass extends BaseFrameClass {
         sdp: input.sdp,
         voice,
         instructions: input.instructions,
+        history: input.history,
         onTurn: (turns) => {
           turnsSoFar = turns;
           progress?.(turns);
@@ -2640,6 +2657,7 @@ class QgridFrameClass extends BaseFrameClass {
         onDelegation: liveDelegationHandler(
           delegation,
           input.instructions,
+          input.history ?? [],
           () => turnsSoFar,
           requestLogId === undefined ? undefined : { requestLogId, costs },
         ),
@@ -2658,6 +2676,7 @@ class QgridFrameClass extends BaseFrameClass {
         model: OPENAI_LIVE_ROUTE,
         voice,
         instructions: input.instructions,
+        historyItems: input.history?.length ?? 0,
         delegation,
         transport: "webrtc",
         callId,
