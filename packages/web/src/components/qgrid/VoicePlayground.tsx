@@ -17,6 +17,7 @@ import {
 } from "@/services/qgrid/qgrid.types";
 import { QgridService } from "@/services/services.generated";
 
+import { EFFORT_PRESETS, MODEL_PRESET_GROUPS } from "./model-presets";
 import { TimedPlayer, type TimedWord } from "./TimedPlayer";
 import { audioToWavBase64, bytesToBase64 } from "./voice-audio";
 
@@ -640,17 +641,9 @@ const LIVE_VOICES =
     " ",
   );
 
-// What qgrid runs when the voice hands work off (lookups, reasoning); default first. Any qgrid text
-// model works; Claude Code has no web search.
-const DELEGATION_MODELS = [
-  "openai/gpt-6-luna",
-  "openai/gpt-6-astra",
-  "openai/gpt-5.6-luna",
-  "anthropic/claude-sonnet-5",
-  "grok/grok-4.7",
-];
-
-const EFFORTS = ["low", "medium", "high"] as const;
+// What qgrid runs when the voice hands work off (lookups, reasoning): any model the chat offers.
+// The server default; Claude Code has no web search.
+const DEFAULT_DELEGATION_MODEL = "openai/gpt-6-luna";
 
 // Data-channel events the transcript is built from (the same events the server logs).
 const LiveEvent = z.looseObject({
@@ -681,8 +674,8 @@ function endLiveSession({ pc, channel, mic }: LiveSession) {
 function LivePanel() {
   const [voice, setVoice] = useState(LIVE_VOICES[0]!);
   const [instructions, setInstructions] = useState("");
-  const [delegateModel, setDelegateModel] = useState(DELEGATION_MODELS[0]!);
-  const [effort, setEffort] = useState<(typeof EFFORTS)[number]>("low");
+  const [delegateModel, setDelegateModel] = useState(DEFAULT_DELEGATION_MODEL);
+  const [effort, setEffort] = useState<(typeof EFFORT_PRESETS)[number]>("low");
   const [webSearch, setWebSearch] = useState(false);
   const searchable = !delegateModel.startsWith("anthropic/");
   const [status, setStatus] = useState<"idle" | "connecting" | "live">("idle");
@@ -828,10 +821,14 @@ function LivePanel() {
             disabled={status !== "idle"}
             className={CONTROL}
           >
-            {DELEGATION_MODELS.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
+            {MODEL_PRESET_GROUPS.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.models.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </Field>
@@ -839,11 +836,11 @@ function LivePanel() {
           <Field label="Effort">
             <select
               value={effort}
-              onChange={(e) => setEffort(EFFORTS.find((v) => v === e.target.value) ?? "low")}
+              onChange={(e) => setEffort(EFFORT_PRESETS.find((v) => v === e.target.value) ?? "low")}
               disabled={status !== "idle"}
               className={CONTROL}
             >
-              {EFFORTS.map((v) => (
+              {EFFORT_PRESETS.map((v) => (
                 <option key={v} value={v}>
                   {v}
                 </option>
