@@ -8,6 +8,7 @@ import PlayIcon from "~icons/lucide/play";
 import SquareIcon from "~icons/lucide/square";
 import XIcon from "~icons/lucide/x";
 
+import { VOICE_TAB_IDS, VOICE_TAB_TITLES, type VoiceTab } from "@/components/nav-items";
 import {
   type LiveCallInput,
   type SpeakInput,
@@ -865,35 +866,28 @@ function LivePanel() {
   );
 }
 
-const TABS = [
-  { id: "tts", label: "Text to speech" },
-  { id: "stt", label: "Speech to text" },
-  { id: "live", label: "Live conversation" },
-] as const;
-
-export function VoicePlayground() {
-  const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("tts");
-
-  // All panels stay mounted (inactive ones are hidden) so switching tabs keeps form state,
-  // history, any running recording, and a live conversation.
+export function VoicePlayground({ tab }: { tab: VoiceTab }) {
+  // All panels stay mounted (inactive ones are hidden) so switching tools keeps form state,
+  // history, any running recording, and a live conversation. The sidebar lists the tools; this
+  // bar is for narrow screens, where the sidebar is hidden.
   return (
     <section className="rounded-xl border border-sand-200/70 bg-white overflow-hidden">
-      <div role="tablist" className="flex gap-1 border-b border-sand-100 px-3 pt-2">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
+      <div role="tablist" className="flex gap-1 border-b border-sand-100 px-3 pt-2 md:hidden">
+        {VOICE_TAB_IDS.map((id) => (
+          <Link
+            key={id}
+            to="/voice"
+            search={{ tab: id }}
             role="tab"
-            aria-selected={tab === t.id}
-            onClick={() => setTab(t.id)}
-            className={`-mb-px border-b-2 px-3 py-2 text-[13px] transition-colors duration-150 ${
-              tab === t.id
+            aria-selected={tab === id}
+            className={`-mb-px border-b-2 px-3 py-2 text-[13px] no-underline transition-colors duration-150 ${
+              tab === id
                 ? "border-sienna-500 font-medium text-sand-800"
                 : "border-transparent text-sand-500 hover:text-sand-700"
             }`}
           >
-            {t.label}
-          </button>
+            {VOICE_TAB_TITLES[id]}
+          </Link>
         ))}
       </div>
       <div role="tabpanel" hidden={tab !== "tts"}>
