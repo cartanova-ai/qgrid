@@ -10,14 +10,15 @@ import XIcon from "~icons/lucide/x";
 
 import { VOICE_TAB_IDS, VOICE_TAB_TITLES, type VoiceTab } from "@/components/nav-items";
 import {
+  Effort,
   type LiveCallInput,
+  QGRID_MODEL_GROUPS,
   type SpeakInput,
   type SpeakOutput,
   type TranscribeInput,
 } from "@/services/qgrid/qgrid.types";
 import { QgridService } from "@/services/services.generated";
 
-import { EFFORT_PRESETS, MODEL_PRESET_GROUPS } from "./model-presets";
 import { TimedPlayer, type TimedWord } from "./TimedPlayer";
 import { audioToWavBase64, bytesToBase64 } from "./voice-audio";
 
@@ -675,7 +676,7 @@ function LivePanel() {
   const [voice, setVoice] = useState(LIVE_VOICES[0]!);
   const [instructions, setInstructions] = useState("");
   const [delegateModel, setDelegateModel] = useState(DEFAULT_DELEGATION_MODEL);
-  const [effort, setEffort] = useState<(typeof EFFORT_PRESETS)[number]>("low");
+  const [effort, setEffort] = useState<Effort>("low");
   const [webSearch, setWebSearch] = useState(false);
   const searchable = !delegateModel.startsWith("anthropic/");
   const [status, setStatus] = useState<"idle" | "connecting" | "live">("idle");
@@ -821,7 +822,7 @@ function LivePanel() {
             disabled={status !== "idle"}
             className={CONTROL}
           >
-            {MODEL_PRESET_GROUPS.map((group) => (
+            {QGRID_MODEL_GROUPS.map((group) => (
               <optgroup key={group.label} label={group.label}>
                 {group.models.map((m) => (
                   <option key={m} value={m}>
@@ -836,11 +837,11 @@ function LivePanel() {
           <Field label="Effort">
             <select
               value={effort}
-              onChange={(e) => setEffort(EFFORT_PRESETS.find((v) => v === e.target.value) ?? "low")}
+              onChange={(e) => setEffort(Effort.options.find((v) => v === e.target.value) ?? "low")}
               disabled={status !== "idle"}
               className={CONTROL}
             >
-              {EFFORT_PRESETS.map((v) => (
+              {Effort.options.map((v) => (
                 <option key={v} value={v}>
                   {v}
                 </option>

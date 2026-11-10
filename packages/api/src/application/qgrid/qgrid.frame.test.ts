@@ -2547,7 +2547,10 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       );
     });
 
-    it("rejects web search for an anthropic delegation model before logging or dispatch", async () => {
+    it("rejects an unserved delegation model or anthropic web search before logging or dispatch", async () => {
+      await expect(
+        QgridFrame.liveCall({ sdp: "v=0", delegation: { model: "openai/gpt-5.5" } }),
+      ).rejects.toMatchObject({ statusCode: 400 });
       await expect(
         QgridFrame.liveCall({
           sdp: "v=0",

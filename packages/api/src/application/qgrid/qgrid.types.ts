@@ -1,5 +1,64 @@
 import { z } from "zod";
 
+// ─── Served models ───
+
+// qgrid 가 실제로 서비스하는 텍스트 모델(provider 별 최신순).
+// dispatcher 는 provider prefix 없는 모델을 라우팅하지 못하므로 항상 접두사를 포함한다.
+// ai-sdk 의 QgridSupportedModel union 중 실제로 서비스되는 모델만 provider 별로 최신순 나열한다.
+// sonamu sync 로 web 에 내려가 대시보드 채팅과 GPT-Live 위임 모델 선택이 쓰고, liveCall 이 위임 모델을
+// 이 목록으로 검사한다. ai-sdk 와 공유하지 않으므로 모델을 추가할 때 ai-sdk union 도 함께 갱신한다.
+// union 에는 남아 있지만 여기서 제외한 항목:
+//  - `gpt-5.4`, `gpt-5.4-mini`: qgrid 가 쓰는 ChatGPT 구독 Codex 경로에서 2026-08-31 retired
+//    (대체 gpt-5.6-terra / gpt-5.6-luna).
+//  - `gpt-5.2`, `gpt-5.3-codex`: 같은 경로에서 이미 제공 종료.
+//  - `gpt-5.3-codex-spark`: 같은 경로에서 400("not supported when using Codex with a ChatGPT account"),
+//    Codex 카탈로그에서도 빠짐(2026-09-29 확인).
+//  - `gpt-5.5`: Codex/ChatGPT 경로에서 2026-10-14 은퇴 예정(대체 gpt-6.1-sol / gpt-6-luna).
+//  - `claude-opus-4`, `claude-sonnet-4`: 2026-06-15 retired, Claude Code 에서 모델 오류.
+//  - `claude-opus-4-1`: 2026-08-05 retired, Claude Code 가 claude-opus-5-5 로 대체 서빙.
+//  - `claude-sonnet-4-5`: 2026-09-30 deprecated, 2026-11-30 retirement 예정(대체 claude-sonnet-5-5).
+//  - `claude-sonnet-4-7`: 공식 카탈로그에 없는 유령 항목.
+export const QGRID_MODEL_GROUPS: { label: string; models: string[] }[] = [
+  {
+    label: "OpenAI",
+    models: [
+      "openai/gpt-6-astra",
+      "openai/gpt-6.1-sol",
+      "openai/gpt-6.1-terra",
+      "openai/gpt-6-sol",
+      "openai/gpt-6-luna",
+      "openai/gpt-5.6-terra",
+      "openai/gpt-5.6-sol",
+      "openai/gpt-5.6-luna",
+    ],
+  },
+  {
+    label: "Anthropic",
+    models: [
+      "anthropic/claude-fable-5-1",
+      "anthropic/claude-fable-5",
+      "anthropic/claude-opus-5-5",
+      "anthropic/claude-opus-5",
+      "anthropic/claude-sonnet-5-5",
+      "anthropic/claude-sonnet-5",
+      "anthropic/claude-haiku-5-5",
+      "anthropic/claude-opus-4-8",
+      "anthropic/claude-opus-4-7",
+      "anthropic/claude-opus-4-6",
+      "anthropic/claude-opus-4-5",
+      "anthropic/claude-sonnet-4-6",
+      "anthropic/claude-haiku-4-5",
+    ],
+  },
+  {
+    label: "Grok",
+    // ai-sdk QgridGrokModel 의 구독 카탈로그 id(grok-4.7 이 기본). Grok 4.6/4.7 은 Build 모델로 라우팅된다.
+    models: ["grok/grok-4.7", "grok/grok-4.7-build-fast", "grok/grok-4.6", "grok/grok-4.5"],
+  },
+];
+
+export const QGRID_MODELS = QGRID_MODEL_GROUPS.flatMap((group) => group.models);
+
 // ─── Query ───
 
 export const Effort = z.enum(["low", "medium", "high"]);
@@ -611,13 +670,13 @@ export const LiveCallInput = z.object({
   voice: z.string().min(1).max(64).optional(),
   instructions: z.string().min(1).max(8_000).optional(),
   // What the voice hands off (lookups, reasoning) runs as a qgrid query on this model, chosen per
-  // session: any openai/, anthropic/ or grok/ model (default openai/gpt-6-luna at low effort).
+  // session: any served model in QGRID_MODELS (default openai/gpt-6-luna at low effort).
   // webSearch turns on the provider's hosted web search (openai/ and grok/ only).
   delegation: z
     .object({
       model: z
         .string()
-        .regex(/^(openai|anthropic|grok)\/[A-Za-z0-9._-]+$/, "model must be a qgrid model id")
+        .refine((id) => QGRID_MODELS.includes(id), "model must be one of QGRID_MODELS")
         .optional(),
       effort: Effort.optional(),
       webSearch: z.boolean().optional(),

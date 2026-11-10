@@ -557,7 +557,7 @@ app.post("/live", async (req, res) => {
 });
 ```
 
-- 위임: GPT-Live는 혼자 답할 수 없는 일(검색, 추론)을 클라이언트에 넘기고, 답이 올 때까지 말을 이어갑니다. Codex가 자기 에이전트로 이 요청을 처리하듯 qgrid가 처리합니다. 지금까지의 대화와 함께 세션의 위임 모델로 qgrid query를 돌리고, 음성이 그 답을 말합니다. 세션마다 `params.delegation`으로 고릅니다. `model`(`openai/`·`anthropic/`·`grok/` 모델, 기본 `openai/gpt-6-luna`), `effort`(기본 `low`, `medium`, `high`), `webSearch`(제공자의 hosted 웹 검색, `openai/`·`grok/`만, 기본 꺼짐). 위임이 실패하면 짧은 실패 안내를 돌려주어 음성이 기다리지 않고 그 사실을 말하게 합니다. 위임은 각각 `delegation` tool 단계로 기록되고, 백엔드 비용이 실행 비용에 더해집니다.
+- 위임: GPT-Live는 혼자 답할 수 없는 일(검색, 추론)을 클라이언트에 넘기고, 답이 올 때까지 말을 이어갑니다. Codex가 자기 에이전트로 이 요청을 처리하듯 qgrid가 처리합니다. 지금까지의 대화와 함께 세션의 위임 모델로 qgrid query를 돌리고, 음성이 그 답을 말합니다. 세션마다 `params.delegation`으로 고릅니다. `model`(qgrid가 서비스하는 모델, 대시보드 채팅과 같은 목록인 서버 `qgrid.types.ts`의 `QGRID_MODELS`. 기본 `openai/gpt-6-luna`, 목록 밖은 HTTP 400), `effort`(기본 `low`, `medium`, `high`), `webSearch`(제공자의 hosted 웹 검색, `openai/`·`grok/`만, 기본 꺼짐). 위임이 실패하면 짧은 실패 안내를 돌려주어 음성이 기다리지 않고 그 사실을 말하게 합니다. 위임은 각각 `delegation` tool 단계로 기록되고, 백엔드 비용이 실행 비용에 더해집니다.
 - 요청 `params`: `sdp`(offer, 필수), `voice`, `instructions`, `delegation`, 그리고 다른 엔드포인트와 같은 `tokenName`(`openai/` 접두사), `projectName`, `logger`. `model`은 생략하거나 `openai/gpt-live-1`만 됩니다. 다른 값은 HTTP 400입니다.
 - 응답: `sdp`(answer), `callId`, `model`, `voice`, `tokenName`, `requestLogId`. 요청 로그는 세션 내내 `running`이고, 턴이 끝날 때마다 세션 시간이 붙은 대화가 갱신되어 진행 중에도 볼 수 있습니다. 세션이 끝나면 비용 추정치(세션 오디오 분당 $0.05, API 정가)와 함께 마무리됩니다.
 - 음성: `cove`(기본) `juniper maple spruce ember vale breeze arbor sol aube bubbie haetsal hanul himari leher miko neer porto rindo rio rivage selva sonna tinta viola`. realtime 음성 합성용 음성(`marin` 등)은 쓸 수 없습니다. OpenAI가 call은 받아 주지만 세션이 시작되지 않기 때문에 서버가 HTTP 400으로 막습니다.

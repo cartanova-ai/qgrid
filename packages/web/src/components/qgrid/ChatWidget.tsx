@@ -11,6 +11,8 @@ import XIcon from "~icons/lucide/x";
 
 import chatIcon from "@/assets/chat-icon.png";
 import {
+  Effort,
+  QGRID_MODEL_GROUPS,
   type QgridThreadCoord,
   type QueryInput,
   type QueryOutput,
@@ -29,7 +31,6 @@ import {
   type ChatConfig,
 } from "./chat-token-selection";
 import { ChatImagePreview } from "./ChatImagePreview";
-import { EFFORT_PRESETS, MODEL_PRESET_GROUPS } from "./model-presets";
 
 const CHAT_PROJECT_NAME = "qgrid_chat";
 const DEFAULT_MODEL = "anthropic/claude-fable-5-1";
@@ -452,7 +453,7 @@ export function ChatWidget() {
                   disabled={busy}
                   className="min-w-0 flex-1 rounded-xl border border-sand-200/80 bg-white px-2 py-1.5 text-[12px] text-sand-800 focus:outline-none focus:border-sienna-300 disabled:opacity-50"
                 >
-                  {MODEL_PRESET_GROUPS.map((group) => (
+                  {QGRID_MODEL_GROUPS.map((group) => (
                     <optgroup key={group.label} label={group.label}>
                       {group.models.map((m) => (
                         <option key={m} value={m}>
@@ -469,7 +470,7 @@ export function ChatWidget() {
                   className="rounded-xl border border-sand-200/80 bg-white px-2 py-1.5 text-[12px] text-sand-600 focus:outline-none focus:border-sienna-300 disabled:opacity-50"
                 >
                   <option value="">effort 기본</option>
-                  {EFFORT_PRESETS.map((v) => (
+                  {Effort.options.map((v) => (
                     <option key={v} value={v}>
                       {v}
                     </option>
