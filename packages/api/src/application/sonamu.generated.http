@@ -742,6 +742,11 @@ Content-Type: application/json
     "sdp": "SDP",
     "voice": "VOICE",
     "instructions": "INSTRUCTIONS",
+    "delegation": {
+      "model": "MODEL",
+      "effort": "low",
+      "webSearch": false
+    },
     "tokenName": "TOKENNAME",
     "projectName": "PROJECTNAME",
     "logger": false

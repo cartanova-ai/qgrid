@@ -248,6 +248,12 @@ const AUTO_IMAGE_TOOL: OpenAIResponseItem = {
   },
 };
 
+/**
+ * Hosted web search as Codex sends it (tools/src/tool_spec.rs); `external_web_access` asks for
+ * live search rather than the cached index. Answered on the subscription route (2026-11-10).
+ */
+const WEB_SEARCH_TOOL: OpenAIResponseItem = { type: "web_search", external_web_access: true };
+
 function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
   const { outputFormat, ...imageControls } = req.imageGenerationOptions ?? {};
   const auto = req.imageGeneration === "auto";
@@ -271,6 +277,11 @@ function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
     options.instructions = [req.systemPrompt, AUTO_IMAGE_INSTRUCTIONS].filter(Boolean).join("\n\n");
     options.parallelToolCalls = false;
     options.tools = [AUTO_IMAGE_TOOL];
+  }
+
+  // Function tools reach OpenAI through qgrid's tool emulation; only hosted search goes native.
+  if (req.tools?.some((tool) => tool.type === "web_search")) {
+    options.tools = [...(options.tools ?? []), WEB_SEARCH_TOOL];
   }
 
   const reasoning = asReasoning(req);

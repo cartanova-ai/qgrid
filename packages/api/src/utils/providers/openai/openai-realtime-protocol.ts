@@ -167,6 +167,31 @@ export const liveTurnDoneEvent = z.looseObject({
   }),
 });
 
+/**
+ * With `delegation.type: "client"` the voice model hands work it cannot do itself (lookups,
+ * reasoning) to the client and keeps talking until the answer arrives; Codex runs it as a turn of
+ * its own agent (core/src/realtime_conversation.rs route_realtime_text_input). Left unanswered,
+ * the voice stalls with filler indefinitely (SON-592). `responses` delegation, where OpenAI runs
+ * the backend, fails on the subscription route (2026-11-10).
+ */
+export const liveDelegationCreatedEvent = z.looseObject({
+  type: z.literal("delegation.created"),
+  item: z.looseObject({
+    id: z.string(),
+    target: z.literal("client"),
+    content: z.array(z.looseObject({ type: z.string(), text: z.string().optional() })),
+  }),
+});
+
+/** The answer to a delegation; no channel means speakable (codex-api methods_frameless_bidi.rs). */
+export function liveDelegationAnswerEvent(delegationItemId: string, text: string): JsonValue {
+  return {
+    type: "delegation.context.append",
+    delegation_item_id: delegationItemId,
+    content: [{ type: "input_text", text }],
+  };
+}
+
 const liveUsage = z.looseObject({ audio_duration_ms: z.number() });
 
 /** Running usage, about every 15 s; the last one stands in when the session ends without close. */

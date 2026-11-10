@@ -649,7 +649,7 @@ describe("OpenAIVoiceClient.createLiveCall", () => {
       usage: { audio_duration_ms: 9400 },
     });
 
-    await expect(call.ended).resolves.toEqual({
+    await expect(call.ended).resolves.toMatchObject({
       turns: [
         { role: "user", transcript: "Hi there?", startMs: 600, endMs: 5800 },
         { role: "assistant", transcript: "Hello!", startMs: 5600, endMs: 9400 },
@@ -661,6 +661,55 @@ describe("OpenAIVoiceClient.createLiveCall", () => {
     // The session belongs to the caller's peer: qgrid sends nothing on the sideband.
     expect(socket.sent).toHaveLength(0);
     expect(socket.closed?.code).toBe(1000);
+  });
+
+  it("answers a delegation on the sideband and keeps the session's events", async () => {
+    const ws = mockedWebSocket();
+
+    const client = new OpenAIVoiceClient({
+      fetch: (async () => callsResponse("rtc_live")) as unknown as typeof fetch,
+      webSocketFactory: ws.factory,
+    });
+
+    const onDelegation = vi.fn(async () => "Nvidia is in today's top story.");
+    const call = await client.createLiveCall(credentials, { sdp: "v=0", onDelegation });
+    const socket = ws.sockets[0]!;
+    socket.emit("open");
+    socket.message({ type: "session.input_audio.append", audio: "AAAA" });
+    socket.message({ type: "turn.delta", delta: " news", turn_id: "turn_u" });
+
+    socket.message({
+      type: "delegation.created",
+      item: {
+        id: "item_d",
+        type: "delegation",
+        target: "client",
+        handoff_id: "handoff_1",
+        content: [{ type: "input_text", text: "Look up today's top tech news" }],
+      },
+    });
+
+    await tick();
+    await tick();
+
+    expect(onDelegation).toHaveBeenCalledWith({ itemId: "item_d", text: "Look up today's top tech news" });
+    expect(socket.sentEvents()).toEqual([
+      {
+        type: "delegation.context.append",
+        delegation_item_id: "item_d",
+        content: [{ type: "input_text", text: "Nvidia is in today's top story." }],
+      },
+    ]);
+
+    socket.message({ type: "session.closed", reason: "client_request", usage: { audio_duration_ms: 1 } });
+    const summary = await call.ended;
+
+    // Audio copies and word-level text are skipped; qgrid's own answer is logged with them.
+    expect(summary.events.map(({ event }) => (event as { type: string }).type)).toEqual([
+      "delegation.created",
+      "delegation.context.append",
+      "session.closed",
+    ]);
   });
 
   it("ends at a bare sideband close with the last reported usage", async () => {
@@ -698,6 +747,7 @@ describe("OpenAIVoiceClient.createLiveCall", () => {
 
     await expect(call.ended).resolves.toEqual({
       turns: [],
+      events: [],
       audioDurationMs: undefined,
       endReason: "sideband error",
       error: "realtime socket handshake rejected with HTTP 404",

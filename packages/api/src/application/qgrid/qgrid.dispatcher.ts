@@ -52,6 +52,11 @@ export type InternalQueryInput = QueryInput & {
   preferredTokenId?: number;
   requirePreferredToken?: boolean;
   onProgress?: GenerateRequest["onProgress"];
+  /**
+   * Server-side only (GPT-Live delegation): turns on the provider's hosted web search. OpenAI and
+   * Grok direct models; the Claude Code runtime has no such tool.
+   */
+  webSearch?: boolean;
 };
 
 // qgrid 상위가 provider 에 요구하는 실행 계약. 스트리밍은 공통 ProviderDispatcher 에 아직 없어서
@@ -214,6 +219,7 @@ export class QgridDispatcherClass {
     const { provider, dispatcher } = this.resolveDispatcher(input, route.provider);
 
     if (provider === "anthropic") {
+      if (input.webSearch) throw new Error("web search is not available on anthropic/ models");
       const decision = decideConvRouting(input);
 
       const result = await dispatcher.generate({
@@ -398,6 +404,8 @@ function buildDirectRequest(
     imageGenerationOptions: input.imageGenerationOptions,
     onProgress: input.onProgress,
   };
+
+  if (input.webSearch) request.tools = [{ type: "web_search" }];
 
   // Opaque namespaces; the Grok dispatcher reads `xai`, OpenAI ignores it.
   if (input.providerOptions?.xai) {

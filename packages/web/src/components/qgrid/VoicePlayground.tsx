@@ -640,6 +640,18 @@ const LIVE_VOICES =
     " ",
   );
 
+// What qgrid runs when the voice hands work off (lookups, reasoning); default first. Any qgrid text
+// model works; Claude Code has no web search.
+const DELEGATION_MODELS = [
+  "openai/gpt-6-luna",
+  "openai/gpt-6-astra",
+  "openai/gpt-5.6-luna",
+  "anthropic/claude-sonnet-5",
+  "grok/grok-4.7",
+];
+
+const EFFORTS = ["low", "medium", "high"] as const;
+
 // Data-channel events the transcript is built from (the same events the server logs).
 const LiveEvent = z.looseObject({
   type: z.string(),
@@ -669,6 +681,10 @@ function endLiveSession({ pc, channel, mic }: LiveSession) {
 function LivePanel() {
   const [voice, setVoice] = useState(LIVE_VOICES[0]!);
   const [instructions, setInstructions] = useState("");
+  const [delegateModel, setDelegateModel] = useState(DELEGATION_MODELS[0]!);
+  const [effort, setEffort] = useState<(typeof EFFORTS)[number]>("low");
+  const [webSearch, setWebSearch] = useState(false);
+  const searchable = !delegateModel.startsWith("anthropic/");
   const [status, setStatus] = useState<"idle" | "connecting" | "live">("idle");
   const [error, setError] = useState<string>();
   const [turns, setTurns] = useState<LiveTurn[]>([]);
@@ -757,7 +773,13 @@ function LivePanel() {
       channel.addEventListener("message", (event) => onEvent(String(event.data)));
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
-      const params: LiveCallInput = { sdp: offer.sdp ?? "", voice, projectName: PROJECT_NAME };
+
+      const params: LiveCallInput = {
+        sdp: offer.sdp ?? "",
+        voice,
+        delegation: { model: delegateModel, effort, webSearch: searchable && webSearch },
+        projectName: PROJECT_NAME,
+      };
 
       if (instructions.trim()) params.instructions = instructions.trim();
       const out = await liveCall.mutateAsync({ params });
@@ -799,6 +821,46 @@ function LivePanel() {
             className={CONTROL}
           />
         </Field>
+        <Field label="Delegation model (answers lookups and reasoning)">
+          <select
+            value={delegateModel}
+            onChange={(e) => setDelegateModel(e.target.value)}
+            disabled={status !== "idle"}
+            className={CONTROL}
+          >
+            {DELEGATION_MODELS.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div className="flex items-end gap-3">
+          <Field label="Effort">
+            <select
+              value={effort}
+              onChange={(e) => setEffort(EFFORTS.find((v) => v === e.target.value) ?? "low")}
+              disabled={status !== "idle"}
+              className={CONTROL}
+            >
+              {EFFORTS.map((v) => (
+                <option key={v} value={v}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <label className="flex h-8 items-center gap-1.5 text-[12px] text-sand-600">
+            <input
+              type="checkbox"
+              checked={searchable && webSearch}
+              onChange={(e) => setWebSearch(e.target.checked)}
+              disabled={status !== "idle" || !searchable}
+              className="accent-sienna-500"
+            />
+            Web search
+          </label>
+        </div>
       </div>
       <div className="flex flex-wrap items-center gap-3">
         {status === "idle" ? (

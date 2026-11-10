@@ -610,6 +610,19 @@ export const LiveCallInput = z.object({
   // One of the live voices (cove by default); the realtime TTS voices do not apply.
   voice: z.string().min(1).max(64).optional(),
   instructions: z.string().min(1).max(8_000).optional(),
+  // What the voice hands off (lookups, reasoning) runs as a qgrid query on this model, chosen per
+  // session: any openai/, anthropic/ or grok/ model (default openai/gpt-6-luna at low effort).
+  // webSearch turns on the provider's hosted web search (openai/ and grok/ only).
+  delegation: z
+    .object({
+      model: z
+        .string()
+        .regex(/^(openai|anthropic|grok)\/[A-Za-z0-9._-]+$/, "model must be a qgrid model id")
+        .optional(),
+      effort: Effort.optional(),
+      webSearch: z.boolean().optional(),
+    })
+    .optional(),
   ...MediaCallOptions,
 });
 

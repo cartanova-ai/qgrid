@@ -2404,6 +2404,7 @@ describe("QgridFrame Grok media and voice (U11)", () => {
 
     beforeEach(() => {
       recordRunProgressMock.mockReset().mockResolvedValue(undefined);
+      dispatcherQueryMock.mockReset();
       const ended = new Promise<Summary>((resolve) => (endSession = resolve));
       startLive = vi.fn().mockResolvedValue({
         result: { sdp: "v=0 answer", callId: "rtc_x", quotaHeaders: new Map(), ended },
@@ -2478,6 +2479,83 @@ describe("QgridFrame Grok media and voice (U11)", () => {
           cost_source: "pricing_table",
         }),
       );
+    });
+
+    type LiveHooks = {
+      onTurn: (turns: object[]) => void;
+      onDelegation: (delegation: { itemId: string; text: string }) => Promise<string>;
+    };
+
+    const hooks = () => startLive.mock.calls[0]![0] as LiveHooks;
+
+    it("answers delegations with a query on the session's model and logs each as a step", async () => {
+      await QgridFrame.liveCall({
+        sdp: "v=0 offer",
+        instructions: "Be a tutor.",
+        delegation: { model: "grok/grok-4.7", effort: "medium", webSearch: true },
+      });
+      dispatcherQueryMock.mockResolvedValueOnce({
+        text: "Here is today's news.",
+        model: "grok-4.7",
+        tokenName: "grok/a",
+        usage: { input_tokens: 10, output_tokens: 5 },
+        costUsd: 0.002,
+      });
+
+      hooks().onTurn([{ role: "user", transcript: "What's new?", startMs: 0, endMs: 1000 }]);
+      const reply = await hooks().onDelegation({ itemId: "item_d", text: "Look up the news" });
+
+      expect(reply).toBe("Here is today's news.");
+      expect(dispatcherQueryMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: "grok/grok-4.7",
+          effort: "medium",
+          webSearch: true,
+          prompt: "Conversation so far:\nuser: What's new?\n\nRequest from the voice assistant:\nLook up the news",
+          system: expect.stringContaining("The voice assistant's instructions:\nBe a tutor."),
+        }),
+      );
+      expect(appendStepMock).toHaveBeenLastCalledWith(
+        77,
+        expect.objectContaining({
+          tool_name: "delegation",
+          tool_call_id: "delegation:item_d",
+          tool_call_index: 1,
+          tool_result: expect.stringContaining("Here is today's news."),
+        }),
+      );
+
+      // The run's cost is the session audio plus every delegation's backend call.
+      endSession({ turns: [], audioDurationMs: 60_000, endReason: "client_request" });
+      await settle();
+      expect(requestLogFinishRunMock).toHaveBeenCalledWith(77, expect.objectContaining({ cost_usd: 52_000 }));
+    });
+
+    it("tells the voice when a delegation fails instead of leaving it waiting", async () => {
+      await QgridFrame.liveCall({ sdp: "v=0 offer" });
+      dispatcherQueryMock.mockRejectedValueOnce(new Error("quota exceeded"));
+
+      const reply = await hooks().onDelegation({ itemId: "item_d", text: "Look up the news" });
+
+      expect(dispatcherQueryMock).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "openai/gpt-6-luna", effort: "low", webSearch: false }),
+      );
+      expect(reply).toContain("could not answer (quota exceeded)");
+      expect(appendStepMock).toHaveBeenLastCalledWith(
+        77,
+        expect.objectContaining({ tool_name: "delegation", error: "quota exceeded" }),
+      );
+    });
+
+    it("rejects web search for an anthropic delegation model before logging or dispatch", async () => {
+      await expect(
+        QgridFrame.liveCall({
+          sdp: "v=0",
+          delegation: { model: "anthropic/claude-sonnet-5", webSearch: true },
+        }),
+      ).rejects.toMatchObject({ statusCode: 400 });
+      expect(requestLogCreateRunMock).not.toHaveBeenCalled();
+      expect(startLive).not.toHaveBeenCalled();
     });
 
     it("records a sideband that failed before any turn as an error run", async () => {

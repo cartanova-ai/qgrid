@@ -53,6 +53,22 @@ async function tickTimer(): Promise<void> {
 }
 
 describe("OpenAIDispatcher direct runtime", () => {
+  it("sends Codex's hosted web search only when the request asks for it", async () => {
+    const seen: OpenAIResponsesOptions[] = [];
+
+    const d = dispatcher((options) => {
+      seen.push(options);
+      return events({ type: "completed", responseId: "r" });
+    });
+
+    await d.onTokenAdded(1, "one", credentials);
+    await d.generate(request({ tools: [{ type: "web_search" }] }));
+    await d.generate(request());
+
+    expect(seen[0]?.tools).toEqual([{ type: "web_search", external_web_access: true }]);
+    expect(seen[1]?.tools).toBeUndefined();
+  });
+
   it.each(["gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"])(
     "disables thinking and omits summaries through generate/stream for %s",
     async (model) => {

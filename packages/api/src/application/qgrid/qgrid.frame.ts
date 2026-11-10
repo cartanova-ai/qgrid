@@ -92,6 +92,7 @@ import {
   wrapPcmAsWav,
 } from "../../utils/providers/openai/openai-realtime-protocol";
 import {
+  type OpenAILiveDelegation,
   type OpenAILiveSummary,
   type OpenAILiveTurn,
   OpenAIVoiceInputError,
@@ -1353,7 +1354,110 @@ function liveProgressRecorder(requestLogId: number): (turns: readonly OpenAILive
   };
 }
 
-type LiveRun = { requestLogId: number; toolCallId: string; tokenName: string; startedAt: number };
+const LIVE_DELEGATION_DEFAULTS = { model: "openai/gpt-6-luna", effort: "low" } as const;
+
+// The voice keeps talking while it waits; a stuck backend still has to end.
+const LIVE_DELEGATION_TIMEOUT_MS = 90_000;
+
+const LIVE_DELEGATION_SYSTEM =
+  "You work behind a real-time voice assistant. It hands you what it cannot answer on its own, and it says your reply aloud. Reply with exactly what it should say: short, natural spoken language in the language of the conversation, with no markdown, lists, links or citations.";
+
+type LiveDelegationOptions = { model: string; effort: string; webSearch: boolean };
+
+/** The backend sees the conversation so far, as Codex's agent has it in its own thread. */
+function delegationPrompt(turns: readonly OpenAILiveTurn[], request: string): string {
+  const conversation = turns.map((turn) => `${turn.role}: ${turn.transcript.trim()}`).join("\n");
+
+  return [
+    conversation && `Conversation so far:\n${conversation}`,
+    `Request from the voice assistant:\n${request}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * Answers the voice model's delegations with a qgrid query on the chosen model and, when the run
+ * is logged, records each as a `delegation` tool step beside the session step.
+ */
+function liveDelegationHandler(
+  options: LiveDelegationOptions,
+  instructions: string | undefined,
+  turnsSoFar: () => readonly OpenAILiveTurn[],
+  log: { requestLogId: number; costs: { delegationUsd: number } } | undefined,
+): (delegation: OpenAILiveDelegation) => Promise<string> {
+  let callIndex = 0;
+
+  return async ({ itemId, text }) => {
+    const startedAt = Date.now();
+    let reply: string;
+    let outcome: Pick<RequestLogStepFields, "tool_result" | "error">;
+
+    try {
+      const result = await QgridDispatcher.query({
+        prompt: delegationPrompt(turnsSoFar(), text),
+        system: [
+          LIVE_DELEGATION_SYSTEM,
+          instructions && `The voice assistant's instructions:\n${instructions}`,
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+        model: options.model,
+        effort: options.effort,
+        webSearch: options.webSearch,
+        timeout: LIVE_DELEGATION_TIMEOUT_MS,
+      });
+
+      reply = result.text;
+
+      if (log) log.costs.delegationUsd += result.costUsd;
+
+      outcome = {
+        tool_result: JSON.stringify({
+          answer: result.text,
+          model: result.model,
+          tokenName: result.tokenName,
+          usage: result.usage,
+          costUsd: result.costUsd,
+        }),
+      };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      // The voice adapts this to the conversation instead of stalling on an unanswered request.
+      reply = `The backend could not answer (${message}). Tell the user briefly that you could not get it.`;
+      outcome = { error: message };
+    }
+
+    if (log) {
+      callIndex += 1;
+
+      const step: RequestLogStepFields = {
+        step_index: 0,
+        type: "tool_call",
+        tool_call_index: callIndex,
+        tool_call_id: `delegation:${itemId}`,
+        tool_name: "delegation",
+        tool_args: JSON.stringify({ request: text, ...options }),
+        tool_duration_ms: Date.now() - startedAt,
+        ...outcome,
+      };
+
+      void RequestLogModel.appendStep(log.requestLogId, step).catch((e: Error) =>
+        mediaLogger.error(`live delegation log failed: ${e.message}`),
+      );
+    }
+
+    return reply;
+  };
+}
+
+type LiveRun = {
+  requestLogId: number;
+  toolCallId: string;
+  tokenName: string;
+  startedAt: number;
+  costs: { delegationUsd: number };
+};
 
 // Replaces the session step's result with the summary and finishes the run when the session ends.
 // Best-effort, as for video: the session already happened, so a failure only loses the record.
@@ -1363,13 +1467,17 @@ async function finishLiveRun(run: LiveRun, summary: OpenAILiveSummary): Promise<
       { toolCallId: run.toolCallId, output: JSON.stringify(summary), isError: false },
     ]);
 
+    // The session's audio time plus every delegation's backend call.
+    const audio = liveCost(OPENAI_LIVE_ROUTE, summary.audioDurationMs);
+    const costUsd = (audio?.costUsd ?? 0) + run.costs.delegationUsd;
+
     const fields = mediaFinishFields({
       kind: "live",
       model: OPENAI_LIVE_ROUTE,
       tokenName: run.tokenName,
       durationMs: Date.now() - run.startedAt,
       response: liveTranscript(summary.turns),
-      cost: liveCost(OPENAI_LIVE_ROUTE, summary.audioDurationMs),
+      cost: audio || costUsd ? { costUsd, costSource: "pricing_table" } : undefined,
     });
 
     // A sideband that failed before any turn says nothing about the session; record why.
@@ -2495,6 +2603,18 @@ class QgridFrameClass extends BaseFrameClass {
     const selection = await resolveMediaTokenSelection("openai", input.tokenName);
     const voice = input.voice ?? OPENAI_LIVE_DEFAULT_VOICE;
 
+    const delegation: LiveDelegationOptions = {
+      model: input.delegation?.model ?? LIVE_DELEGATION_DEFAULTS.model,
+      effort: input.delegation?.effort ?? LIVE_DELEGATION_DEFAULTS.effort,
+      webSearch: input.delegation?.webSearch ?? false,
+    };
+
+    if (delegation.webSearch && delegation.model.startsWith("anthropic/")) {
+      throw new BadRequestException(
+        SD("qgrid.invalidInput")("delegation.webSearch is available on openai/ and grok/ models"),
+      );
+    }
+
     const requestLogId = await startMediaRun(input.logger, {
       kind: "live",
       model: OPENAI_LIVE_ROUTE,
@@ -2504,13 +2624,25 @@ class QgridFrameClass extends BaseFrameClass {
     });
 
     const startedAt = Date.now();
+    const costs = { delegationUsd: 0 };
+    const progress = requestLogId === undefined ? undefined : liveProgressRecorder(requestLogId);
+    let turnsSoFar: readonly OpenAILiveTurn[] = [];
 
     const started = await dispatchMediaCall(requestLogId, (signal) =>
       dispatcher.startLive({
         sdp: input.sdp,
         voice,
         instructions: input.instructions,
-        onTurn: requestLogId === undefined ? undefined : liveProgressRecorder(requestLogId),
+        onTurn: (turns) => {
+          turnsSoFar = turns;
+          progress?.(turns);
+        },
+        onDelegation: liveDelegationHandler(
+          delegation,
+          input.instructions,
+          () => turnsSoFar,
+          requestLogId === undefined ? undefined : { requestLogId, costs },
+        ),
         signal,
         ...selection,
       }),
@@ -2526,6 +2658,7 @@ class QgridFrameClass extends BaseFrameClass {
         model: OPENAI_LIVE_ROUTE,
         voice,
         instructions: input.instructions,
+        delegation,
         transport: "webrtc",
         callId,
       };
@@ -2543,7 +2676,7 @@ class QgridFrameClass extends BaseFrameClass {
         mediaLogger.error(`live request log failed: ${e instanceof Error ? e.message : String(e)}`);
       }
 
-      const run = { requestLogId, toolCallId, tokenName: started.tokenName, startedAt };
+      const run = { requestLogId, toolCallId, tokenName: started.tokenName, startedAt, costs };
       void ended.then((summary) => finishLiveRun(run, summary));
     }
 

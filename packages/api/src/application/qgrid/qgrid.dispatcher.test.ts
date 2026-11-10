@@ -287,6 +287,23 @@ describe("QgridDispatcherClass", () => {
     expect(dispatcher.getStats().map((row) => row.requests)).toEqual([2, 2]);
   });
 
+  it("passes server-side web search to direct providers and refuses it for Claude Code", async () => {
+    const dispatcher = new QgridDispatcherClass();
+    const generate = vi.fn(async () => providerResult({ tokenName: "t" }));
+    dispatcher.openaiDispatcher = { generate } as never;
+    dispatcher.anthropicDispatcher = { generate } as never;
+
+    await dispatcher.query({ prompt: "news?", model: "openai/gpt-6-luna", webSearch: true });
+    await dispatcher.query({ prompt: "hi", model: "openai/gpt-6-luna" });
+
+    expect(generate.mock.calls[0]?.[0]).toMatchObject({ tools: [{ type: "web_search" }] });
+    expect(generate.mock.calls[1]?.[0]).not.toHaveProperty("tools");
+    await expect(
+      dispatcher.query({ prompt: "news?", model: "anthropic/claude-sonnet-5", webSearch: true }),
+    ).rejects.toThrow("web search is not available");
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
   const toolsAndSchema = {
     tools: [
       {

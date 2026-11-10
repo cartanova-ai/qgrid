@@ -16,6 +16,8 @@ import {
   buildTranscriptionSession,
   isOpenAILiveVoice,
   isOpenAIRealtimeVoice,
+  liveDelegationAnswerEvent,
+  liveDelegationCreatedEvent,
   liveSessionClosedEvent,
   liveTurnDoneEvent,
   liveUsageUpdatedEvent,
@@ -70,6 +72,15 @@ export const OPENAI_LIVE_CALL_TIMEOUT_MS = 15_000;
  * 2026-11-10); this bounds a sideband that never closes.
  */
 export const OPENAI_LIVE_WATCH_LIMIT_MS = (2 * 60 + 5) * 60_000;
+
+/** Live events too frequent or bulky for the request log: audio copies and word-level text. */
+const LIVE_UNLOGGED_EVENTS: ReadonlySet<string> = new Set([
+  "session.input_audio.append",
+  "session.output_audio.delta",
+  "input_transcript.added",
+  "output_transcript.added",
+  "turn.delta",
+]);
 
 /** One second of 24 kHz mono PCM16 per input_audio_buffer.append. */
 const APPEND_CHUNK_BYTES = OPENAI_REALTIME_SAMPLE_RATE * 2;
@@ -140,6 +151,24 @@ export interface OpenAILiveCallRequest {
   signal?: AbortSignal;
   /** Called with the conversation so far after each finished turn; must not throw. */
   onTurn?: (turns: readonly OpenAILiveTurn[]) => void;
+  /**
+   * Answers a delegation (work the voice model hands to the client); the resolved text goes back
+   * to the session and the voice speaks it. Without it delegations go unanswered.
+   */
+  onDelegation?: (delegation: OpenAILiveDelegation) => Promise<string>;
+}
+
+export interface OpenAILiveDelegation {
+  itemId: string;
+  /** What the voice model asks for, usually the user's request in its own words. */
+  text: string;
+}
+
+/** A session event kept for the request log; audio copies and word-level text are skipped. */
+export interface OpenAILiveEvent {
+  /** Milliseconds since qgrid joined the sideband. */
+  atMs: number;
+  event: JsonValue;
 }
 
 export interface OpenAILiveTurn {
@@ -152,6 +181,7 @@ export interface OpenAILiveTurn {
 
 export interface OpenAILiveSummary {
   turns: OpenAILiveTurn[];
+  events: OpenAILiveEvent[];
   /** From session.closed, or the last usage update when the session ended without one. */
   audioDurationMs: number | undefined;
   /** The session.closed reason, or how the sideband ended without one. */
@@ -674,7 +704,7 @@ export class OpenAIVoiceClient {
         sdp,
         callId,
         quotaHeaders: codexQuotaHeaders(response.headers),
-        ended: this.watchLiveSession(`${this.liveWsUrl}/${callId}`, headers, request.onTurn),
+        ended: this.watchLiveSession(`${this.liveWsUrl}/${callId}`, headers, request),
       };
     } catch (error) {
       throw signal.aborted ? this.abortReason(request.signal, signal, error) : error;
@@ -685,45 +715,85 @@ export class OpenAIVoiceClient {
 
   /**
    * Follows a live call's sideband until the session ends. It carries the same events as the
-   * caller's data channel plus a copy of both audio streams, which is skipped: only finished turns
-   * and usage are kept. Never rejects.
+   * caller's data channel plus a copy of both audio streams. Finished turns, usage and the other
+   * events are kept (audio copies and word-level text are skipped), and delegations are answered
+   * through `onDelegation`. Never rejects.
    */
   private async watchLiveSession(
     url: string,
     headers: Record<string, string>,
-    onTurn: OpenAILiveCallRequest["onTurn"],
+    { onTurn, onDelegation }: Pick<OpenAILiveCallRequest, "onTurn" | "onDelegation">,
   ): Promise<OpenAILiveSummary> {
     const signal = AbortSignal.timeout(this.liveWatchLimitMs);
     const socket = this.webSocketFactory(url, { headers });
     const records = socketRecords(socket, signal);
+    const startedAt = Date.now();
     const turns: OpenAILiveTurn[] = [];
+    const events: OpenAILiveEvent[] = [];
     let audioDurationMs: number | undefined;
     let serverError: string | undefined;
     this.liveSockets.add(socket);
+    const keep = (event: JsonValue) => events.push({ atMs: Date.now() - startedAt, event });
 
     const ended = (endReason: string, error = serverError): OpenAILiveSummary =>
       error === undefined
-        ? { turns, audioDurationMs, endReason }
-        : { turns, audioDurationMs, endReason, error };
+        ? { turns, events, audioDurationMs, endReason }
+        : { turns, events, audioDurationMs, endReason, error };
+
+    // Runs beside the event loop, which must keep draining the sideband meanwhile.
+    const answer = (delegation: OpenAILiveDelegation) => {
+      if (!onDelegation) return;
+      const asked = Date.now();
+
+      void onDelegation(delegation)
+        .then(async (reply) => {
+          await sendJson(socket, liveDelegationAnswerEvent(delegation.itemId, reply));
+          // qgrid's own message, logged beside the server's events.
+          keep({
+            type: "delegation.context.append",
+            delegation_item_id: delegation.itemId,
+            ms: Date.now() - asked,
+            text: reply,
+          });
+        })
+        .catch((error: Error) =>
+          keep({
+            type: "qgrid.delegation_failed",
+            delegation_item_id: delegation.itemId,
+            error: error.message,
+          }),
+        );
+    };
 
     try {
       await this.awaitOpen(records.next);
 
       for (;;) {
-        const record = await records.next();
+        const next = await records.next();
 
-        if (record.kind === "error") {
+        if (next.kind === "error") {
           return ended(
             signal.aborted ? "watch limit reached" : "sideband error",
-            record.error.message,
+            next.error.message,
           );
         }
 
         // Without session.closed: the caller dropped its peer (OpenAI ends it about 30 s later).
-        if (record.kind === "close") return ended(`sideband closed (${record.code})`);
+        if (next.kind === "close") return ended(`sideband closed (${next.code})`);
 
-        if (record.kind !== "event") continue;
-        const turn = liveTurnDoneEvent.safeParse(record.event);
+        if (next.kind !== "event") continue;
+        const type = realtimeServerEvent.safeParse(next.event).data?.type ?? "";
+
+        if (!LIVE_UNLOGGED_EVENTS.has(type)) keep(next.event);
+        const delegation = liveDelegationCreatedEvent.safeParse(next.event);
+
+        if (delegation.success) {
+          const { id, content } = delegation.data.item;
+          answer({ itemId: id, text: content.flatMap((part) => part.text ?? []).join("") });
+          continue;
+        }
+
+        const turn = liveTurnDoneEvent.safeParse(next.event);
 
         if (turn.success) {
           const { role, transcript, start_ms, end_ms } = turn.data.turn;
@@ -732,14 +802,14 @@ export class OpenAIVoiceClient {
           continue;
         }
 
-        const usage = liveUsageUpdatedEvent.safeParse(record.event);
+        const usage = liveUsageUpdatedEvent.safeParse(next.event);
 
         if (usage.success) {
           audioDurationMs = usage.data.usage.audio_duration_ms;
           continue;
         }
 
-        const closed = liveSessionClosedEvent.safeParse(record.event);
+        const closed = liveSessionClosedEvent.safeParse(next.event);
 
         if (closed.success) {
           audioDurationMs = closed.data.usage?.audio_duration_ms ?? audioDurationMs;
@@ -748,7 +818,7 @@ export class OpenAIVoiceClient {
           return ended(closed.data.reason ?? "closed");
         }
 
-        serverError = serverErrorFromEvent(record.event)?.message ?? serverError;
+        serverError = serverErrorFromEvent(next.event)?.message ?? serverError;
       }
     } catch (error) {
       return ended("sideband error", error instanceof Error ? error.message : String(error));
