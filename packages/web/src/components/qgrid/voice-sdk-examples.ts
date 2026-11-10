@@ -1,7 +1,9 @@
 // The @cartanova/qgrid-ai-sdk call that matches what each voice panel sends, shown beside the
-// panel. Only the call itself; shapes follow the README examples.
+// panel: its imports and the call. Shapes follow the README examples.
 
 const literal = (value: string) => JSON.stringify(value);
+
+const QGRID_IMPORT = 'import { qgrid } from "@cartanova/qgrid-ai-sdk";';
 
 export type TtsExampleOptions = {
   model: string;
@@ -28,7 +30,14 @@ export function ttsExample(options: TtsExampleOptions): string {
 
   if (options.withTimestamps) lines.push("  providerOptions: { qgrid: { withTimestamps: true } },");
 
-  return ["generateSpeech({", ...lines, "})"].join("\n");
+  return [
+    'import { generateSpeech } from "ai";',
+    QGRID_IMPORT,
+    "",
+    "const speech = await generateSpeech({",
+    ...lines,
+    "});",
+  ].join("\n");
 }
 
 export type SttExampleOptions = { model: string; prompt?: string };
@@ -38,14 +47,24 @@ export function sttExample(options: SttExampleOptions): string {
 
   const lines = [
     `  model: qgrid.transcription(${literal(options.model)}),`,
-    openai ? "  audio, // PCM16 WAV or raw PCM bytes" : "  audio, // audio file bytes",
+    ...(openai
+      ? ["  // OpenAI takes PCM16 WAV or raw PCM.", '  audio: await readFile("recording.wav"),']
+      : ['  audio: await readFile("recording.mp3"),']),
   ];
 
   if (options.prompt) {
     lines.push(`  providerOptions: { openai: { prompt: ${literal(options.prompt)} } },`);
   }
 
-  return ["transcribe({", ...lines, "})"].join("\n");
+  return [
+    'import { readFile } from "node:fs/promises";',
+    'import { transcribe } from "ai";',
+    QGRID_IMPORT,
+    "",
+    "const transcript = await transcribe({",
+    ...lines,
+    "});",
+  ].join("\n");
 }
 
 export type LiveExampleOptions = {
@@ -77,14 +96,23 @@ export function liveExample(options: LiveExampleOptions): string {
 
   return [
     "// Browser",
-    "experimental_useRealtime({",
-    '  model: createQgridRealtime("openai/gpt-live-1"),',
+    'import { createQgridRealtime } from "@cartanova/qgrid-ai-sdk/realtime";',
+    'import { experimental_useRealtime } from "@ai-sdk/react";',
+    "",
+    "// Module scope: a new model or sessionConfig object starts a new session.",
+    'const model = createQgridRealtime("openai/gpt-live-1");',
+    `const sessionConfig = { ${config.join(", ")} };`,
+    "",
+    "const realtime = experimental_useRealtime({",
+    "  model,",
     '  api: { session: "/api/live" },',
-    `  sessionConfig: { ${config.join(", ")} },`,
-    "})",
+    "  sessionConfig,",
+    "});",
     "",
     "// Server: POST /api/live",
-    'qgrid.realtime("openai/gpt-live-1").doCreateWebRTCSession({',
+    QGRID_IMPORT,
+    "",
+    'const answer = await qgrid.realtime("openai/gpt-live-1").doCreateWebRTCSession({',
     "  sdp,",
     "  sessionConfig: {",
     ...config.map((entry) => `    ${entry},`),
@@ -94,41 +122,6 @@ export function liveExample(options: LiveExampleOptions): string {
     "      },",
     "    },",
     "  },",
-    "})",
+    "});",
   ].join("\n");
-}
-
-export type CodeToken = {
-  text: string;
-  kind?: "string" | "number" | "boolean" | "brace" | "comment";
-};
-
-const TOKEN = /("(?:[^"\\]|\\.)*")|(\/\/[^\n]*)|\b(true|false)\b|\b(\d+(?:\.\d+)?)\b|([{}[\]()])/g;
-
-/** Splits example code into the token kinds the JSON view colors. */
-export function codeTokens(code: string): CodeToken[] {
-  const tokens: CodeToken[] = [];
-  let last = 0;
-
-  for (const match of code.matchAll(TOKEN)) {
-    if (match.index > last) tokens.push({ text: code.slice(last, match.index) });
-    const [text, string, comment, boolean, number] = match;
-
-    const kind = string
-      ? "string"
-      : comment
-        ? "comment"
-        : boolean
-          ? "boolean"
-          : number
-            ? "number"
-            : "brace";
-
-    tokens.push({ text, kind });
-    last = match.index + text.length;
-  }
-
-  if (last < code.length) tokens.push({ text: code.slice(last) });
-
-  return tokens;
 }

@@ -1,8 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
-import CheckIcon from "~icons/lucide/check";
-import CopyIcon from "~icons/lucide/copy";
 import ExternalLinkIcon from "~icons/lucide/external-link";
 import LoaderIcon from "~icons/lucide/loader-circle";
 import MicIcon from "~icons/lucide/mic";
@@ -22,15 +20,10 @@ import {
 } from "@/services/qgrid/qgrid.types";
 import { QgridService } from "@/services/services.generated";
 
+import { CodePanel } from "./CodePanel";
 import { TimedPlayer, type TimedWord } from "./TimedPlayer";
 import { audioToWavBase64, bytesToBase64 } from "./voice-audio";
-import {
-  type CodeToken,
-  codeTokens,
-  liveExample,
-  sttExample,
-  ttsExample,
-} from "./voice-sdk-examples";
+import { liveExample, sttExample, ttsExample } from "./voice-sdk-examples";
 
 const PROJECT_NAME = "qgrid_voice_playground";
 
@@ -131,16 +124,10 @@ function HistoryRow({
   );
 }
 
-// The request-log JSON view's light theme (@uiw/react-json-view), so the call reads the same way.
-const TOKEN_COLOR: Record<NonNullable<CodeToken["kind"]>, string> = {
-  string: "#cb4b16",
-  number: "#268bd2",
-  boolean: "#2aa198",
-  brace: "#236a7c",
-  comment: "#0000004d",
-};
-
-/** The @cartanova/qgrid-ai-sdk call for the panel's current settings, beside the panel. */
+/**
+ * The panel beside its @cartanova/qgrid-ai-sdk call for the current settings, as two cards with a
+ * gap like the request log's columns; the call stacks below on narrower screens.
+ */
 function WithSdkExample({
   code,
   note,
@@ -150,45 +137,17 @@ function WithSdkExample({
   note?: string;
   children: React.ReactNode;
 }) {
-  const [copied, setCopied] = useState(false);
-
-  const copy = () => {
-    void navigator.clipboard.writeText(code).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  };
-
   return (
-    <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(0,31rem)]">
-      <div className="min-w-0">{children}</div>
-      <aside className="min-w-0 border-t border-sand-100 xl:border-t-0 xl:border-l">
-        <div className="xl:sticky xl:top-0">
-          <div className="flex items-center gap-2 px-4 pt-3">
-            <span className="text-[11px] font-medium text-sand-500">AI SDK</span>
-            {note && <span className="text-[11px] text-sand-400">{note}</span>}
-            <button
-              type="button"
-              onClick={copy}
-              className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-sand-500 hover:bg-sand-100 hover:text-sand-800"
-            >
-              {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
-              {copied ? "Copied" : "Copy"}
-            </button>
-          </div>
-          <pre className="px-4 py-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap wrap-break-word text-[#002b36]">
-            {codeTokens(code).map((token, i) =>
-              token.kind ? (
-                <span key={i} style={{ color: TOKEN_COLOR[token.kind] }}>
-                  {token.text}
-                </span>
-              ) : (
-                token.text
-              ),
-            )}
-          </pre>
-        </div>
-      </aside>
+    <div className="flex flex-col xl:flex-row gap-4 items-stretch xl:items-start">
+      <div className="panel overflow-hidden flex-1 min-w-0">{children}</div>
+      <div className="min-w-0 xl:w-[32rem] xl:shrink-0 xl:sticky xl:top-4">
+        <CodePanel
+          title="AI SDK"
+          code={code}
+          scroll={false}
+          actions={note && <span className="text-[11px] text-sand-400">{note}</span>}
+        />
+      </div>
     </div>
   );
 }
@@ -1077,8 +1036,8 @@ export function VoicePlayground({ tab }: { tab: VoiceTab }) {
   // history, any running recording, and a live conversation. The sidebar lists the tools; this
   // bar is for narrow screens, where the sidebar is hidden.
   return (
-    <section className="rounded-xl border border-sand-200/70 bg-white overflow-hidden">
-      <div role="tablist" className="flex gap-1 border-b border-sand-100 px-3 pt-2 md:hidden">
+    <section>
+      <div role="tablist" className="panel mb-4 flex gap-1 px-3 pt-2 md:hidden">
         {VOICE_TAB_IDS.map((id) => (
           <Link
             key={id}

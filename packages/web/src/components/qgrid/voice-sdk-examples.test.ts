@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { codeTokens, liveExample, sttExample, ttsExample } from "./voice-sdk-examples";
+import { liveExample, sttExample, ttsExample } from "./voice-sdk-examples";
 
 describe("voice SDK examples", () => {
   it("writes the Grok speech call with speed, timing and mp3", () => {
@@ -12,7 +12,8 @@ describe("voice SDK examples", () => {
       withTimestamps: true,
     });
 
-    expect(code.split("\n")[0]).toBe("generateSpeech({");
+    expect(code).toContain('import { generateSpeech } from "ai";');
+    expect(code).toContain("const speech = await generateSpeech({");
     expect(code).toContain('model: qgrid.speech("grok/grok-tts"),');
     expect(code).toContain('text: "Say \\"hi\\"",');
     expect(code).toContain("speed: 1.2,");
@@ -37,7 +38,9 @@ describe("voice SDK examples", () => {
   it("writes the transcription call with the OpenAI prompt", () => {
     const code = sttExample({ model: "openai/gpt-transcribe", prompt: "qgrid" });
 
+    expect(code).toContain('import { transcribe } from "ai";');
     expect(code).toContain('model: qgrid.transcription("openai/gpt-transcribe"),');
+    expect(code).toContain('audio: await readFile("recording.wav"),');
     expect(code).toContain('providerOptions: { openai: { prompt: "qgrid" } },');
     expect(sttExample({ model: "grok/grok-voice-transcribe-2.0" })).not.toContain("providerOptions");
   });
@@ -51,28 +54,12 @@ describe("voice SDK examples", () => {
       continues: true,
     });
 
-    expect(code).toContain('sessionConfig: { voice: "cove", instructions: "Be brief." },');
+    expect(code).toContain('import { createQgridRealtime } from "@cartanova/qgrid-ai-sdk/realtime";');
+    expect(code).toContain('const sessionConfig = { voice: "cove", instructions: "Be brief." };');
     expect(code).toContain('qgrid.realtime("openai/gpt-live-1").doCreateWebRTCSession({');
     expect(code).toContain('model: "openai/gpt-6-luna",');
     expect(code).toContain("webSearch: true,");
     expect(code).toContain("logger: false,");
     expect(code).toContain("history,");
-  });
-
-  it("colors strings, numbers, booleans, braces and comments, and keeps the text", () => {
-    const code = 'f({\n  model: "gpt-6-luna",\n  speed: 1.2,\n  on: true, // note\n})';
-    const tokens = codeTokens(code);
-
-    expect(tokens.map((token) => token.text).join("")).toBe(code);
-    expect(tokens.filter((token) => token.kind).map((token) => [token.kind, token.text])).toEqual([
-      ["brace", "("],
-      ["brace", "{"],
-      ["string", '"gpt-6-luna"'],
-      ["number", "1.2"],
-      ["boolean", "true"],
-      ["comment", "// note"],
-      ["brace", "}"],
-      ["brace", ")"],
-    ]);
   });
 });
