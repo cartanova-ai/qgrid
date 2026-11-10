@@ -557,12 +557,13 @@ app.post("/live", async (req, res) => {
 });
 ```
 
-- 요청 `params`: `sdp`(offer, 필수), `voice`, `instructions`, 그리고 다른 엔드포인트와 같은 `tokenName`(`openai/` 접두사), `projectName`, `logger`. `model`은 생략하거나 `openai/gpt-live-1`만 됩니다. 다른 값은 HTTP 400입니다.
+- 위임: GPT-Live는 혼자 답할 수 없는 일(검색, 추론)을 클라이언트에 넘기고, 답이 올 때까지 말을 이어갑니다. Codex가 자기 에이전트로 이 요청을 처리하듯 qgrid가 처리합니다. 지금까지의 대화와 함께 세션의 위임 모델로 qgrid query를 돌리고, 음성이 그 답을 말합니다. 세션마다 `params.delegation`으로 고릅니다. `model`(`openai/`·`anthropic/`·`grok/` 모델, 기본 `openai/gpt-6-luna`), `effort`(기본 `low`, `medium`, `high`), `webSearch`(제공자의 hosted 웹 검색, `openai/`·`grok/`만, 기본 꺼짐). 위임이 실패하면 짧은 실패 안내를 돌려주어 음성이 기다리지 않고 그 사실을 말하게 합니다. 위임은 각각 `delegation` tool 단계로 기록되고, 백엔드 비용이 실행 비용에 더해집니다.
+- 요청 `params`: `sdp`(offer, 필수), `voice`, `instructions`, `delegation`, 그리고 다른 엔드포인트와 같은 `tokenName`(`openai/` 접두사), `projectName`, `logger`. `model`은 생략하거나 `openai/gpt-live-1`만 됩니다. 다른 값은 HTTP 400입니다.
 - 응답: `sdp`(answer), `callId`, `model`, `voice`, `tokenName`, `requestLogId`. 요청 로그는 세션 내내 `running`이고, 턴이 끝날 때마다 세션 시간이 붙은 대화가 갱신되어 진행 중에도 볼 수 있습니다. 세션이 끝나면 비용 추정치(세션 오디오 분당 $0.05, API 정가)와 함께 마무리됩니다.
 - 음성: `cove`(기본) `juniper maple spruce ember vale breeze arbor sol aube bubbie haetsal hanul himari leher miko neer porto rindo rio rivage selva sonna tinta viola`. realtime 음성 합성용 음성(`marin` 등)은 쓸 수 없습니다. OpenAI가 call은 받아 주지만 세션이 시작되지 않기 때문에 서버가 HTTP 400으로 막습니다.
 - 데이터 채널 이벤트: `turn.created`, `turn.delta`, `turn.done`이 말하는 대로 각 턴의 `role`과 `transcript`를 전하고, `session.usage.updated`와 `session.closed`가 `usage.audio_duration_ms`를 전합니다. 세션은 시작 2시간 뒤 스스로 끝납니다.
 - 엔드포인트는 브라우저가 아니라 앱 서버에서 부르세요. qgrid에는 호출자 인증이 없고 CORS 헤더도 보내지 않습니다.
-- 업스트림이 요청한 모델 이름을 무시해서 실제 모델은 확인할 수 없습니다. Codex도 qgrid도 `gpt-live-1-codex`를 보냅니다. 대화만 지원하고, 도구 호출과 백엔드 모델 위임은 열지 않았습니다.
+- 업스트림이 요청한 모델 이름을 무시해서 실제 모델은 확인할 수 없습니다. Codex도 qgrid도 `gpt-live-1-codex`를 보냅니다. 호출자가 정의한 도구는 열지 않았습니다. 음성의 위임은 qgrid가 고른 모델로만 처리합니다.
 
 ## Telemetry Logger
 
