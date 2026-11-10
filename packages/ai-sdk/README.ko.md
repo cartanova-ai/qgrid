@@ -349,6 +349,7 @@ qgrid는 `grok/*` 모델을 qgrid 대시보드에 등록한 xAI 구독 토큰(�
 | `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
 | `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI 구독: `openai/gpt-transcribe`(권장), `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`; `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/whisper-1`은 OpenAI가 종료하는 2027-02-26까지 | `transcribe` |
 | `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임); OpenAI 구독: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1` | `generateSpeech` |
+| `qgrid.realtime(id)`(2.20.0+; 브라우저: `@cartanova/qgrid-ai-sdk/realtime`의 `createQgridRealtime`) | `openai/gpt-live-1` | `experimental_useRealtime`(실험적, WebRTC) |
 
 qgrid는 카탈로그에 없는 language model ID를 거부하지 않고 그대로 전달합니다(OpenAI와 같음). 판단은
 subscription backend가 하며 다른 모델로 응답할 수 있으므로, 실제로 실행된 모델은 request log의 응답 모델(또는
@@ -521,9 +522,66 @@ const speech = await generateSpeech({
 
 ### OpenAI 실시간 음성 대화 (GPT-Live)
 
-서버 2.19.2+는 ChatGPT 구독 토큰으로 `openai/gpt-live-1` 대화를 엽니다. GPT-Live는 듣는 동안에도 말하는 대화 모델이라 음성 합성과는 다릅니다. AI SDK에 해당 인터페이스가 없어서 이 패키지도 따로 제공하지 않습니다. 앱이 qgrid HTTP 엔드포인트를 직접 부릅니다.
+서버 2.19.2+는 ChatGPT 구독 토큰으로 `openai/gpt-live-1` 대화를 엽니다. GPT-Live는 듣는 동안에도 말하는 대화 모델이라 음성 합성과는 다릅니다.
 
-오디오는 qgrid를 지나지 않습니다. 브라우저의 WebRTC 피어가 SDP offer를 만들고, 앱 서버가 이를 `POST /api/qgrid/liveCall`로 보낸 뒤, 돌아온 SDP answer를 브라우저에 적용합니다. 그 뒤 오디오와 이벤트는 브라우저와 OpenAI가 직접 주고받습니다. qgrid는 세션이 끝날 때 대화 텍스트와 세션 오디오 시간을 로그에 남기고, 오디오는 저장하지 않습니다.
+오디오는 qgrid를 지나지 않습니다. 브라우저의 WebRTC 피어가 SDP offer를 만들고, 앱 서버가 이를 `POST /api/qgrid/liveCall`로 보낸 뒤, 돌아온 SDP answer를 브라우저에 적용합니다. 그 뒤 오디오와 이벤트는 브라우저와 OpenAI가 직접 주고받습니다. qgrid는 대화 텍스트와 세션 오디오 시간을 로그에 남기고, 오디오는 저장하지 않습니다.
+
+#### AI SDK 실험적 realtime 런타임으로 (SDK 2.20.0+)
+
+`qgrid.realtime("openai/gpt-live-1")`은 AI SDK `Experimental_RealtimeModelV4`입니다. 마이크, 재생, WebRTC 피어, 데이터 채널은 AI SDK realtime 세션(`@ai-sdk/react`의 `experimental_useRealtime`, `ai` 7.0.102+)이 맡고, 앱 서버 라우트는 SDP만 교환합니다. AI SDK에서 실험적 API라 `ai` 버전에 따라 바뀔 수 있습니다.
+
+```tsx
+// 브라우저: Node 전용 코드가 없는 /realtime 진입점에서 import합니다.
+import { createQgridRealtime } from "@cartanova/qgrid-ai-sdk/realtime";
+import { experimental_useRealtime } from "@ai-sdk/react";
+
+// 모듈 최상단에 둡니다. model이나 sessionConfig 객체가 바뀌면 훅의 세션도 새로 만들어집니다.
+const model = createQgridRealtime("openai/gpt-live-1");
+const sessionConfig = { voice: "cove", instructions: "You are a friendly English tutor." };
+
+function LiveConversation() {
+  const realtime = experimental_useRealtime({ model, api: { session: "/api/live" }, sessionConfig });
+
+  return (
+    <>
+      <button onClick={() => realtime.connect()}>시작</button>
+      <button onClick={() => realtime.close()}>종료</button>
+      <p>{realtime.status}: {realtime.session?.usage?.seconds ?? 0}초</p>
+      {realtime.session?.transcripts.map((part, i) => (
+        <span key={i}>{part.speaker === "user" ? "🧑 " : ""}{part.delta}</span>
+      ))}
+    </>
+  );
+}
+```
+
+```typescript
+// 앱 서버 라우트: 훅이 { sdp, sessionConfig }를 보내고 { sdp, sessionId }를 기대합니다.
+import { qgrid, type QgridRealtimeProviderOptions } from "@cartanova/qgrid-ai-sdk";
+
+app.post("/api/live", async (req, res) => {
+  const { sdp, sessionConfig } = req.body;
+  const answer = await qgrid.realtime("openai/gpt-live-1").doCreateWebRTCSession({
+    sdp,
+    sessionConfig: {
+      voice: sessionConfig?.voice,
+      instructions: sessionConfig?.instructions,
+      // qgrid 옵션은 서버에서 만듭니다. 브라우저가 보낸 providerOptions를 그대로 넘기지 마세요.
+      providerOptions: {
+        qgrid: { delegation: { model: "openai/gpt-6-luna", webSearch: true } } satisfies QgridRealtimeProviderOptions,
+      },
+    },
+  });
+  res.json(answer); // { sdp, sessionId, requestLogId }
+});
+```
+
+- `providerOptions.qgrid`(`QgridRealtimeProviderOptions`): `delegation`, `history`, `tokenName`, `logger`이며 아래 HTTP `params`와 같은 필드입니다. `sessionConfig.voice`와 `sessionConfig.instructions`는 `voice`, `instructions`로 보내고, 나머지 `sessionConfig` 필드는 보내지 않습니다. `serverUrl`과 `projectName`은 `createQgridRealtime(id, config)` 또는 `QGRID_URL` / `QGRID_PROJECT_NAME`에서 가져옵니다.
+- 음성 모델의 위임은 qgrid 서버가 답합니다. 그래서 각 `delegation-created` 이벤트는 `target: "provider"`로 표시되며, 앱이 돌려보낼 것은 없습니다. 세션은 `delegationMode`를 알리지 않습니다. AI SDK 런타임이 `"provider"`를 거부하고, `"client"`는 앱이 답해야 한다는 뜻이기 때문입니다.
+- 지원하는 명령: `close()`(`session.close`를 보내고 최종 사용량을 기다림)와 `sendEvent({ type: "context-append", content, delegationId })`(음성이 쓸 텍스트 추가, 세션 전체에는 `delegationId: null`). 마이크 끄기, 세션 변경 등 나머지 명령은 `UnsupportedFunctionalityError`를 던집니다.
+- 이벤트: `session.transcripts`에 말한 텍스트가 `transcript-fragment` 이벤트(`speaker`, `delta`, `startMs`, `endMs`)로 쌓입니다. 조각은 턴의 일부이지 턴 전체가 아닙니다. `session.usage.seconds`는 세션 오디오 시간입니다. GPT-Live 원본 이벤트는 각 이벤트의 `raw`에 있습니다.
+
+#### AI SDK 없이 (HTTP)
 
 ```typescript
 // 브라우저

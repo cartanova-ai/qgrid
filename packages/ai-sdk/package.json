@@ -17,6 +17,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./realtime": {
+      "import": "./dist/realtime.js",
+      "types": "./dist/realtime.d.ts"
     }
   },
   "scripts": {
@@ -38,8 +42,8 @@
     "zod": "catalog:"
   },
   "peerDependencies": {
-    "@ai-sdk/provider": "^4.0.0",
-    "ai": "^7.0.0",
+    "@ai-sdk/provider": "^4.0.15",
+    "ai": "^7.0.102",
     "zod": "^3.25.76 || ^4.1.8"
   },
   "engines": {

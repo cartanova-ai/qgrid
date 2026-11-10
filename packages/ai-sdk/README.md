@@ -359,6 +359,7 @@ Grok model accepts the same factory config as the other models: `serverUrl` (def
 | `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
 | `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI subscription: `openai/gpt-transcribe` (recommended), `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`; `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/whisper-1` until OpenAI shuts them down on 2027-02-26 | `transcribe` |
 | `qgrid.speech(id)` | `grok/grok-tts` (the id only labels the request log); OpenAI subscription: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1` | `generateSpeech` |
+| `qgrid.realtime(id)` (2.20.0+; browser: `createQgridRealtime` from `@cartanova/qgrid-ai-sdk/realtime`) | `openai/gpt-live-1` | `experimental_useRealtime` (experimental, WebRTC) |
 
 qgrid forwards a language-model id that is not in its catalog unchanged instead of rejecting it,
 as it does for OpenAI; the subscription backend decides. It may serve a different model, so check
@@ -533,9 +534,66 @@ const speech = await generateSpeech({
 
 ### OpenAI live voice conversation (GPT-Live)
 
-Server 2.19.2+ runs `openai/gpt-live-1` conversations on a ChatGPT subscription token. GPT-Live listens and speaks at the same time, so it is a conversation, not speech generation: AI SDK has no interface for it and this package adds none. Your app calls the qgrid HTTP endpoint directly.
+Server 2.19.2+ runs `openai/gpt-live-1` conversations on a ChatGPT subscription token. GPT-Live listens and speaks at the same time, so it is a conversation, not speech generation.
 
-The audio never passes through qgrid. The browser's own WebRTC peer makes an SDP offer, your server sends it to `POST /api/qgrid/liveCall`, and the browser applies the SDP answer that comes back. Audio and events then flow between the browser and OpenAI. qgrid logs the conversation text and the session's audio time when the session ends; it stores no audio.
+The audio never passes through qgrid. The browser's own WebRTC peer makes an SDP offer, your server sends it to `POST /api/qgrid/liveCall`, and the browser applies the SDP answer that comes back. Audio and events then flow between the browser and OpenAI. qgrid logs the conversation text and the session's audio time; it stores no audio.
+
+#### With AI SDK's experimental realtime runtime (SDK 2.20.0+)
+
+`qgrid.realtime("openai/gpt-live-1")` is an AI SDK `Experimental_RealtimeModelV4`. AI SDK's realtime session (`experimental_useRealtime` in `@ai-sdk/react`, `ai` 7.0.102+) then owns the microphone, playback, the WebRTC peer and the data channel; your server route only exchanges the SDP. The API is experimental in AI SDK and may change between `ai` releases.
+
+```tsx
+// Browser: import from the /realtime entry, which carries no Node-only code.
+import { createQgridRealtime } from "@cartanova/qgrid-ai-sdk/realtime";
+import { experimental_useRealtime } from "@ai-sdk/react";
+
+// Module scope: replacing the model or sessionConfig object replaces the hook's session.
+const model = createQgridRealtime("openai/gpt-live-1");
+const sessionConfig = { voice: "cove", instructions: "You are a friendly English tutor." };
+
+function LiveConversation() {
+  const realtime = experimental_useRealtime({ model, api: { session: "/api/live" }, sessionConfig });
+
+  return (
+    <>
+      <button onClick={() => realtime.connect()}>Start</button>
+      <button onClick={() => realtime.close()}>End</button>
+      <p>{realtime.status}: {realtime.session?.usage?.seconds ?? 0} s</p>
+      {realtime.session?.transcripts.map((part, i) => (
+        <span key={i}>{part.speaker === "user" ? "🧑 " : ""}{part.delta}</span>
+      ))}
+    </>
+  );
+}
+```
+
+```typescript
+// Your server route: the hook posts { sdp, sessionConfig } and expects { sdp, sessionId }.
+import { qgrid, type QgridRealtimeProviderOptions } from "@cartanova/qgrid-ai-sdk";
+
+app.post("/api/live", async (req, res) => {
+  const { sdp, sessionConfig } = req.body;
+  const answer = await qgrid.realtime("openai/gpt-live-1").doCreateWebRTCSession({
+    sdp,
+    sessionConfig: {
+      voice: sessionConfig?.voice,
+      instructions: sessionConfig?.instructions,
+      // Build the qgrid options here; do not forward the browser's providerOptions.
+      providerOptions: {
+        qgrid: { delegation: { model: "openai/gpt-6-luna", webSearch: true } } satisfies QgridRealtimeProviderOptions,
+      },
+    },
+  });
+  res.json(answer); // { sdp, sessionId, requestLogId }
+});
+```
+
+- `providerOptions.qgrid` (`QgridRealtimeProviderOptions`): `delegation`, `history`, `tokenName` and `logger`, the same fields as the HTTP `params` below. `sessionConfig.voice` and `sessionConfig.instructions` map to `voice` and `instructions`; other `sessionConfig` fields are not sent. `serverUrl` and `projectName` come from `createQgridRealtime(id, config)` or `QGRID_URL` / `QGRID_PROJECT_NAME`.
+- qgrid answers the voice's delegations on the server, so each `delegation-created` event has `target: "provider"`: there is nothing for the app to send back. The session reports no `delegationMode`: AI SDK's runtime rejects `"provider"`, and `"client"` would mean the app must answer.
+- Supported commands: `close()` (sends `session.close` and waits for the final usage) and `sendEvent({ type: "context-append", content, delegationId })`, which adds text the voice can use (`delegationId: null` for the whole session). Microphone mute, session updates and the other commands throw `UnsupportedFunctionalityError`.
+- Events: `session.transcripts` holds the spoken text as `transcript-fragment` events (`speaker`, `delta`, `startMs`, `endMs`); fragments are pieces of a turn, not whole turns. `session.usage.seconds` is the session's audio time. The raw GPT-Live events are in each event's `raw`.
+
+#### Without AI SDK (HTTP)
 
 ```typescript
 // Browser
