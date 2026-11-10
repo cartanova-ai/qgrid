@@ -678,6 +678,8 @@ function LivePanel() {
   const [delegateModel, setDelegateModel] = useState(DEFAULT_DELEGATION_MODEL);
   const [effort, setEffort] = useState<Effort>("low");
   const [webSearch, setWebSearch] = useState(false);
+  // Off sends logger: false, so the session leaves no request log at all.
+  const [logged, setLogged] = useState(true);
   const searchable = !delegateModel.startsWith("anthropic/");
   const [status, setStatus] = useState<"idle" | "connecting" | "live">("idle");
   const [error, setError] = useState<string>();
@@ -776,6 +778,8 @@ function LivePanel() {
       };
 
       if (instructions.trim()) params.instructions = instructions.trim();
+
+      if (!logged) params.logger = false;
       const out = await liveCall.mutateAsync({ params });
       await peer.setRemoteDescription({ type: "answer", sdp: out.sdp });
       session.current = { pc: peer, channel, mic };
@@ -857,6 +861,16 @@ function LivePanel() {
               className="accent-sienna-500"
             />
             Web search
+          </label>
+          <label className="flex h-8 items-center gap-1.5 text-[12px] text-sand-600">
+            <input
+              type="checkbox"
+              checked={logged}
+              onChange={(e) => setLogged(e.target.checked)}
+              disabled={status !== "idle"}
+              className="accent-sienna-500"
+            />
+            Request log
           </label>
         </div>
       </div>
