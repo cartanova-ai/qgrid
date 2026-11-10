@@ -18,6 +18,11 @@ import { composeSystemWithSchemaContract } from "./schema-prompt";
 
 const logger = getLogger(["qgrid", "run-lifecycle"]);
 const STALE_RUN_THRESHOLD_MS = 30 * 60 * 1000;
+
+// Live voice sessions expire two hours after creation and their watcher gives up five minutes
+// later (OPENAI_LIVE_WATCH_LIMIT_MS); a live run still running after this lost its server.
+const STALE_LIVE_RUN_THRESHOLD_MS = (2 * 60 + 15) * 60 * 1000;
+
 const STALE_CLEANUP_INTERVAL_MS = 60 * 1000;
 let staleCleanupInFlight: Promise<void> | undefined;
 let lastStaleCleanupStartedAt = 0;
@@ -414,7 +419,12 @@ async function performStaleRunCleanup(): Promise<void> {
       errorMessage,
     );
 
-    const cleanedCount = staleIds.length;
+    const liveCount = await RequestLogModel.expireStaleLiveRuns(
+      new Date(Date.now() - STALE_LIVE_RUN_THRESHOLD_MS),
+      "live session: the server stopped before the session ended",
+    );
+
+    const cleanedCount = staleIds.length + liveCount;
 
     if (cleanedCount > 0) {
       logger.info(`cleaned up ${cleanedCount} stale running request logs`);

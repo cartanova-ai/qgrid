@@ -431,6 +431,25 @@ describe("RequestLogModel run lifecycle", () => {
     expect(candidateChain.where).toHaveBeenCalledWith("request_log_steps.error", null);
   });
 
+  it("closes only live runs still running past the threshold", async () => {
+    const chain = { from: vi.fn(), where: vi.fn(), update: vi.fn(async () => 2) };
+    chain.from.mockReturnValue(chain);
+    chain.where.mockReturnValue(chain);
+    vi.spyOn(
+      RequestLogModel as unknown as { getPuri: () => typeof chain },
+      "getPuri",
+    ).mockReturnValue(chain);
+    const threshold = new Date("2026-11-10T00:00:00.000Z");
+
+    await expect(RequestLogModel.expireStaleLiveRuns(threshold, "server stopped")).resolves.toBe(2);
+
+    expect(chain.from).toHaveBeenCalledWith("request_logs");
+    expect(chain.where).toHaveBeenCalledWith("media_kind", "live");
+    expect(chain.where).toHaveBeenCalledWith("status", "running");
+    expect(chain.where).toHaveBeenCalledWith("created_at", "<", threshold);
+    expect(chain.update).toHaveBeenCalledWith({ status: "error", error_message: "server stopped" });
+  });
+
   it("expires stale candidates independently", async () => {
     vi.spyOn(Date, "now").mockReturnValue(new Date("2026-07-23T01:00:00.000Z").getTime());
     const findCandidates = vi

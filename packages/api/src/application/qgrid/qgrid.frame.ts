@@ -28,6 +28,7 @@ import {
   grokImageCost,
   grokReportedCost,
   grokSpeechCost,
+  liveCost,
   openaiSpeechCost,
   sttCost,
   type VoiceCost,
@@ -81,6 +82,8 @@ import {
   generateOpenAIPKCE,
 } from "../../utils/providers/openai/openai-oauth";
 import {
+  OPENAI_LIVE_DEFAULT_VOICE,
+  OPENAI_LIVE_MODEL,
   OPENAI_REALTIME_DEFAULT_SPEECH_MODEL,
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
   OPENAI_REALTIME_DEFAULT_VOICE,
@@ -88,7 +91,11 @@ import {
   prepareRealtimeInput,
   wrapPcmAsWav,
 } from "../../utils/providers/openai/openai-realtime-protocol";
-import { OpenAIVoiceInputError } from "../../utils/providers/openai/openai-voice-client";
+import {
+  type OpenAILiveSummary,
+  type OpenAILiveTurn,
+  OpenAIVoiceInputError,
+} from "../../utils/providers/openai/openai-voice-client";
 import { alignSpeech } from "../../utils/speech-aligner";
 import { wordsFromCharTimestamps } from "../../utils/speech-alignment";
 import {
@@ -137,6 +144,8 @@ import {
   type FinishRunInput,
   GenerateImagesInput,
   type GenerateImagesOutput,
+  LiveCallInput,
+  type LiveCallOutput,
   SpeakInput,
   type SpeakOutput,
   TranscribeInput,
@@ -515,13 +524,14 @@ const inflightAnthropicRefresh = new Map<number, Promise<string>>();
 
 const mediaLogger = getLogger(["qgrid", "media"]);
 
-type MediaKind = "image" | "video" | "stt" | "tts";
+type MediaKind = "image" | "video" | "stt" | "tts" | "live";
 
 const MEDIA_TOOL_NAMES: Record<MediaKind, string> = {
   image: "image_generation",
   video: "video_generation",
   stt: "transcription",
   tts: "speech",
+  live: "live_session",
 };
 
 function grokNotReady(): Error {
@@ -1308,6 +1318,70 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
 
     return { output, log };
   });
+}
+
+const OPENAI_LIVE_ROUTE = `openai/${OPENAI_LIVE_MODEL}`;
+
+/** Session time as m:ss. */
+function sessionClock(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/** The conversation as the run's response: each finished turn with its session time. */
+function liveTranscript(turns: readonly OpenAILiveTurn[]): string {
+  return turns
+    .map((turn) => `**${turn.role}** ${sessionClock(turn.startMs)}  \n${turn.transcript.trim()}`)
+    .join("\n\n");
+}
+
+/** Rewrites the running row's conversation after each turn, in order, so the log fills live. */
+function liveProgressRecorder(requestLogId: number): (turns: readonly OpenAILiveTurn[]) => void {
+  let pending = Promise.resolve();
+
+  return (turns) => {
+    const response = liveTranscript(turns);
+
+    pending = pending.then(async () => {
+      try {
+        await RequestLogModel.recordRunProgress(requestLogId, { response });
+      } catch (e) {
+        mediaLogger.warn(`live progress failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    });
+  };
+}
+
+type LiveRun = { requestLogId: number; toolCallId: string; tokenName: string; startedAt: number };
+
+// Replaces the session step's result with the summary and finishes the run when the session ends.
+// Best-effort, as for video: the session already happened, so a failure only loses the record.
+async function finishLiveRun(run: LiveRun, summary: OpenAILiveSummary): Promise<void> {
+  try {
+    await RequestLogModel.continueToolRun(run.requestLogId, [
+      { toolCallId: run.toolCallId, output: JSON.stringify(summary), isError: false },
+    ]);
+
+    const fields = mediaFinishFields({
+      kind: "live",
+      model: OPENAI_LIVE_ROUTE,
+      tokenName: run.tokenName,
+      durationMs: Date.now() - run.startedAt,
+      response: liveTranscript(summary.turns),
+      cost: liveCost(OPENAI_LIVE_ROUTE, summary.audioDurationMs),
+    });
+
+    // A sideband that failed before any turn says nothing about the session; record why.
+    await RequestLogModel.finishRun(
+      run.requestLogId,
+      summary.error !== undefined && summary.turns.length === 0
+        ? { ...fields, status: "error", error_message: summary.error }
+        : fields,
+    );
+  } catch (e) {
+    mediaLogger.error(`live request log failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 class QgridFrameClass extends BaseFrameClass {
@@ -2409,6 +2483,81 @@ class QgridFrameClass extends BaseFrameClass {
 
       return { output, log };
     });
+  }
+
+  // GPT-Live: exchanges the caller's WebRTC offer and returns the answer at once. The run stays
+  // running for the whole session (up to two hours), its conversation rewritten after each turn;
+  // a run left behind by a server restart is closed by the live stale sweep.
+  @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
+  async liveCall(params: LiveCallInput): Promise<LiveCallOutput> {
+    const input = parseMediaInput(LiveCallInput, params);
+    const dispatcher = openaiVoice();
+    const selection = await resolveMediaTokenSelection("openai", input.tokenName);
+    const voice = input.voice ?? OPENAI_LIVE_DEFAULT_VOICE;
+
+    const requestLogId = await startMediaRun(input.logger, {
+      kind: "live",
+      model: OPENAI_LIVE_ROUTE,
+      prompt: "",
+      systemPrompt: input.instructions,
+      projectName: input.projectName,
+    });
+
+    const startedAt = Date.now();
+
+    const started = await dispatchMediaCall(requestLogId, (signal) =>
+      dispatcher.startLive({
+        sdp: input.sdp,
+        voice,
+        instructions: input.instructions,
+        onTurn: requestLogId === undefined ? undefined : liveProgressRecorder(requestLogId),
+        signal,
+        ...selection,
+      }),
+    );
+
+    const { sdp, callId, ended } = started.result;
+
+    if (requestLogId !== undefined) {
+      const toolCallId = `live_session:${callId}`;
+
+      const args = {
+        kind: "live",
+        model: OPENAI_LIVE_ROUTE,
+        voice,
+        instructions: input.instructions,
+        transport: "webrtc",
+        callId,
+      };
+
+      // Not a pending step (that would fall to the 30-minute tool-wait cleanup): the result says
+      // the session is live until the summary replaces it.
+      const result = JSON.stringify({ status: "live", callId });
+
+      const [step] = mediaToolSteps("live", [{ toolCallId, args, result }], Date.now() - startedAt);
+
+      try {
+        await RequestLogModel.appendStep(requestLogId, step!);
+        await RequestLogModel.recordRunProgress(requestLogId, { token_name: started.tokenName });
+      } catch (e) {
+        mediaLogger.error(`live request log failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+
+      const run = { requestLogId, toolCallId, tokenName: started.tokenName, startedAt };
+      void ended.then((summary) => finishLiveRun(run, summary));
+    }
+
+    const output: LiveCallOutput = {
+      sdp,
+      callId,
+      model: OPENAI_LIVE_ROUTE,
+      voice,
+      tokenName: started.tokenName,
+    };
+
+    if (requestLogId !== undefined) output.requestLogId = requestLogId;
+
+    return output;
   }
 
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })

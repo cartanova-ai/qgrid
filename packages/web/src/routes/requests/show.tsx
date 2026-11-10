@@ -444,7 +444,11 @@ function MetricsPanel({ data, toolCallCount }: { data: RequestLog; toolCallCount
         />
         <Metric
           // Voice rows have no driver model; their cost is the API list-price estimate of the call.
-          label={data.media_kind === "stt" || data.media_kind === "tts" ? "Voice" : "Driver"}
+          label={
+            data.media_kind === "stt" || data.media_kind === "tts" || data.media_kind === "live"
+              ? "Voice"
+              : "Driver"
+          }
           value={data.cost_usd !== null ? formatMicroUsd(data.cost_usd) : "—"}
         />
         <Metric
@@ -1465,7 +1469,9 @@ function RequestDetail({ id }: { id: number }) {
             ? "Style instructions"
             : data.media_kind === "stt"
               ? "Prompt"
-              : "System"
+              : data.media_kind === "live"
+                ? "Instructions"
+                : "System"
         }
       >
         <div className="relative">
@@ -1473,16 +1479,19 @@ function RequestDetail({ id }: { id: number }) {
           <FormattedContent text={data.system_prompt ?? "null"} markdown />
         </div>
       </Section>
-      <Section title="User">
-        <div className="space-y-3">
-          <div className="relative">
-            <CopyButton text={data.user_prompt ?? "null"} />
-            {/* STT input is shown as plain audio; its word timing stays in the step result. */}
-            <FormattedContent text={data.user_prompt ?? "null"} markdown />
+      {/* A live session's user side is in the conversation below. */}
+      {data.media_kind !== "live" && (
+        <Section title="User">
+          <div className="space-y-3">
+            <div className="relative">
+              <CopyButton text={data.user_prompt ?? "null"} />
+              {/* STT input is shown as plain audio; its word timing stays in the step result. */}
+              <FormattedContent text={data.user_prompt ?? "null"} markdown />
+            </div>
+            <RequestInputImages images={data.input_images} stepId={firstImageGenerationStepId} />
           </div>
-          <RequestInputImages images={data.input_images} stepId={firstImageGenerationStepId} />
-        </div>
-      </Section>
+        </Section>
+      )}
     </div>
   );
 
@@ -1521,7 +1530,7 @@ function RequestDetail({ id }: { id: number }) {
         </>
       )}
 
-      <Section title="Response">
+      <Section title={data.media_kind === "live" ? "Conversation" : "Response"}>
         <div className="relative">
           <CopyButton text={data.response} />
           {data.media_kind === "tts" ? (

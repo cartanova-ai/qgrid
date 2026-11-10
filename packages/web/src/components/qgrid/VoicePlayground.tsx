@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
+import { z } from "zod";
 import ExternalLinkIcon from "~icons/lucide/external-link";
 import LoaderIcon from "~icons/lucide/loader-circle";
 import MicIcon from "~icons/lucide/mic";
@@ -8,6 +9,7 @@ import SquareIcon from "~icons/lucide/square";
 import XIcon from "~icons/lucide/x";
 
 import {
+  type LiveCallInput,
   type SpeakInput,
   type SpeakOutput,
   type TranscribeInput,
@@ -631,16 +633,249 @@ function SttPanel() {
   );
 }
 
+// GPT-Live voices (Codex's live list; the server rejects others); default first.
+const LIVE_VOICES =
+  "cove juniper maple spruce ember vale breeze arbor sol aube bubbie haetsal hanul himari leher miko neer porto rindo rio rivage selva sonna tinta viola".split(
+    " ",
+  );
+
+// Data-channel events the transcript is built from (the same events the server logs).
+const LiveEvent = z.looseObject({
+  type: z.string(),
+  turn: z.looseObject({ id: z.string(), role: z.string(), transcript: z.string() }).optional(),
+  turn_id: z.string().optional(),
+  delta: z.string().optional(),
+});
+
+type LiveTurn = { id: string; role: string; text: string };
+
+type LiveSession = { pc: RTCPeerConnection; channel: RTCDataChannel; mic: MediaStream };
+
+const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+
+/** Ends the session at once; a peer that only disconnects keeps it (and its billed time) ~30 s. */
+function endLiveSession({ pc, channel, mic }: LiveSession) {
+  if (channel.readyState === "open") channel.send(JSON.stringify({ type: "session.close" }));
+  mic.getTracks().forEach((track) => track.stop());
+  // Let session.close leave before the peer goes away.
+  setTimeout(() => pc.close(), 500);
+}
+
+/**
+ * A GPT-Live conversation. The browser's own WebRTC peer talks to OpenAI; qgrid only exchanges the
+ * SDP offer with the subscription token and logs the transcript when the session ends.
+ */
+function LivePanel() {
+  const [voice, setVoice] = useState(LIVE_VOICES[0]!);
+  const [instructions, setInstructions] = useState("");
+  const [status, setStatus] = useState<"idle" | "connecting" | "live">("idle");
+  const [error, setError] = useState<string>();
+  const [turns, setTurns] = useState<LiveTurn[]>([]);
+  const [requestLogId, setRequestLogId] = useState<number>();
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const session = useRef<LiveSession | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const liveCall = QgridService.useLiveCallMutation();
+
+  useEffect(
+    () => () => {
+      if (session.current) endLiveSession(session.current);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (status !== "live") return;
+    const startedAt = Date.now();
+
+    const timer = setInterval(
+      () => setElapsedSec(Math.floor((Date.now() - startedAt) / 1000)),
+      1000,
+    );
+
+    return () => clearInterval(timer);
+  }, [status]);
+
+  const stop = () => {
+    if (session.current) endLiveSession(session.current);
+    session.current = null;
+    setStatus("idle");
+  };
+
+  const onEvent = (raw: string) => {
+    let json: z.infer<typeof LiveEvent> | undefined;
+
+    try {
+      json = LiveEvent.safeParse(JSON.parse(raw)).data;
+    } catch {
+      return;
+    }
+
+    if (!json) return;
+    const { type, turn, turn_id: turnId, delta } = json;
+
+    if (type === "session.closed") {
+      stop();
+
+      return;
+    }
+
+    if (turn && (type === "turn.created" || type === "turn.done")) {
+      const next = { id: turn.id, role: turn.role, text: turn.transcript };
+      setTurns((items) =>
+        items.some((item) => item.id === turn.id)
+          ? items.map((item) => (item.id === turn.id ? next : item))
+          : [...items, next],
+      );
+    } else if (type === "turn.delta" && turnId && delta) {
+      setTurns((items) =>
+        items.map((item) => (item.id === turnId ? { ...item, text: item.text + delta } : item)),
+      );
+    }
+  };
+
+  const start = async () => {
+    setError(undefined);
+    setTurns([]);
+    setRequestLogId(undefined);
+    setElapsedSec(0);
+    setStatus("connecting");
+    let mic: MediaStream | undefined;
+    let pc: RTCPeerConnection | undefined;
+
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const peer = new RTCPeerConnection();
+      pc = peer;
+      mic.getTracks().forEach((track) => peer.addTrack(track));
+      peer.addEventListener("track", (event) => {
+        if (audioRef.current) audioRef.current.srcObject = new MediaStream([event.track]);
+      });
+
+      const channel = peer.createDataChannel("oai-events");
+      channel.addEventListener("message", (event) => onEvent(String(event.data)));
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      const params: LiveCallInput = { sdp: offer.sdp ?? "", voice, projectName: PROJECT_NAME };
+
+      if (instructions.trim()) params.instructions = instructions.trim();
+      const out = await liveCall.mutateAsync({ params });
+      await peer.setRemoteDescription({ type: "answer", sdp: out.sdp });
+      session.current = { pc: peer, channel, mic };
+      setRequestLogId(out.requestLogId);
+      setStatus("live");
+    } catch (e) {
+      mic?.getTracks().forEach((track) => track.stop());
+      pc?.close();
+      setError(e instanceof Error ? e.message : String(e));
+      setStatus("idle");
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-3 p-4">
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Voice">
+          <select
+            value={voice}
+            onChange={(e) => setVoice(e.target.value)}
+            disabled={status !== "idle"}
+            className={CONTROL}
+          >
+            {LIVE_VOICES.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Instructions">
+          <input
+            value={instructions}
+            onChange={(e) => setInstructions(e.target.value)}
+            disabled={status !== "idle"}
+            placeholder="e.g. You are a friendly English tutor. Keep answers short."
+            className={CONTROL}
+          />
+        </Field>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        {status === "idle" ? (
+          <button type="button" onClick={start} className={BUTTON}>
+            <MicIcon className="size-3.5" />
+            Start conversation
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={stop}
+            disabled={status === "connecting"}
+            className={`${BUTTON} bg-danger-500 hover:bg-danger-500`}
+          >
+            {status === "connecting" ? (
+              <LoaderIcon className="size-3.5 animate-spin" />
+            ) : (
+              <SquareIcon className="size-3.5" />
+            )}
+            {status === "connecting" ? "Connecting" : "End"}
+          </button>
+        )}
+        {status === "live" && (
+          <span className="tabular-nums text-[12px] text-sand-500">
+            {clock(elapsedSec)} · openai/gpt-live-1 · speak any time (ends by itself after 2 h)
+          </span>
+        )}
+        {requestLogId !== undefined && (
+          <Link
+            to="/requests/show"
+            search={{ id: requestLogId }}
+            target="_blank"
+            className="inline-flex items-center gap-1 text-[12px] tabular-nums text-sand-500 hover:text-sienna-500"
+          >
+            request log #{requestLogId}
+            <ExternalLinkIcon className="size-3" />
+          </Link>
+        )}
+        {error && <p className="text-[12px] text-danger-500 break-words">{error}</p>}
+      </div>
+      {/* oxlint-disable-next-line jsx-a11y/media-has-caption -- live speech; the transcript is shown below. */}
+      <audio ref={audioRef} autoPlay />
+      {turns.length === 0 ? (
+        <p className="py-6 text-center text-[12px] text-sand-400">
+          Start a conversation and talk; both sides of the transcript appear here.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1.5">
+          {turns.map((turn) => (
+            <li
+              key={turn.id}
+              className={`rounded-lg px-3 py-2 text-[13px] text-sand-800 ${
+                turn.role === "assistant" ? "bg-sage-50" : "bg-sand-50"
+              }`}
+            >
+              <span className="mr-2 text-[10px] font-medium uppercase tracking-wider text-sand-500">
+                {turn.role}
+              </span>
+              {turn.text.trim()}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 const TABS = [
   { id: "tts", label: "Text to speech" },
   { id: "stt", label: "Speech to text" },
+  { id: "live", label: "Live conversation" },
 ] as const;
 
 export function VoicePlayground() {
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("tts");
 
-  // Both panels stay mounted (the inactive one is hidden) so switching tabs keeps form state,
-  // history, and any running recording.
+  // All panels stay mounted (inactive ones are hidden) so switching tabs keeps form state,
+  // history, any running recording, and a live conversation.
   return (
     <section className="rounded-xl border border-sand-200/70 bg-white overflow-hidden">
       <div role="tablist" className="flex gap-1 border-b border-sand-100 px-3 pt-2">
@@ -666,6 +901,9 @@ export function VoicePlayground() {
       </div>
       <div role="tabpanel" hidden={tab !== "stt"}>
         <SttPanel />
+      </div>
+      <div role="tabpanel" hidden={tab !== "live"}>
+        <LivePanel />
       </div>
     </section>
   );

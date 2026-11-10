@@ -12,8 +12,17 @@ import {
   buildOpenAIRealtimeHeaders,
   buildSpeechInstructions,
   buildSpeechSession,
+  buildLiveSession,
   buildTranscriptionSession,
+  isOpenAILiveVoice,
   isOpenAIRealtimeVoice,
+  liveSessionClosedEvent,
+  liveTurnDoneEvent,
+  liveUsageUpdatedEvent,
+  OPENAI_LIVE_ALPHA_HEADER,
+  OPENAI_LIVE_CALLS_QUERY,
+  OPENAI_LIVE_DEFAULT_VOICE,
+  OPENAI_LIVE_WS_URL,
   OPENAI_REALTIME_CALLS_URL,
   OPENAI_REALTIME_DEFAULT_SPEECH_MODEL,
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
@@ -54,6 +63,13 @@ export const OPENAI_STT_DEADLINE_MS = 25_000;
 /** The direct transcription socket has no observed teardown; this bounds a hung fallback. */
 export const OPENAI_STT_FALLBACK_TIMEOUT_MS = 60_000;
 export const OPENAI_TTS_TIMEOUT_MS = 60_000;
+export const OPENAI_LIVE_CALL_TIMEOUT_MS = 15_000;
+
+/**
+ * A live session expires two hours after creation (session.started expires_at, observed
+ * 2026-11-10); this bounds a sideband that never closes.
+ */
+export const OPENAI_LIVE_WATCH_LIMIT_MS = (2 * 60 + 5) * 60_000;
 
 /** One second of 24 kHz mono PCM16 per input_audio_buffer.append. */
 const APPEND_CHUNK_BYTES = OPENAI_REALTIME_SAMPLE_RATE * 2;
@@ -69,6 +85,8 @@ export interface OpenAIVoiceClientOptions {
   sttDirectFallback?: boolean;
   sttFallbackTimeoutMs?: number;
   ttsTimeoutMs?: number;
+  liveWsUrl?: string;
+  liveWatchLimitMs?: number;
 }
 
 export interface OpenAITranscribeRequest {
@@ -112,6 +130,43 @@ export interface OpenAISpeechResult {
   usage: { textTokens: number; audioTokens: number; inputTokens: number; outputTokens: number };
   /** Epoch ms of the first response.output_audio.delta. */
   firstAudioAt: number;
+}
+
+export interface OpenAILiveCallRequest {
+  /** The caller's WebRTC SDP offer. */
+  sdp: string;
+  voice?: string;
+  instructions?: string;
+  signal?: AbortSignal;
+  /** Called with the conversation so far after each finished turn; must not throw. */
+  onTurn?: (turns: readonly OpenAILiveTurn[]) => void;
+}
+
+export interface OpenAILiveTurn {
+  role: string;
+  transcript: string;
+  /** Session time, from the session's own clock. */
+  startMs: number;
+  endMs: number;
+}
+
+export interface OpenAILiveSummary {
+  turns: OpenAILiveTurn[];
+  /** From session.closed, or the last usage update when the session ended without one. */
+  audioDurationMs: number | undefined;
+  /** The session.closed reason, or how the sideband ended without one. */
+  endReason: string;
+  /** Set when the sideband failed; the caller's session may still have run. */
+  error?: string;
+}
+
+export interface OpenAILiveCall {
+  /** The SDP answer for the caller's peer connection. */
+  sdp: string;
+  callId: string;
+  quotaHeaders: CodexQuotaHeaders;
+  /** Settles when the session ends; never rejects. */
+  ended: Promise<OpenAILiveSummary>;
 }
 
 export class OpenAIVoiceInputError extends Error {
@@ -309,6 +364,16 @@ async function callErrorFromResponse(response: Response): Promise<OpenAIProtocol
   return new OpenAIProtocolError(`realtime call rejected: ${message}`, undefined, response.status);
 }
 
+/** The rtc_… id at the end of a 201's Location (/v1/realtime/calls/rtc_…). */
+function callIdFromLocation(location: string | null): string {
+  const callId = location?.split("/").pop() ?? "";
+
+  if (!/^rtc_[A-Za-z0-9_-]+$/.test(callId))
+    throw new OpenAIProtocolError(`realtime call returned no call id (Location: ${location})`);
+
+  return callId;
+}
+
 export class OpenAIVoiceClient {
   private readonly fetchImpl: typeof fetch;
   private readonly webSocketFactory: OpenAIWebSocketFactory;
@@ -318,6 +383,10 @@ export class OpenAIVoiceClient {
   private readonly sttDirectFallback: boolean;
   private readonly sttFallbackTimeoutMs: number;
   private readonly ttsTimeoutMs: number;
+  private readonly liveWsUrl: string;
+  private readonly liveWatchLimitMs: number;
+  /** Open live sidebands, terminated on shutdown so they do not hold the process. */
+  private readonly liveSockets = new Set<OpenAIWebSocketLike>();
 
   constructor(options: OpenAIVoiceClientOptions = {}) {
     this.fetchImpl = options.fetch ?? fetch;
@@ -329,6 +398,8 @@ export class OpenAIVoiceClient {
     this.sttDirectFallback = options.sttDirectFallback ?? true;
     this.sttFallbackTimeoutMs = options.sttFallbackTimeoutMs ?? OPENAI_STT_FALLBACK_TIMEOUT_MS;
     this.ttsTimeoutMs = options.ttsTimeoutMs ?? OPENAI_TTS_TIMEOUT_MS;
+    this.liveWsUrl = options.liveWsUrl ?? OPENAI_LIVE_WS_URL;
+    this.liveWatchLimitMs = options.liveWatchLimitMs ?? OPENAI_LIVE_WATCH_LIMIT_MS;
   }
 
   /**
@@ -419,12 +490,8 @@ export class OpenAIVoiceClient {
         throw await callErrorFromResponse(response);
       }
 
-      const location = response.headers.get("location") ?? "";
-      const callId = location.split("/").pop() ?? "";
       await response.body?.cancel();
-
-      if (!/^rtc_[A-Za-z0-9_-]+$/.test(callId))
-        throw new OpenAIProtocolError(`realtime call returned no call id (Location: ${location})`);
+      const callId = callIdFromLocation(response.headers.get("location"));
       const quotaHeaders = codexQuotaHeaders(response.headers);
 
       const text = await this.runTranscriptionSocket(
@@ -559,6 +626,141 @@ export class OpenAIVoiceClient {
       records.cleanup();
       dispose();
     }
+  }
+
+  /**
+   * GPT-Live: exchanges the caller's SDP offer through /realtime/calls and starts watching the
+   * call's sideband. Audio flows between the caller's peer and OpenAI; the caller ends the session
+   * with {"type":"session.close"} on its data channel.
+   */
+  async createLiveCall(
+    credentials: OpenAIRealtimeCredentials,
+    request: OpenAILiveCallRequest,
+  ): Promise<OpenAILiveCall> {
+    const voice = request.voice ?? OPENAI_LIVE_DEFAULT_VOICE;
+
+    if (!isOpenAILiveVoice(voice))
+      throw new OpenAIVoiceInputError(`unsupported live voice "${voice}"`);
+    const correlation = { threadId: crypto.randomUUID(), sessionId: crypto.randomUUID() };
+
+    const headers = {
+      ...buildOpenAIRealtimeHeaders(credentials, correlation),
+      ...OPENAI_LIVE_ALPHA_HEADER,
+    };
+
+    // The caller's signal (its HTTP request) bounds only the exchange, never the session.
+    const { signal, dispose } = this.deadline(request.signal, OPENAI_LIVE_CALL_TIMEOUT_MS);
+
+    try {
+      const response = await this.fetchImpl(`${this.callsUrl}?${OPENAI_LIVE_CALLS_QUERY}`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sdp: request.sdp,
+          session: buildLiveSession({ voice, instructions: request.instructions }),
+        }),
+        signal,
+      });
+
+      if (response.status !== 201) {
+        if (response.ok) await response.body?.cancel();
+        throw await callErrorFromResponse(response);
+      }
+
+      const callId = callIdFromLocation(response.headers.get("location"));
+      const sdp = await response.text();
+
+      return {
+        sdp,
+        callId,
+        quotaHeaders: codexQuotaHeaders(response.headers),
+        ended: this.watchLiveSession(`${this.liveWsUrl}/${callId}`, headers, request.onTurn),
+      };
+    } catch (error) {
+      throw signal.aborted ? this.abortReason(request.signal, signal, error) : error;
+    } finally {
+      dispose();
+    }
+  }
+
+  /**
+   * Follows a live call's sideband until the session ends. It carries the same events as the
+   * caller's data channel plus a copy of both audio streams, which is skipped: only finished turns
+   * and usage are kept. Never rejects.
+   */
+  private async watchLiveSession(
+    url: string,
+    headers: Record<string, string>,
+    onTurn: OpenAILiveCallRequest["onTurn"],
+  ): Promise<OpenAILiveSummary> {
+    const signal = AbortSignal.timeout(this.liveWatchLimitMs);
+    const socket = this.webSocketFactory(url, { headers });
+    const records = socketRecords(socket, signal);
+    const turns: OpenAILiveTurn[] = [];
+    let audioDurationMs: number | undefined;
+    let serverError: string | undefined;
+    this.liveSockets.add(socket);
+
+    const ended = (endReason: string, error = serverError): OpenAILiveSummary =>
+      error === undefined
+        ? { turns, audioDurationMs, endReason }
+        : { turns, audioDurationMs, endReason, error };
+
+    try {
+      await this.awaitOpen(records.next);
+
+      for (;;) {
+        const record = await records.next();
+
+        if (record.kind === "error") {
+          return ended(
+            signal.aborted ? "watch limit reached" : "sideband error",
+            record.error.message,
+          );
+        }
+
+        // Without session.closed: the caller dropped its peer (OpenAI ends it about 30 s later).
+        if (record.kind === "close") return ended(`sideband closed (${record.code})`);
+
+        if (record.kind !== "event") continue;
+        const turn = liveTurnDoneEvent.safeParse(record.event);
+
+        if (turn.success) {
+          const { role, transcript, start_ms, end_ms } = turn.data.turn;
+          turns.push({ role, transcript, startMs: start_ms, endMs: end_ms });
+          onTurn?.(turns);
+          continue;
+        }
+
+        const usage = liveUsageUpdatedEvent.safeParse(record.event);
+
+        if (usage.success) {
+          audioDurationMs = usage.data.usage.audio_duration_ms;
+          continue;
+        }
+
+        const closed = liveSessionClosedEvent.safeParse(record.event);
+
+        if (closed.success) {
+          audioDurationMs = closed.data.usage?.audio_duration_ms ?? audioDurationMs;
+          socket.close(1000, "done");
+
+          return ended(closed.data.reason ?? "closed");
+        }
+
+        serverError = serverErrorFromEvent(record.event)?.message ?? serverError;
+      }
+    } catch (error) {
+      return ended("sideband error", error instanceof Error ? error.message : String(error));
+    } finally {
+      records.cleanup();
+      this.liveSockets.delete(socket);
+    }
+  }
+
+  /** Shutdown: ends every live watcher (each run is then logged with what it saw). */
+  closeLiveSessions(): void {
+    this.liveSockets.forEach((socket) => socket.terminate());
   }
 
   private deadline(caller: AbortSignal | undefined, ms: number) {

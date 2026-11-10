@@ -226,7 +226,7 @@
       "type": "enum",
       "id": "RequestLogMediaKind",
       "nullable": true,
-      "desc": "미디어 엔드포인트 종류(image/video/stt/tts). 텍스트 요청은 null (목록 Fmt 표시용)"
+      "desc": "미디어 엔드포인트 종류(image/video/stt/tts/live). 텍스트 요청은 null (목록 Fmt 표시용)"
     }
   ],
   "indexes": [
@@ -400,7 +400,8 @@
       "image": "이미지",
       "video": "비디오",
       "stt": "음성 인식",
-      "tts": "음성 합성"
+      "tts": "음성 합성",
+      "live": "실시간 대화"
     }
   }
 }

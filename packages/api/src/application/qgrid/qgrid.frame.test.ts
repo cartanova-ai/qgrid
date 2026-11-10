@@ -47,6 +47,7 @@ const {
   requestLogFinishRunMock,
   appendStepMock,
   continueToolRunMock,
+  recordRunProgressMock,
   dispatcherQueryMock,
   dispatcherQueryStreamMock,
   beforeQueryMock,
@@ -75,6 +76,7 @@ const {
     requestLogFinishRunMock: vi.fn(),
     appendStepMock: vi.fn(),
     continueToolRunMock: vi.fn(),
+    recordRunProgressMock: vi.fn(),
     dispatcherQueryMock: vi.fn(),
     dispatcherQueryStreamMock: vi.fn(),
     beforeQueryMock: vi.fn(),
@@ -126,6 +128,7 @@ vi.mock("../request-log/request-log.model", () => ({
     finishRun: requestLogFinishRunMock,
     appendStep: appendStepMock,
     continueToolRun: continueToolRunMock,
+    recordRunProgress: recordRunProgressMock,
   },
 }));
 
@@ -2391,6 +2394,109 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       expect(out.audio).toBe(Buffer.from(wav).toString("base64"));
       expect(out.audioTimestamps).toBeUndefined();
       expect(out.timestampsError).toBe("speech aligner model is not installed");
+    });
+  });
+
+  describe("GPT-Live call", () => {
+    type Summary = { turns: object[]; audioDurationMs?: number; endReason: string; error?: string };
+    let endSession: (summary: Summary) => void;
+    let startLive: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      recordRunProgressMock.mockReset().mockResolvedValue(undefined);
+      const ended = new Promise<Summary>((resolve) => (endSession = resolve));
+      startLive = vi.fn().mockResolvedValue({
+        result: { sdp: "v=0 answer", callId: "rtc_x", quotaHeaders: new Map(), ended },
+        tokenName: "openai/a",
+      });
+      Object.assign(QgridDispatcher, { openaiDispatcher: { startLive } });
+    });
+
+    afterEach(() => {
+      Object.assign(QgridDispatcher, { openaiDispatcher: null });
+    });
+
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    it("answers at once, fills the running log turn by turn, and finishes it at the end", async () => {
+      const out = await QgridFrame.liveCall({ sdp: "v=0 offer", instructions: "Be brief.", projectName: "p" });
+
+      expect(out).toEqual({
+        sdp: "v=0 answer",
+        callId: "rtc_x",
+        model: "openai/gpt-live-1",
+        voice: "cove",
+        tokenName: "openai/a",
+        requestLogId: 77,
+      });
+      expect(startLive).toHaveBeenCalledWith(
+        expect.objectContaining({ sdp: "v=0 offer", voice: "cove", instructions: "Be brief." }),
+      );
+      expect(requestLogCreateRunMock).toHaveBeenCalledWith(
+        expect.objectContaining({ media_kind: "live", system_prompt: "Be brief.", requested_model_name: "openai/gpt-live-1" }),
+      );
+      // A resolved step: a pending one would fall to the 30-minute tool-wait cleanup.
+      expect(appendStepMock).toHaveBeenCalledWith(
+        77,
+        expect.objectContaining({
+          tool_name: "live_session",
+          tool_call_id: "live_session:rtc_x",
+          tool_result: JSON.stringify({ status: "live", callId: "rtc_x" }),
+        }),
+      );
+      expect(recordRunProgressMock).toHaveBeenCalledWith(77, { token_name: "openai/a" });
+
+      // The watcher reports each finished turn; the running row's conversation follows it.
+      const { onTurn } = startLive.mock.calls[0]![0] as { onTurn: (turns: object[]) => void };
+      onTurn([{ role: "user", transcript: "Hi there?", startMs: 600, endMs: 5800 }]);
+      await settle();
+      expect(recordRunProgressMock).toHaveBeenLastCalledWith(77, { response: "**user** 0:00  \nHi there?" });
+      expect(requestLogFinishRunMock).not.toHaveBeenCalled();
+
+      const summary = {
+        turns: [
+          { role: "user", transcript: "Hi there?", startMs: 600, endMs: 5800 },
+          { role: "assistant", transcript: " Hello!", startMs: 65_600, endMs: 69_400 },
+        ],
+        audioDurationMs: 60_000,
+        endReason: "client_request",
+      };
+      endSession(summary);
+      await settle();
+
+      expect(continueToolRunMock).toHaveBeenCalledWith(77, [
+        { toolCallId: "live_session:rtc_x", output: JSON.stringify(summary), isError: false },
+      ]);
+      expect(requestLogFinishRunMock).toHaveBeenCalledWith(
+        77,
+        expect.objectContaining({
+          status: "succeeded",
+          token_name: "openai/a",
+          response: "**user** 0:00  \nHi there?\n\n**assistant** 1:05  \nHello!",
+          // One minute of session audio at $0.05/min.
+          cost_usd: 50_000,
+          cost_source: "pricing_table",
+        }),
+      );
+    });
+
+    it("records a sideband that failed before any turn as an error run", async () => {
+      await QgridFrame.liveCall({ sdp: "v=0 offer", voice: "hanul" });
+      endSession({ turns: [], endReason: "sideband error", error: "handshake rejected with HTTP 404" });
+      await settle();
+
+      expect(requestLogFinishRunMock).toHaveBeenCalledWith(
+        77,
+        expect.objectContaining({ status: "error", error_message: "handshake rejected with HTTP 404" }),
+      );
+    });
+
+    it("rejects any model but openai/gpt-live-1 before logging or dispatch", async () => {
+      await expect(
+        QgridFrame.liveCall({ model: "openai/gpt-realtime-2.1", sdp: "v=0" } as never),
+      ).rejects.toMatchObject({ statusCode: 400 });
+      expect(requestLogCreateRunMock).not.toHaveBeenCalled();
+      expect(startLive).not.toHaveBeenCalled();
     });
   });
 

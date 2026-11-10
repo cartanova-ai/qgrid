@@ -15,9 +15,11 @@ const {
   finishRunMock,
   createRunMock,
   expireStaleToolWaitingRunsMock,
+  expireStaleLiveRunsMock,
   continueToolRunMock,
   recordRunProgressMock,
 } = vi.hoisted(() => ({
+  expireStaleLiveRunsMock: vi.fn(),
   recordRunProgressMock: vi.fn(),
   appendStepMock: vi.fn(),
   aggregateStepUsageMock: vi.fn(),
@@ -34,6 +36,7 @@ vi.mock("../request-log/request-log.model", () => ({
     finishRun: finishRunMock,
     createRun: createRunMock,
     expireStaleToolWaitingRuns: expireStaleToolWaitingRunsMock,
+    expireStaleLiveRuns: expireStaleLiveRunsMock,
     continueToolRun: continueToolRunMock,
     recordRunProgress: recordRunProgressMock,
   },
@@ -102,6 +105,7 @@ describe("qgrid run lifecycle start", () => {
     vi.spyOn(Date, "now").mockReturnValue(lifecycleNow);
     createRunMock.mockReset().mockResolvedValue(10);
     expireStaleToolWaitingRunsMock.mockReset().mockResolvedValue([]);
+    expireStaleLiveRunsMock.mockReset().mockResolvedValue(0);
     continueToolRunMock.mockReset().mockResolvedValue(3);
     aggregateStepUsageMock.mockReset().mockResolvedValue({
       input_tokens: 0,
@@ -282,6 +286,15 @@ describe("qgrid run lifecycle start", () => {
       "tool-call run: no follow-up within 30 minutes",
     );
     expect(finishRunMock).not.toHaveBeenCalled();
+  });
+
+  it("closes live sessions only after their two-hour limit and the watcher's margin", async () => {
+    await beforeQuery({ prompt: "hi", model: "openai/gpt-5-codex" });
+
+    expect(expireStaleLiveRunsMock).toHaveBeenCalledWith(
+      new Date(lifecycleNow - (2 * 60 + 15) * 60 * 1000),
+      "live session: the server stopped before the session ended",
+    );
   });
 
   it("throttles stale cleanup while still creating every requested run", async () => {

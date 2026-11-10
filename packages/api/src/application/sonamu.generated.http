@@ -733,6 +733,23 @@ Content-Type: application/json
 
 ###
 
+POST {{baseUrl}}/api/qgrid/liveCall
+Content-Type: application/json
+
+{
+  "params": {
+    "model": "openai/gpt-live-1",
+    "sdp": "SDP",
+    "voice": "VOICE",
+    "instructions": "INSTRUCTIONS",
+    "tokenName": "TOKENNAME",
+    "projectName": "PROJECTNAME",
+    "logger": false
+  }
+}
+
+###
+
 GET {{baseUrl}}/api/qgrid/usage
 	?tokenId=0
 Content-Type: application/json

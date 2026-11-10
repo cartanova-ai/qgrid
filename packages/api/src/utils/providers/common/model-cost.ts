@@ -477,6 +477,9 @@ const STT_USD_PER_MINUTE = new Map([
   ["grok/grok-voice-transcribe-2.0", 0.1 / 60],
 ]);
 
+// GPT-Live, USD per minute of session audio (OpenAI list price, billed per second; checked 2026-11-10).
+const LIVE_USD_PER_MINUTE = new Map([["openai/gpt-live-1", 0.05]]);
+
 const GROK_TTS_USD_PER_CHARACTER = 15 / 1_000_000;
 
 const priced = (costUsd: number): VoiceCost => ({ costUsd, costSource: "pricing_table" });
@@ -505,6 +508,18 @@ export function sttCost(route: string, durationSec: number | undefined): VoiceCo
   return perMinute === undefined || durationSec === undefined
     ? undefined
     : priced((perMinute * durationSec) / 60);
+}
+
+/** A live session by the audio time the session reported; unknown time stays unpriced. */
+export function liveCost(
+  route: string,
+  audioDurationMs: number | undefined,
+): VoiceCost | undefined {
+  const perMinute = LIVE_USD_PER_MINUTE.get(route);
+
+  return perMinute === undefined || audioDurationMs === undefined
+    ? undefined
+    : priced((perMinute * audioDurationMs) / 60_000);
 }
 
 /** Grok `/tts` by input characters. */

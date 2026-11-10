@@ -248,7 +248,7 @@ const entityLabels = {
   "entity.RequestLog.is_image_generation": "이미지 생성 turn 여부 (quota 귀속용)",
   "entity.RequestLog.is_structured": "structured output(jsonSchema) 요청 여부 (목록 구분 표시용)",
   "entity.RequestLog.media_kind":
-    "미디어 엔드포인트 종류(image/video/stt/tts). 텍스트 요청은 null (목록 Fmt 표시용)",
+    "미디어 엔드포인트 종류(image/video/stt/tts/live). 텍스트 요청은 null (목록 Fmt 표시용)",
   "enum.RequestLogOrderBy.id-desc": "ID최신순",
   "enum.RequestLogOrderBy.id-asc": "ID오래된순",
   "enum.RequestLogOrderBy.created_at-desc": "등록일시최신순",
@@ -278,6 +278,7 @@ const entityLabels = {
   "enum.RequestLogMediaKind.video": "비디오",
   "enum.RequestLogMediaKind.stt": "음성 인식",
   "enum.RequestLogMediaKind.tts": "음성 합성",
+  "enum.RequestLogMediaKind.live": "실시간 대화",
   "entity.RequestLogStep": "RequestLogStep",
   "entity.RequestLogStep.id": "ID",
   "entity.RequestLogStep.created_at": "등록일시",

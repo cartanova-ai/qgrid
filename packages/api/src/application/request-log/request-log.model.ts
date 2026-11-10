@@ -121,7 +121,13 @@ export interface FinishRunParams {
 
 type FinishRunUpdate = Partial<FinishRunParams> & { id: number };
 
-export type RunProgressUpdate = { token_name?: string; model_name?: string; ttft_ms?: number };
+export type RunProgressUpdate = {
+  token_name?: string;
+  model_name?: string;
+  ttft_ms?: number;
+  /** A live voice session's conversation so far, rewritten after every finished turn. */
+  response?: string;
+};
 
 /** Copies `key` only when the caller supplied it, so omitted columns stay untouched. */
 function copyDefined<T>(target: Partial<T>, source: T, key: keyof T): void {
@@ -615,6 +621,19 @@ class RequestLogModelClass extends BaseModelClass<
       .where("id", requestLogId)
       .where("status", "running")
       .update(progress);
+  }
+
+  /**
+   * Live voice sessions end within two hours and log themselves at the end; a live run still
+   * running past `threshold` lost its server mid-session. Returns how many were closed.
+   */
+  async expireStaleLiveRuns(threshold: Date, errorMessage: string): Promise<number> {
+    return this.getPuri("w")
+      .from("request_logs")
+      .where("media_kind", "live")
+      .where("status", "running")
+      .where("created_at", "<", threshold)
+      .update({ status: "error", error_message: errorMessage });
   }
 
   async finishRun(requestLogId: number, params: FinishRunParams): Promise<void> {

@@ -33,6 +33,8 @@ import { handleChatgptAuthTokensRefresh } from "./openai-refresh";
 import { type OpenAITransportKind, resolveOpenAITransportKind } from "./openai-transport-config";
 import {
   isUnauthorizedRealtimeError,
+  type OpenAILiveCall,
+  type OpenAILiveCallRequest,
   type OpenAISpeakRequest,
   type OpenAISpeechResult,
   type OpenAITranscribeRequest,
@@ -356,6 +358,18 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     );
   }
 
+  async startLive(
+    request: OpenAILiveCallRequest & OpenAIVoiceSelection,
+  ): Promise<OpenAIVoiceDispatchResult<OpenAILiveCall>> {
+    const { preferredTokenId, requirePreferredToken, ...liveRequest } = request;
+
+    return this.runVoice(
+      { preferredTokenId, requirePreferredToken },
+      request.signal,
+      (credentials) => this.voiceClient.createLiveCall(credentials, liveRequest),
+    );
+  }
+
   /**
    * Selects a token, runs the realtime call, and on one 401 refreshes that token's credentials and
    * retries once (as the Responses transports do). Any other failure propagates: a realtime
@@ -416,6 +430,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
   }
 
   async stop(): Promise<void> {
+    this.voiceClient.closeLiveSessions();
     this.clients.forEach(({ client }) => client.close?.());
     this.clients.clear();
     this.retiredClients.forEach((entry) => entry.client.close?.());

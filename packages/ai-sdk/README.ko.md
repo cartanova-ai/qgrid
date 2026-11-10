@@ -518,6 +518,52 @@ const speech = await generateSpeech({
 - 음성 합성은 TTS 모델이 아니라 텍스트를 읽는 대화 모델입니다. qgrid는 `<script>` 태그 안의 텍스트만 읽고 답하지 말라고 지시합니다. 원문 그대로 읽는지는 짧은 영어 문장과 질문형 영어 캐릭터 대사에서 검증했습니다. 모델이 실제로 말한 transcript를 요청 로그에 함께 남겨 비교할 수 있지만, 한영 혼합 텍스트에서는 transcript가 일치해도 영어 음성을 알아듣기 어려운 경우가 있었습니다.
 - 모델별 동작은 서버 저장소의 `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`에 기록되어 있습니다. 2026-10-17 기준 알려진 한계: `gpt-live-transcribe`, `gpt-realtime-whisper`는 60초 클립의 절반 정도만 반환하므로 짧은 발화에 쓰세요. `gpt-realtime-whisper`는 `openai.prompt`를 거부합니다(서버가 업스트림 호출 전에 HTTP 400). `whisper-1`은 `openai.prompt`를 받지만 무시합니다. 음성 합성은 `gpt-realtime-2.1-mini`가 모든 테스트 문장을 그대로 읽었고(13/13), `gpt-realtime-2.1`은 1회 의역(12/13)했습니다. `gpt-realtime-1.5`는 텍스트를 읽지 않고 답변하는 경우가 잦아(6/13) 2.18.0에서 제외했습니다. 2026-11-06에는 현재 프롬프트로 `gpt-realtime-2.1`과 `gpt-realtime-2.1-mini` 모두 질문형 캐릭터 대사 12/12를 그대로 읽었습니다(이전 프롬프트에서는 `gpt-realtime-2.1`이 7/12를 답변). 2026-11-09에 독립 STT 2종으로 영어 108건(6문장, 보이스 `marin` `cedar` `ballad`, 각 3회)을 판정한 결과 `gpt-realtime-2.1`은 54/54, `gpt-realtime-2.1-mini`는 53/54였고, 실패 1건은 "Sure, let me read that out loud for you exactly as written."으로 시작했습니다. 한영 혼합 문장은 두 모델 모두 끝까지 읽었습니다(각 9/9). 모델이 남기는 transcript에는 이런 서두가 나타나지 않으므로, 정확성이 중요하면 transcript 대신 STT나 `withTimestamps`(정렬이 덧붙은 말을 건너뜀)로 오디오를 확인하세요.
 
+### OpenAI 실시간 음성 대화 (GPT-Live)
+
+서버 2.19.2+는 ChatGPT 구독 토큰으로 `openai/gpt-live-1` 대화를 엽니다. GPT-Live는 듣는 동안에도 말하는 대화 모델이라 음성 합성과는 다릅니다. AI SDK에 해당 인터페이스가 없어서 이 패키지도 따로 제공하지 않습니다. 앱이 qgrid HTTP 엔드포인트를 직접 부릅니다.
+
+오디오는 qgrid를 지나지 않습니다. 브라우저의 WebRTC 피어가 SDP offer를 만들고, 앱 서버가 이를 `POST /api/qgrid/liveCall`로 보낸 뒤, 돌아온 SDP answer를 브라우저에 적용합니다. 그 뒤 오디오와 이벤트는 브라우저와 OpenAI가 직접 주고받습니다. qgrid는 세션이 끝날 때 대화 텍스트와 세션 오디오 시간을 로그에 남기고, 오디오는 저장하지 않습니다.
+
+```typescript
+// 브라우저
+const pc = new RTCPeerConnection();
+const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+mic.getTracks().forEach((track) => pc.addTrack(track));
+pc.addEventListener("track", (event) => {
+  speaker.srcObject = new MediaStream([event.track]); // <audio autoplay> 요소
+});
+
+const events = pc.createDataChannel("oai-events");
+events.addEventListener("message", (event) => console.log(JSON.parse(event.data)));
+
+const offer = await pc.createOffer();
+await pc.setLocalDescription(offer);
+const { sdp } = await fetch("/live", { method: "POST", body: offer.sdp }).then((r) => r.json());
+await pc.setRemoteDescription({ type: "answer", sdp });
+
+// 종료: 피어만 닫으면 세션과 과금 시간이 약 30초 더 이어집니다.
+events.send(JSON.stringify({ type: "session.close" }));
+
+// 앱 서버
+app.post("/live", async (req, res) => {
+  const response = await fetch(`${QGRID_URL}/api/qgrid/liveCall`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      params: { sdp: req.body, voice: "cove", instructions: "You are a friendly English tutor.", projectName: "my-app" },
+    }),
+  });
+  res.status(response.status).json(await response.json());
+});
+```
+
+- 요청 `params`: `sdp`(offer, 필수), `voice`, `instructions`, 그리고 다른 엔드포인트와 같은 `tokenName`(`openai/` 접두사), `projectName`, `logger`. `model`은 생략하거나 `openai/gpt-live-1`만 됩니다. 다른 값은 HTTP 400입니다.
+- 응답: `sdp`(answer), `callId`, `model`, `voice`, `tokenName`, `requestLogId`. 요청 로그는 세션 내내 `running`이고, 턴이 끝날 때마다 세션 시간이 붙은 대화가 갱신되어 진행 중에도 볼 수 있습니다. 세션이 끝나면 비용 추정치(세션 오디오 분당 $0.05, API 정가)와 함께 마무리됩니다.
+- 음성: `cove`(기본) `juniper maple spruce ember vale breeze arbor sol aube bubbie haetsal hanul himari leher miko neer porto rindo rio rivage selva sonna tinta viola`. realtime 음성 합성용 음성(`marin` 등)은 쓸 수 없습니다. OpenAI가 call은 받아 주지만 세션이 시작되지 않기 때문에 서버가 HTTP 400으로 막습니다.
+- 데이터 채널 이벤트: `turn.created`, `turn.delta`, `turn.done`이 말하는 대로 각 턴의 `role`과 `transcript`를 전하고, `session.usage.updated`와 `session.closed`가 `usage.audio_duration_ms`를 전합니다. 세션은 시작 2시간 뒤 스스로 끝납니다.
+- 엔드포인트는 브라우저가 아니라 앱 서버에서 부르세요. qgrid에는 호출자 인증이 없고 CORS 헤더도 보내지 않습니다.
+- 업스트림이 요청한 모델 이름을 무시해서 실제 모델은 확인할 수 없습니다. Codex도 qgrid도 `gpt-live-1-codex`를 보냅니다. 대화만 지원하고, 도구 호출과 백엔드 모델 위임은 열지 않았습니다.
+
 ## Telemetry Logger
 
 서버와 AI SDK 2.10.0부터 qgrid provider의 `generateText` 결과에서는 `result.finalStep.providerMetadata?.qgrid?.requestLogId`로 요청 로그 ID를 확인할 수 있습니다. `streamText`는 스트림 소비 후 `(await result.finalStep).providerMetadata?.qgrid?.requestLogId`로 확인합니다. 직접 API를 호출하면 `query` 응답과 스트림 `done` 이벤트의 최상위 `requestLogId`에 같은 값이 담깁니다. `logger: false` 또는 구버전 서버에서는 이 필드가 없으며, 툴 호출 후속 단계는 같은 요청 로그 ID를 공유합니다. 이 ID는 후속 요청 연결 상태가 아니며, 아래 telemetry logger를 쓰는 외부 provider에는 이 metadata가 추가되지 않습니다.

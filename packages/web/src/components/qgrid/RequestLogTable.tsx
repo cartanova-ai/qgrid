@@ -415,7 +415,9 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                       )}
                     </td>
                     <td className="px-4 py-1.5 whitespace-nowrap">
-                      {row.media_kind === "stt" || row.media_kind === "tts" ? (
+                      {row.media_kind === "stt" ||
+                      row.media_kind === "tts" ||
+                      row.media_kind === "live" ? (
                         <span className="rounded bg-blue-100 px-1.5 py-0.5 font-mono text-[10px] text-blue-700">
                           voice/{row.media_kind}
                         </span>

@@ -530,6 +530,52 @@ const speech = await generateSpeech({
 - Speech is a conversational model reading text, not a TTS model. qgrid's prompt tells it to read only the text inside `<script>` tags and never answer it. Verbatim fidelity was verified on short English sentences and on question-form English character lines. The model's own transcript of what it said is logged with the request for comparison, but for mixed Korean/English text a matching transcript did not guarantee intelligible English audio.
 - Per-model behavior is recorded in the server repository's `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`. Known limits on 2026-10-17: `gpt-live-transcribe` and `gpt-realtime-whisper` returned roughly half of a 60 s clip (use them for short utterances); `gpt-realtime-whisper` rejects `openai.prompt` (the server answers HTTP 400 before any upstream call); `whisper-1` accepts but ignores `openai.prompt`. For speech, `gpt-realtime-2.1-mini` repeated every test text verbatim (13/13), `gpt-realtime-2.1` paraphrased once (12/13); `gpt-realtime-1.5` often answered the text instead of repeating it (6/13) and was removed in 2.18.0. On 2026-11-06, with the current prompt, `gpt-realtime-2.1` and `gpt-realtime-2.1-mini` both read 12/12 question-form character lines verbatim (the earlier prompt let `gpt-realtime-2.1` answer 7/12). On 2026-11-09, judged by two independent STT models over 108 English clips (6 lines, voices `marin` `cedar` `ballad`, 3 takes each), `gpt-realtime-2.1` read 54/54 and `gpt-realtime-2.1-mini` 53/54: one take began with "Sure, let me read that out loud for you exactly as written." Both read every Korean/English mixed line in full (9/9 each). The model's own logged transcript does not show such a preamble, so when fidelity matters, check the audio with STT or `withTimestamps` (its alignment skips the extra words) instead of the transcript.
 
+### OpenAI live voice conversation (GPT-Live)
+
+Server 2.19.2+ runs `openai/gpt-live-1` conversations on a ChatGPT subscription token. GPT-Live listens and speaks at the same time, so it is a conversation, not speech generation: AI SDK has no interface for it and this package adds none. Your app calls the qgrid HTTP endpoint directly.
+
+The audio never passes through qgrid. The browser's own WebRTC peer makes an SDP offer, your server sends it to `POST /api/qgrid/liveCall`, and the browser applies the SDP answer that comes back. Audio and events then flow between the browser and OpenAI. qgrid logs the conversation text and the session's audio time when the session ends; it stores no audio.
+
+```typescript
+// Browser
+const pc = new RTCPeerConnection();
+const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+mic.getTracks().forEach((track) => pc.addTrack(track));
+pc.addEventListener("track", (event) => {
+  speaker.srcObject = new MediaStream([event.track]); // an <audio autoplay> element
+});
+
+const events = pc.createDataChannel("oai-events");
+events.addEventListener("message", (event) => console.log(JSON.parse(event.data)));
+
+const offer = await pc.createOffer();
+await pc.setLocalDescription(offer);
+const { sdp } = await fetch("/live", { method: "POST", body: offer.sdp }).then((r) => r.json());
+await pc.setRemoteDescription({ type: "answer", sdp });
+
+// To end: closing only the peer keeps the session, and its billed time, running for about 30 s.
+events.send(JSON.stringify({ type: "session.close" }));
+
+// Your server
+app.post("/live", async (req, res) => {
+  const response = await fetch(`${QGRID_URL}/api/qgrid/liveCall`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      params: { sdp: req.body, voice: "cove", instructions: "You are a friendly English tutor.", projectName: "my-app" },
+    }),
+  });
+  res.status(response.status).json(await response.json());
+});
+```
+
+- Request `params`: `sdp` (the offer, required), `voice`, `instructions`, and the usual `tokenName` (`openai/` prefix), `projectName` and `logger`. `model` may be omitted or `openai/gpt-live-1`; any other value is rejected with HTTP 400.
+- Response: `sdp` (the answer), `callId`, `model`, `voice`, `tokenName` and `requestLogId`. The request log stays `running` for the whole session and its conversation, with each turn's session time, is rewritten after every finished turn, so it can be read while the session runs. When the session ends the run is finished with a cost estimate of $0.05 per minute of session audio (the API list price).
+- Voices: `cove` (default) `juniper maple spruce ember vale breeze arbor sol aube bubbie haetsal hanul himari leher miko neer porto rindo rio rivage selva sonna tinta viola`. The realtime speech voices (`marin` and others) do not apply; the server rejects them with HTTP 400, because OpenAI would accept the call and then never start the session.
+- Data channel events: `turn.created`, `turn.delta` and `turn.done` carry each turn's `role` and `transcript` as it is spoken; `session.usage.updated` and `session.closed` carry `usage.audio_duration_ms`. A session ends on its own two hours after it starts.
+- Call the endpoint from your server, not from the browser: qgrid has no caller authentication and sends no CORS headers.
+- The upstream ignores the requested model name, so the serving model cannot be confirmed; Codex itself sends `gpt-live-1-codex`, as qgrid does. Conversation only: tool calls and backend-model delegation are not exposed.
+
 ## Telemetry Logger
 
 With qgrid server and SDK 2.10.0+, read the parent request-log ID from `result.finalStep.providerMetadata?.qgrid?.requestLogId` after `generateText`. For `streamText`, consume the stream first, then read `(await result.finalStep).providerMetadata?.qgrid?.requestLogId`. Raw API query responses and stream `done` events expose the same ID as top-level `requestLogId`. The field is omitted with `logger: false` or an older server. Tool-run steps share the parent ID; it is not continuation state. This metadata applies to the qgrid provider, not external providers using the telemetry logger below.

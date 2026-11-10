@@ -81,6 +81,106 @@ export const OPENAI_TRANSCRIPTION_MODELS_WITHOUT_PROMPT: ReadonlySet<string> = n
  */
 export const OPENAI_SPEECH_MODELS = ["gpt-realtime-2.1-mini", "gpt-realtime-2.1"] as const;
 
+// GPT-Live (Codex realtime v3, "frameless") on a ChatGPT subscription, mirroring openai/codex main
+// @ 2026-11-10. The caller's own WebRTC peer carries the audio; qgrid only exchanges its SDP offer
+// through /realtime/calls and watches the call's sideband for the transcript and usage. The direct
+// /v1/live sockets refuse the subscription token ("Voice session access denied"), as Codex expects
+// (core/src/realtime_conversation.rs realtime_api_key). Probe notes: SON-591, SON-592.
+
+/** codex-api/src/endpoint/realtime_call.rs configure_realtime_call_request (backend shape + v3). */
+export const OPENAI_LIVE_CALLS_QUERY = "intent=quicksilver&architecture=avas";
+
+/**
+ * Undocumented; Codex sends it for v3 (core/src/realtime_conversation.rs realtime_request_headers).
+ * Required on both the /calls POST (else 400 invalid_quicksilver_alpha_header) and the sideband.
+ */
+export const OPENAI_LIVE_ALPHA_HEADER = { "OpenAI-Alpha": "quicksilver=v2" } as const;
+
+/** Sideband base: wss://api.openai.com/v1/live/<rtc_id> (realtime_websocket/methods.rs). */
+export const OPENAI_LIVE_WS_URL = "wss://api.openai.com/v1/live" as const;
+
+/** The only live model qgrid exposes. */
+export const OPENAI_LIVE_MODEL = "gpt-live-1";
+
+/**
+ * Sent as session.model, as Codex does (DEFAULT_FRAMELESS_REALTIME_MODEL). The backend ignores the
+ * field on this route: made-up names opened a session too (2026-11-10).
+ */
+const OPENAI_LIVE_WIRE_MODEL = "gpt-live-1-codex";
+
+/**
+ * protocol/src/protocol.rs RealtimeVoicesList::builtin v3; Codex's live default is cove. Any other
+ * voice still gets a 201 from /calls, but the session never starts (sideband 404).
+ */
+export const OPENAI_LIVE_VOICES = [
+  "cove",
+  "juniper",
+  "maple",
+  "spruce",
+  "ember",
+  "vale",
+  "breeze",
+  "arbor",
+  "sol",
+  "aube",
+  "bubbie",
+  "haetsal",
+  "hanul",
+  "himari",
+  "leher",
+  "miko",
+  "neer",
+  "porto",
+  "rindo",
+  "rio",
+  "rivage",
+  "selva",
+  "sonna",
+  "tinta",
+  "viola",
+] as const;
+
+export const OPENAI_LIVE_DEFAULT_VOICE = "cove";
+
+export function isOpenAILiveVoice(value: string): boolean {
+  return OPENAI_LIVE_VOICES.some((voice) => voice === value);
+}
+
+/** codex-api methods_frameless_bidi.rs session_json, without initial items or handoffs. */
+export function buildLiveSession(options: { voice: string; instructions?: string }): JsonValue {
+  return {
+    model: OPENAI_LIVE_WIRE_MODEL,
+    instructions: options.instructions ?? "",
+    audio: { output: { voice: options.voice } },
+    delegation: { type: "client" },
+  };
+}
+
+/** One finished turn; the sideband also mirrors both audio streams, which qgrid skips. */
+export const liveTurnDoneEvent = z.looseObject({
+  type: z.literal("turn.done"),
+  turn: z.looseObject({
+    role: z.string(),
+    transcript: z.string(),
+    start_ms: z.number(),
+    end_ms: z.number(),
+  }),
+});
+
+const liveUsage = z.looseObject({ audio_duration_ms: z.number() });
+
+/** Running usage, about every 15 s; the last one stands in when the session ends without close. */
+export const liveUsageUpdatedEvent = z.looseObject({
+  type: z.literal("session.usage.updated"),
+  usage: liveUsage,
+});
+
+export const liveSessionClosedEvent = z.looseObject({
+  type: z.literal("session.closed"),
+  reason: z.string().optional(),
+  usage: liveUsage.optional(),
+});
+
 /**
  * A minimal Opus-only SDP offer. Codex sends a real WebRTC offer; qgrid has no RTP peer and only
  * needs the call id from the response. The server has accepted this offer on every probe

@@ -141,7 +141,7 @@ export const RequestLogStatusLabel = {
   aborted: "중단",
 };
 export const RequestLogMediaKind = z
-  .enum(["image", "video", "stt", "tts"])
+  .enum(["image", "video", "stt", "tts", "live"])
   .describe("RequestLogMediaKind");
 export type RequestLogMediaKind = z.infer<typeof RequestLogMediaKind>;
 export const RequestLogMediaKindLabel = {
@@ -149,6 +149,7 @@ export const RequestLogMediaKindLabel = {
   video: "비디오",
   stt: "음성 인식",
   tts: "음성 합성",
+  live: "실시간 대화",
 };
 
 // Enums: RequestLogStep

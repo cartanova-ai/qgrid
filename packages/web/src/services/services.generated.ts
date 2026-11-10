@@ -38,6 +38,8 @@ import {
   TranscribeOutput,
   SpeakInput,
   SpeakOutput,
+  LiveCallInput,
+  LiveCallOutput,
   UsageResponse,
   HealthResponse,
 } from "./qgrid/qgrid.types";
@@ -1211,6 +1213,19 @@ export namespace QgridService {
   export const useSpeakMutation = () =>
     useMutation({
       mutationFn: (params: { params: SpeakInput }) => QgridService.speak(params.params),
+    });
+
+  export async function liveCall(params: LiveCallInput): Promise<LiveCallOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/liveCall`,
+      data: { params },
+    });
+  }
+
+  export const useLiveCallMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: LiveCallInput }) => QgridService.liveCall(params.params),
     });
 
   export async function usage(tokenId?: number): Promise<UsageResponse> {

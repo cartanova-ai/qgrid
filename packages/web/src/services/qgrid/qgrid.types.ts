@@ -601,6 +601,37 @@ export const SpeakOutput = z.object({
 
 export type SpeakOutput = z.infer<typeof SpeakOutput>;
 
+// GPT-Live voice conversation (openai/gpt-live-1). The caller's WebRTC peer makes the SDP offer;
+// qgrid exchanges it with the subscription token and returns the answer, then logs the
+// conversation when the session ends. Audio flows between the caller and OpenAI only. The caller
+// ends the session by sending {"type":"session.close"} on its "oai-events" data channel; a dropped
+// peer keeps the session (and its billed time) running for about 30 s.
+export const LiveCallInput = z.object({
+  model: z.literal("openai/gpt-live-1").optional(),
+  sdp: z
+    .string()
+    .startsWith("v=0", "sdp must be an SDP offer")
+    .max(64 * 1024),
+  // One of the live voices (cove by default); the realtime TTS voices do not apply.
+  voice: z.string().min(1).max(64).optional(),
+  instructions: z.string().min(1).max(8_000).optional(),
+  ...MediaCallOptions,
+});
+
+export type LiveCallInput = z.infer<typeof LiveCallInput>;
+
+export const LiveCallOutput = z.object({
+  // The SDP answer for the caller's peer connection.
+  sdp: z.string(),
+  callId: z.string(),
+  model: z.string(),
+  voice: z.string(),
+  tokenName: z.string(),
+  requestLogId: z.number().optional(),
+});
+
+export type LiveCallOutput = z.infer<typeof LiveCallOutput>;
+
 // ─── Run Lifecycle ───
 
 export const CreateRunInput = z.object({
