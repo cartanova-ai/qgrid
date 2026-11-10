@@ -289,7 +289,7 @@ describe("QgridDispatcherClass", () => {
 
   it("passes server-side web search to direct providers and refuses it for Claude Code", async () => {
     const dispatcher = new QgridDispatcherClass();
-    const generate = vi.fn(async () => providerResult({ tokenName: "t" }));
+    const generate = vi.fn(async (_request: GenerateRequest) => providerResult({ tokenName: "t" }));
     dispatcher.openaiDispatcher = { generate } as never;
     dispatcher.anthropicDispatcher = { generate } as never;
 
