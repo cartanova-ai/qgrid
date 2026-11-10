@@ -1,6 +1,8 @@
 // Voice ids each qgrid voice model takes, default first. Mirrors the server's lists (qgrid.types.ts
-// OPENAI_SPEECH_VOICES, OPENAI_LIVE_VOICES, GROK_TTS_VOICES); keep them equal. No imports, so both
-// the main entry and the browser /realtime entry export it.
+// OPENAI_SPEECH_VOICES, OPENAI_LIVE_VOICES, GROK_TTS_VOICES); keep them equal. This file is its own
+// entry, `@cartanova/qgrid-ai-sdk/voices`, and must stay import-free: browsers and React Native apps
+// import it without the SDK's Node-only code or its peer packages. The main and /realtime entries
+// re-export it too.
 
 /**
  * `voice` for `qgrid.speech("grok/...")`: the /tts voices xAI lists for subscription tokens

@@ -21,6 +21,10 @@
     "./realtime": {
       "import": "./dist/realtime.js",
       "types": "./dist/realtime.d.ts"
+    },
+    "./voices": {
+      "import": "./dist/voices.js",
+      "types": "./dist/voices.d.ts"
     }
   },
   "scripts": {

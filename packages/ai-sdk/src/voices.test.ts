@@ -19,6 +19,12 @@ async function serverList(start: string, end: string): Promise<string[]> {
 }
 
 describe("voice lists", () => {
+  it("stay import-free, so the /voices entry loads in browsers and React Native", async () => {
+    const source = await readFile(new URL("./voices.ts", import.meta.url), "utf8");
+
+    expect(source).not.toMatch(/^\s*(import|export .* from)\b/m);
+  });
+
   it("match the server's lists", async () => {
     expect(await serverList("export const OPENAI_SPEECH_VOICES", "] as const;")).toEqual([
       ...QGRID_OPENAI_SPEECH_VOICES,
