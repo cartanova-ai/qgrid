@@ -159,10 +159,14 @@ describe("openai realtime protocol", () => {
       audio: {
         input: {
           format: { type: "audio/pcm", rate: 24000 },
-          transcription: { model: "gpt-transcribe", language: "en", prompt: "qgrid" },
+          transcription: { model: "gpt-transcribe", languages: ["en"], prompt: "qgrid" },
           turn_detection: null,
         },
       },
+    });
+
+    expect(buildTranscriptionSession({ model: "gpt-4o-transcribe", language: "ko" })).toMatchObject({
+      audio: { input: { transcription: { model: "gpt-4o-transcribe", language: "ko" } } },
     });
   });
 
@@ -177,7 +181,7 @@ describe("openai realtime protocol", () => {
         input: {
           format: { type: "audio/pcm", rate: 24000 },
           noise_reduction: { type: "near_field" },
-          transcription: { model: "gpt-4o-mini-transcribe" },
+          transcription: { model: "gpt-transcribe" },
           turn_detection: {
             type: "server_vad",
             interrupt_response: true,

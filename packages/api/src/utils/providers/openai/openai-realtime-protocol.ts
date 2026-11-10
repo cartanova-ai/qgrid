@@ -24,8 +24,14 @@ export const OPENAI_REALTIME_WS_URL = "wss://api.openai.com/v1/realtime" as cons
 /** realtime_websocket/methods_common.rs:26 */
 export const OPENAI_REALTIME_SAMPLE_RATE = 24_000;
 
-/** realtime_websocket/methods_v2.rs:37 */
-export const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+/**
+ * Fallback id inside the OpenAI voice client (a transcribe request without `model` routes to Grok)
+ * and the input transcription model of the speech session. Codex's own default (methods_v2.rs:37)
+ * is gpt-4o-mini-transcribe, which shuts down 2027-02-26. On the 2026-11-10 bench (SON-593)
+ * gpt-transcribe transcribed 60 s and 229 s clips in full, returned nothing for silence and
+ * noise, and was more accurate than gpt-live-transcribe.
+ */
+export const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-transcribe";
 
 /** qgrid default; Codex's own default is gpt-realtime-1.5 (core/src/realtime_conversation.rs:112). */
 export const OPENAI_REALTIME_DEFAULT_SPEECH_MODEL = "gpt-realtime-2.1-mini";
@@ -58,7 +64,9 @@ export function isOpenAIRealtimeVoice(value: string): value is OpenAIRealtimeVoi
  * docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md). Known limits, kept as documentation
  * rather than exclusions (user decision): gpt-live-transcribe and gpt-realtime-whisper returned
  * about half of a 60 s clip; gpt-realtime-whisper rejects `prompt` (server `invalid_value`);
- * whisper-1 accepts but ignores `prompt`.
+ * whisper-1 accepts but ignores `prompt`. gpt-live-transcribe still cut clips short on 2026-11-10
+ * (51 of 126 words on 60 s). OpenAI shuts down gpt-4o-mini-transcribe, gpt-4o-transcribe and
+ * whisper-1 on 2027-02-26; remove them here, from the SDK union and from the READMEs then.
  */
 export const OPENAI_TRANSCRIPTION_MODELS = [
   "gpt-4o-mini-transcribe",
@@ -327,7 +335,12 @@ export function buildOpenAIRealtimeHeaders(
 
 const pcmFormat = { type: "audio/pcm", rate: OPENAI_REALTIME_SAMPLE_RATE } as const;
 
-type TranscriptionConfig = { model: string; language?: string; prompt?: string };
+type TranscriptionConfig = {
+  model: string;
+  language?: string;
+  languages?: string[];
+  prompt?: string;
+};
 
 type TranscriptionInput = {
   format: typeof pcmFormat;
@@ -353,7 +366,12 @@ export interface OpenAITranscriptionSessionOptions {
 export function buildTranscriptionSession(options: OpenAITranscriptionSessionOptions): JsonValue {
   const transcription: TranscriptionConfig = { model: options.model };
 
-  if (options.language !== undefined) transcription.language = options.language;
+  // gpt-transcribe takes the list `languages` (sending `language` too is an `invalid_value` error);
+  // the gpt-4o family rejects `languages`. Subscription probe, 2026-11-10.
+  if (options.language !== undefined) {
+    if (options.model === "gpt-transcribe") transcription.languages = [options.language];
+    else transcription.language = options.language;
+  }
 
   if (options.prompt !== undefined) transcription.prompt = options.prompt;
   const input: TranscriptionInput = { format: pcmFormat, transcription };

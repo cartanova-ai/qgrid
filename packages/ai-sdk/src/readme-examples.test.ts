@@ -142,7 +142,7 @@ async function grokVoiceExample() {
 
 async function openaiVoiceExample() {
   const transcript = await transcribe({
-    model: qgrid.transcription("openai/gpt-4o-mini-transcribe"),
+    model: qgrid.transcription("openai/gpt-transcribe"),
     audio: await readFile("meeting.wav"),
     providerOptions: { openai: { language: "en", prompt: "qgrid, Codex" } },
   });

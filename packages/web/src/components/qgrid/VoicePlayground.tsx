@@ -27,14 +27,9 @@ const PROJECT_NAME = "qgrid_voice_playground";
 
 const TTS_MODELS = ["grok/grok-tts", "openai/gpt-realtime-2.1-mini", "openai/gpt-realtime-2.1"];
 
-// Only the OpenAI models that held up in the 2026-11-09 language/accent run (lowest CER, kept learner
-// grammar errors verbatim); gpt-transcribe, gpt-live-transcribe and the whisper models were dropped.
-// The server still accepts them. Grok was not measured (token needed re-login) and stays.
-const STT_MODELS = [
-  "openai/gpt-4o-transcribe",
-  "openai/gpt-4o-mini-transcribe",
-  "grok/grok-voice-transcribe-2.0",
-];
+// gpt-transcribe replaces gpt-4o-transcribe, which OpenAI shuts down on 2027-02-26 (SON-593);
+// the server still accepts every id.
+const STT_MODELS = ["openai/gpt-transcribe", "grok/grok-voice-transcribe-2.0"];
 
 // OpenAI realtime presets (the server rejects others); default first. No gender split: several are
 // ambiguous (ballad reads as androgynous), so they stay one group.

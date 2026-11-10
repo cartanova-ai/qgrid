@@ -347,7 +347,7 @@ qgrid는 `grok/*` 모델을 qgrid 대시보드에 등록한 xAI 구독 토큰(�
 | `qgrid(id)` | `grok/grok-4.7`(카탈로그 기본 모델), `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`, 그 밖의 `grok/<id>` | `generateText`, `streamText` |
 | `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0` | `generateImage` |
 | `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
-| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI 구독: `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/gpt-transcribe`, `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`, `openai/whisper-1` | `transcribe` |
+| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI 구독: `openai/gpt-transcribe`(권장), `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`; `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/whisper-1`은 OpenAI가 종료하는 2027-02-26까지 | `transcribe` |
 | `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임); OpenAI 구독: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1` | `generateSpeech` |
 
 qgrid는 카탈로그에 없는 language model ID를 거부하지 않고 그대로 전달합니다(OpenAI와 같음). 판단은
@@ -495,7 +495,7 @@ speech.audio.uint8Array;
 
 ```typescript
 const transcript = await transcribe({
-  model: qgrid.transcription("openai/gpt-4o-mini-transcribe"),
+  model: qgrid.transcription("openai/gpt-transcribe"),
   audio: await readFile("meeting.wav"), // PCM16 WAV 또는 raw PCM만
   providerOptions: { openai: { language: "en", prompt: "qgrid, Codex" } },
 });
@@ -511,11 +511,12 @@ const speech = await generateSpeech({
 
 | 모델 | 그대로 전달(`@ai-sdk/openai` 이름) | 변환 | 미지원(경고) |
 | --- | --- | --- | --- |
-| Transcription | `openai.language`, `openai.prompt`(`gpt-realtime-whisper`는 HTTP 400으로 거부, `whisper-1`은 받지만 업스트림이 무시) | 입력은 PCM16 WAV(`audio/wav`) 또는 raw PCM(`audio/pcm;rate=…;channels=…`)만 가능하며 mp3/webm/ogg는 디코더가 추가되기 전까지 서버가 HTTP 400으로 거부합니다. `durationInSeconds`는 보낸 오디오에서 계산하고 `language`는 요청값을 그대로 돌려줍니다(realtime 세션은 둘 다 보고하지 않음). `segments`에는 정렬한 단어 타이밍이 담깁니다(서버 2.19.0+) | `openai.temperature`, `openai.include`, `openai.timestampGranularities`, `openai.responseFormat`, `openai.chunkingStrategy`, `openai.streaming` |
+| Transcription | `openai.language`(`gpt-transcribe`에는 목록 `languages`로 보냄), `openai.prompt`(`gpt-realtime-whisper`는 HTTP 400으로 거부, `whisper-1`은 받지만 업스트림이 무시) | 입력은 PCM16 WAV(`audio/wav`) 또는 raw PCM(`audio/pcm;rate=…;channels=…`)만 가능하며 mp3/webm/ogg는 디코더가 추가되기 전까지 서버가 HTTP 400으로 거부합니다. `durationInSeconds`는 보낸 오디오에서 계산하고 `language`는 요청값을 그대로 돌려줍니다(realtime 세션은 둘 다 보고하지 않음). `segments`에는 정렬한 단어 타이밍이 담깁니다(서버 2.19.0+) | `openai.temperature`, `openai.include`, `openai.timestampGranularities`, `openai.responseFormat`, `openai.chunkingStrategy`, `openai.streaming` |
 | Speech | `voice`(기본 `marin`; Codex v2 목록 `alloy ash ballad coral echo sage shimmer verse marin cedar`, 그 외는 HTTP 400), `instructions` / `openai.instructions`(원문 그대로 읽기 지시문 뒤에 붙는 스타일 안내) | `outputFormat`은 `wav`(기본, PCM16 24 kHz) 또는 `pcm`; 그 외 값은 `@ai-sdk/openai`가 `mp3`로 되돌리듯 경고와 함께 `wav`로 바뀝니다 | `language`, `speed`, `openai.speed` |
 
 - 음성 인식은 먼저 Codex realtime call에서 25초 예산으로 실행됩니다(call은 생성 약 30초 뒤 정리됨). 그 안에 전사가 오지 않으면 서버가 직접 realtime 전사 소켓으로 1회 재시도합니다(최대 60초). 19 MiB 인라인 제한에는 24 kHz mono WAV가 약 6.9분 들어갑니다. 6.7분 영어 클립은 첫 경로에서 약 20초에 끝났고, transcript가 더 길게 나온 6.4분 클립은 기한을 넘겨 재시도 경로에서 52초에 끝났습니다.
 - 음성 합성은 TTS 모델이 아니라 텍스트를 읽는 대화 모델입니다. qgrid는 `<script>` 태그 안의 텍스트만 읽고 답하지 말라고 지시합니다. 원문 그대로 읽는지는 짧은 영어 문장과 질문형 영어 캐릭터 대사에서 검증했습니다. 모델이 실제로 말한 transcript를 요청 로그에 함께 남겨 비교할 수 있지만, 한영 혼합 텍스트에서는 transcript가 일치해도 영어 음성을 알아듣기 어려운 경우가 있었습니다.
+- `openai/gpt-transcribe`를 쓰세요. OpenAI는 `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1`을 2027-02-26에 종료합니다. 2026-11-10 합성 음성 벤치에서 `gpt-transcribe`는 영어 108클립에서 `gpt-4o-transcribe`와 같은 수준이었고(차이는 "21st"를 "twenty-first"로 쓰는 숫자 표기였음), 한영 혼합 18클립의 글자 오류율을 14.5%에서 4.4%로 낮췄습니다. `gpt-4o-transcribe`가 실패한 229초 클립도 끝까지 받아 적었고, `gpt-4o-transcribe`가 없는 말을 지어낸 무음과 잡음에는 아무것도 돌려주지 않았습니다. 학습자의 문법 오류를 고쳐 적을 때가 있으므로("we eat chicken"을 "we ate chicken"으로), 받아쓴 결과만으로 문법을 채점하지 마세요.
 - 모델별 동작은 서버 저장소의 `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`에 기록되어 있습니다. 2026-10-17 기준 알려진 한계: `gpt-live-transcribe`, `gpt-realtime-whisper`는 60초 클립의 절반 정도만 반환하므로 짧은 발화에 쓰세요. `gpt-realtime-whisper`는 `openai.prompt`를 거부합니다(서버가 업스트림 호출 전에 HTTP 400). `whisper-1`은 `openai.prompt`를 받지만 무시합니다. 음성 합성은 `gpt-realtime-2.1-mini`가 모든 테스트 문장을 그대로 읽었고(13/13), `gpt-realtime-2.1`은 1회 의역(12/13)했습니다. `gpt-realtime-1.5`는 텍스트를 읽지 않고 답변하는 경우가 잦아(6/13) 2.18.0에서 제외했습니다. 2026-11-06에는 현재 프롬프트로 `gpt-realtime-2.1`과 `gpt-realtime-2.1-mini` 모두 질문형 캐릭터 대사 12/12를 그대로 읽었습니다(이전 프롬프트에서는 `gpt-realtime-2.1`이 7/12를 답변). 2026-11-09에 독립 STT 2종으로 영어 108건(6문장, 보이스 `marin` `cedar` `ballad`, 각 3회)을 판정한 결과 `gpt-realtime-2.1`은 54/54, `gpt-realtime-2.1-mini`는 53/54였고, 실패 1건은 "Sure, let me read that out loud for you exactly as written."으로 시작했습니다. 한영 혼합 문장은 두 모델 모두 끝까지 읽었습니다(각 9/9). 모델이 남기는 transcript에는 이런 서두가 나타나지 않으므로, 정확성이 중요하면 transcript 대신 STT나 `withTimestamps`(정렬이 덧붙은 말을 건너뜀)로 오디오를 확인하세요.
 
 ### OpenAI 실시간 음성 대화 (GPT-Live)
