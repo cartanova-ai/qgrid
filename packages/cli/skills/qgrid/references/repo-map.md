@@ -34,6 +34,15 @@ Use this map to orient qgrid work quickly.
 - Tool-call schema composition: `packages/api/src/application/qgrid/tool-emulation-schema.ts`.
 - Tool-call response decoding: `packages/api/src/application/qgrid/tool-emulation.ts`.
 
+## Agents runtime
+
+- Polling session API, input/output types, state transactions, and AgentSession/AgentTurn entities: `packages/api/src/application/agent/*`.
+- Docker provider, Pi credential store, session runner (official `@ai-sdk/harness-pi` in-process), workspace input, and startup isolation checks: `packages/api/src/utils/agents/*`.
+- Settings and API startup/shutdown wiring: `packages/api/src/application/setting/setting.constant.ts`, `packages/api/src/sonamu.config.ts`.
+- Sandbox image (shell and filesystem only, no Pi inside): `deploy/sandbox-pi/Dockerfile`; image publication: `.github/workflows/build-and-publish.yml`.
+- Live smoke and deti fixture: `packages/api/scripts/agents/smoke.ts`, `packages/api/scripts/agents/fixtures/deti-judge/`.
+- Operator activation procedure: `deploy/dev0/README.md`. Runtime contracts: `references/agents-runtime.md`.
+
 ## Web/Sonamu hot spots
 
 - Entity definitions: `packages/api/src/application/**/**.entity.json`.

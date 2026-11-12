@@ -11,6 +11,7 @@ Do not copy these notes blindly into implementation. Use them to find the releva
 - OpenAI/Codex runtime
 - Anthropic/Claude Code runtime
 - Grok (xAI subscription) runtime
+- Agents runtime
 - Token sync and quota thresholds
 - Weighted token routing
 - Request logs, metrics, and dashboard
@@ -39,6 +40,46 @@ Key decisions:
 - Fable refusal fallback is an upstream Claude Code safety path to another Opus model (currently Opus 5 or Opus 4.8 by refusal category), not qgrid's reserved `fallbackModels` feature or Claude Code's overload-only `--fallback-model` flag. qgrid observes and reports the actual route and provider cost; it must not retry again or hardcode the target.
 - The SDK should stay a thin adapter. Server APIs own request-log lifecycle, provider dispatch, structured-output emulation, and provider runtime details.
 - Request logging defaults to enabled. `providerOptions.qgrid.logger: false` is the single per-generation opt-out for both native qgrid logs and `createQgridLogger` telemetry logs; it must not alter generation or tool behavior.
+
+## Agents Runtime
+
+Sources:
+
+- `docs/brainstorms/2026-11-05-qgrid-agents-sandbox-harness-requirements.md` (D1–D10 and their refinements).
+- `docs/plans/2026-11-07-feat-qgrid-agents-integration-plan.md` (rev2.6, D11–D25 and recovery/tool contracts).
+- `docs/plans/2026-11-08-feat-qgrid-agents-rev3-host-pi-plan.md` (rev3: Pi moved into the API process on the official `@ai-sdk/harness-pi`; relay, bridge and custom adapter removed; D26–D28) and `docs/plans/2026-11-08-harness-pi-spike.md` (the five-point spike that justified it).
+- Current implementation: `packages/api/src/utils/agents/*`, `packages/api/src/application/agent/*`, and `deploy/sandbox-pi/*`. See `references/agents-runtime.md` for the implemented API and differences from planned extensions.
+
+Decision index:
+
+- **D1:** Follow HarnessV1 internally; do not clone the OpenAI Agents API or add `/v1/` compatibility.
+- **D2 (rev3):** Run Pi inside the API process through `@ai-sdk/harness-pi`; the Docker sandbox is Pi's remote shell and filesystem. Durable recovery state stays in qgrid's DB.
+- **D3 (rev3):** Subscription credentials never enter the sandbox because model calls leave from the API process; no placeholder brokering is needed.
+- **D4 (removed in rev3):** The HTTP/SSE relay existed only because Pi ran inside the container.
+- **D5:** Hide Docker behind the sandbox-provider contract; gVisor remains an operational follow-up.
+- **D6 (rev3):** Use the official `@ai-sdk/harness-pi` adapter (`harnessId: "pi"`); the custom adapter and in-container bridge were removed because they duplicated upstream and tripled the code.
+- **D7:** Execute caller tools in the caller's trust boundary and deduplicate effects by tool-call identity.
+- **D8:** Host sessions in qgrid; polling ships first, webhook/SSE delivery follows separately.
+- **D9:** Preinstall bootstrap dependencies in the image; defer warm pooling and do not reuse a completed session's container for another session.
+- **D10:** Consume standard AI SDK/Harness stream parts internally; public UI/SSE streaming is deferred.
+- **D11:** Use dockerode through a socket accessible to the API user; enable Agents explicitly.
+- **D12 (rev3):** Keep the dedicated `qgrid-agents` bridge for isolation; no host alias, published port or hostMode, since nothing in the sandbox talks to the host.
+- **D13 (removed in rev3):** No relay.
+- **D14 (rev3):** Pin one token per session; Pi's `CredentialStore.read` rechecks eligibility on every model call and `modify` refreshes through qgrid's existing refresh path under a per-token lock.
+- **D15 (rev3):** Pi sends its own identity headers directly; nothing is rewritten.
+- **D16:** Map turns, model calls, and tools onto existing request logs with durable replay identities and transactional cursors.
+- **D17 (rev3):** Persist AgentSession/AgentTurn and the complete harness lifecycle state, detaching and saving at every turn boundary so the conversation survives restarts between turns.
+- **D18 (rev3):** A turn interrupted by an API restart fails with `server_restart` and the container is stopped; caller-tool waits resume from the saved continuation. Deterministic secrets were removed with the bridge.
+- **D19:** Let the runner own stop/destroy and idle/retention sweeps, because the harness does not own the supplied sandbox.
+- **D20 (rev3):** Limits (model calls, turn time, disk) are enforced by the runner from the harness stream; no relay binding.
+- **D21:** Keep Anthropic out of the Agents path until a separate provider decision is made.
+- **D22:** Pin compatible harness/AI SDK/ws versions and preserve CLI bundled dependency parity.
+- **D23 (rev3):** Block every host port from the sandbox and probe that at startup; no allow rule is needed, operators own firewall changes.
+- **D24:** Suspend caller-tool turns, commit pending state before exposing it, and continue with durable tool-result submissions.
+- **D25 (rev3):** Ship one slim Node/bash/Python/git/gh image without Pi or a browser (about 140 MB); Pi is a server dependency.
+- **D26:** qgrid owns Pi's `CredentialStore`, one shared instance per token ID, so concurrent sessions cannot double-refresh a rotated token.
+- **D27:** Sandbox commands run under `bash -c`; harness-pi's path resolution needs bash semantics.
+- **D28:** API model ids keep the `openai/` prefix; the runner maps them to Pi's `openai-codex/` catalog.
 
 ## Thinking Control
 

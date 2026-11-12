@@ -292,6 +292,10 @@ When a refresh fails in a way that only re-login can fix, qgrid removes the toke
 - If all ready/eligible tokens are over threshold, qgrid throws `QuotaThresholdExceededError`.
 - Log messages use `quota_threshold gate` with reasons such as `over_threshold`, `lookup_fail_open`, and `all_exceeded`.
 
+## Agents Session Token Binding
+
+Agents sessions pin one token per session; Pi reads current credentials per model call through qgrid's `CredentialStore`. `AgentSessionRunner` selects an eligible OpenAI token at creation and persists its ID for the session lifetime. On every call the store checks that token's current active state and quota eligibility and hands Pi the OAuth credential (expiry taken from the access JWT); an unavailable or over-quota token fails the turn (`token_unavailable` / `quota_exceeded`) rather than switching accounts. When the token has less than five minutes left, Pi asks the store to refresh and qgrid refreshes through `OpenAIDispatcher.refreshCredentials` (existing dedupe and DB write), serialized per token so concurrent sessions cannot invalidate each other's rotated refresh token. Quota checks retain the dispatcher's 60-second cache and fail-open lookup policy. This session binding is separate from ordinary prompt-cache affinity and survives stop/resume. See `references/agents-runtime.md` and `packages/api/src/utils/agents/{session-runner,credential-store}.ts`.
+
 ## Explicit Token Targeting
 
 `tokenName` addresses one exact token instead of letting the router choose. It is resolved at the qgrid frame boundary into the dispatcher's existing `preferredTokenId`, so dispatchers stay provider-neutral and no second targeting contract exists.

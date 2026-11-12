@@ -208,3 +208,53 @@ jobs:
         env:
           QGRID_RELEASE_IMAGE: ${{ steps.image.outputs.name }}
         run: docker push "$QGRID_RELEASE_IMAGE"
+
+  build-and-publish-sandbox-pi:
+    needs: build-and-publish
+    runs-on: ubuntu-latest
+    environment: deployment
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve sandbox image
+        id: image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          VERSION="$(jq -r .version packages/cli/package.json)"
+          echo "name=ghcr.io/cartanova-ai/qgrid-sandbox-pi:$VERSION" >> "$GITHUB_OUTPUT"
+          if gh api --paginate --slurp "/orgs/cartanova-ai/packages/container/qgrid-sandbox-pi/versions?per_page=100" \
+            > "$RUNNER_TEMP/sandbox-image-versions.json" 2> "$RUNNER_TEMP/sandbox-image-inspect.log"; then
+            EXISTS="$(jq --arg version "$VERSION" 'any(.[][]; .metadata.container.tags | index($version) != null)' "$RUNNER_TEMP/sandbox-image-versions.json")"
+            echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
+          elif grep -q 'HTTP 404' "$RUNNER_TEMP/sandbox-image-inspect.log"; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            cat "$RUNNER_TEMP/sandbox-image-inspect.log"
+            exit 1
+          fi
+
+      - name: Build and publish sandbox image
+        if: steps.image.outputs.exists == 'false' || inputs.benchmark_image
+        uses: docker/build-push-action@v7
+        with:
+          context: deploy/sandbox-pi
+          platforms: linux/amd64,linux/arm64
+          push: ${{ steps.image.outputs.exists == 'false' }}
+          tags: ${{ steps.image.outputs.name }}
+          cache-from: type=gha,scope=qgrid-sandbox-pi
+          cache-to: type=gha,mode=max,scope=qgrid-sandbox-pi

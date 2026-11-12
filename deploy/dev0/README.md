@@ -55,3 +55,83 @@ Image rollback does not reverse database migrations. Check release migrations
 before upgrading or rolling back. Re-run the deploy script with the intended
 version to reconcile a manual rollback. PM2 and its old settings were removed;
 there is no retained PM2 rollback path. No database backup is created by deploy.
+
+## Enable Agents on dev0
+
+Agents is disabled by default. Apply these changes manually to the deployed
+stack during an operator-controlled update; the repository's `stack.yml` is not
+changed by this procedure. Keep one API replica owning the retained sessions,
+the existing host network, and Caddy authentication.
+
+Pi runs inside the API process (official `@ai-sdk/harness-pi`); the sandbox
+container is only its remote shell and filesystem. There is no relay, no
+published container port and no HMAC secret. The API only needs the Docker
+socket and the sandbox image.
+
+The 2026-11-08 dev0 inspection found `/var/run/docker.sock` owned by `root:983`
+with mode 660, while the API runs as `node` (UID 1000). Merge this example into
+`services.api`, preserving its existing volumes, secret, and other settings:
+
+```yaml
+services:
+  api:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add: ["983"]
+    environment:
+      QGRID_AGENTS_ENABLED: "true"
+      QGRID_AGENTS_SANDBOX_IMAGE: "ghcr.io/cartanova-ai/qgrid-sandbox-pi:<ver>"
+```
+
+`/run/secrets/qgrid-env` overrides process environment, and stored
+`qgrid.agents.*` DB settings override environment settings. Resolve any
+conflicting values before restarting. Verify that the deployed API process
+actually has socket access and supplementary GID 983. Mount the socket only in
+the API container; the provider creates sandboxes without host mounts.
+
+Pull the matching published sandbox image on dev0 before startup; the provider
+does not pull it automatically:
+
+```sh
+docker pull ghcr.io/cartanova-ai/qgrid-sandbox-pi:<ver>
+```
+
+The runtime creates the dedicated `qgrid-agents` bridge (`172.30.0.0/24`) with
+interface `br-qgrid-agents`. Sandboxes never need to reach the host, and dev0's
+existing ufw default deny already blocks incoming traffic from this bridge, so
+**no ufw rule is required**. Do not put sandboxes on docker0: dev0 permits host
+access from docker0. Preserve the API's `172.19.0.1:44900` binding. Linux
+host-local traffic traverses INPUT; DOCKER-USER rules alone do not protect those
+services. Internet egress for GitHub and package installation remains necessary.
+
+Deploy the prepared stack using the normal operator procedure, then check the
+Agents-specific health result:
+
+```sh
+curl -fsS https://qgrid.cartanova.ai/api/qgrid/health | jq '.agents'
+```
+
+Require `enabled: true` and `ready: true`. Overall API health can be ready even
+when Agents is unavailable. Startup creates a temporary probe container: the API
+port and default blocked ports 5432/6379 must be unreachable through the bridge
+gateway and the configured API address. The default
+`QGRID_AGENTS_ISOLATION_CHECK=enforce` leaves Agents unavailable on failure and
+reports `agents.reason`; fix the reported socket, image, configuration, or
+network problem before retrying. `warn` is for local development, not dev0. The
+probe does not install firewall rules, and `deploy.sh` does not check Agents
+firewall configuration.
+
+Deploying while a turn is running fails that turn with `server_restart` (the
+caller re-prompts; the conversation is kept). Prefer deploying when
+`health().agents.sessions` shows no running work.
+
+Keep the default 20 GiB free-space guard unless an operator deliberately changes
+it. The runner checks Docker data-root space, with a container `df` fallback when
+that path is not visible in the API container. Enabling Agents does not require
+pruning shared Docker resources or moving Docker's data-root.
+
+For live verification, use `packages/api/scripts/agents/smoke.ts` as documented in
+`packages/cli/skills/qgrid/references/agents-runtime.md`. Run S12 from the Linux
+host against the same daemon to verify host-port blocking and GitHub reachability.
+Restart/SIGKILL scenarios belong on a designated test instance, not an incidental
+deployment health check.

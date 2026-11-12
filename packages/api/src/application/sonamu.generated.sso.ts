@@ -8,15 +8,80 @@
 import { type PuriWrapper, type DatabaseSchemaExtend, type PuriLoaderQueries } from "sonamu";
 
 import {
+  type AgentSessionSubsetKey,
+  type AgentTurnSubsetKey,
   type RequestLogSubsetKey,
   type RequestLogStepSubsetKey,
   type SettingSubsetKey,
   type TokenSubsetKey,
+  type AgentSessionBaseSchema,
+  type AgentTurnBaseSchema,
   type RequestLogBaseSchema,
   type RequestLogStepBaseSchema,
   type SettingBaseSchema,
   type TokenBaseSchema,
 } from "./sonamu.generated";
+
+// SubsetQuery: AgentSession
+export const agentSessionSubsetQueries = {
+  A: (qbWrapper: PuriWrapper<DatabaseSchemaExtend>) => {
+    return qbWrapper.from("agent_sessions").select({
+      id: "agent_sessions.id",
+      status: "agent_sessions.status",
+      harness: "agent_sessions.harness",
+      model: "agent_sessions.model",
+      token_name: "agent_sessions.token_name",
+      project_name: "agent_sessions.project_name",
+      instructions: "agent_sessions.instructions",
+      tools: "agent_sessions.tools",
+      webhook_url: "agent_sessions.webhook_url",
+      webhook_secret: "agent_sessions.webhook_secret",
+      lifecycle_state: "agent_sessions.lifecycle_state",
+      container_name: "agent_sessions.container_name",
+      container_ip: "agent_sessions.container_ip",
+      idle_ttl_sec: "agent_sessions.idle_ttl_sec",
+      retain_sec: "agent_sessions.retain_sec",
+      stop_reason: "agent_sessions.stop_reason",
+      last_turn_at: "agent_sessions.last_turn_at",
+      created_at: "agent_sessions.created_at",
+      updated_at: "agent_sessions.updated_at",
+      token_id: "agent_sessions.token_id",
+    });
+  },
+};
+
+// LoaderQuery: AgentSession
+export const agentSessionLoaderQueries = {
+  A: [],
+} as const satisfies PuriLoaderQueries<AgentSessionSubsetKey>;
+
+// SubsetQuery: AgentTurn
+export const agentTurnSubsetQueries = {
+  A: (qbWrapper: PuriWrapper<DatabaseSchemaExtend>) => {
+    return qbWrapper.from("agent_turns").select({
+      id: "agent_turns.id",
+      index: "agent_turns.index",
+      prompt: "agent_turns.prompt",
+      status: "agent_turns.status",
+      pending_actions: "agent_turns.pending_actions",
+      logged_steps: "agent_turns.logged_steps",
+      last_logged_event_seq: "agent_turns.last_logged_event_seq",
+      model_call_count: "agent_turns.model_call_count",
+      started_at: "agent_turns.started_at",
+      finished_at: "agent_turns.finished_at",
+      result_text: "agent_turns.result_text",
+      error_message: "agent_turns.error_message",
+      usage: "agent_turns.usage",
+      session_id: "agent_turns.session_id",
+      request_log_id: "agent_turns.request_log_id",
+    });
+  },
+};
+
+// LoaderQuery: AgentTurn
+export const agentTurnLoaderQueries = {
+  A: [],
+} as const satisfies PuriLoaderQueries<AgentTurnSubsetKey>;
 
 // SubsetQuery: RequestLog
 export const requestLogSubsetQueries = {
@@ -232,11 +297,17 @@ export const tokenLoaderQueries = {
 } as const satisfies PuriLoaderQueries<TokenSubsetKey>;
 
 // ForeignKey Types
+export type AgentSessionForeignKeys = "token_id";
+
+export type AgentTurnForeignKeys = "session_id" | "request_log_id";
+
 export type RequestLogStepForeignKeys = "request_log_id";
 
 // DatabaseSchema
 declare module "sonamu" {
   export interface DatabaseSchemaExtend {
+    agent_sessions: AgentSessionBaseSchema;
+    agent_turns: AgentTurnBaseSchema;
     request_logs: RequestLogBaseSchema;
     request_log_steps: RequestLogStepBaseSchema;
     settings: SettingBaseSchema;
@@ -244,6 +315,8 @@ declare module "sonamu" {
   }
 
   export interface DatabaseForeignKeys {
+    agent_sessions: AgentSessionForeignKeys;
+    agent_turns: AgentTurnForeignKeys;
     request_log_steps: RequestLogStepForeignKeys;
   }
 }

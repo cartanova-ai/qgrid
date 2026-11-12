@@ -8,6 +8,7 @@ import { CachePresets, defineConfig } from "sonamu";
 import { drivers as cacheDrivers, store } from "sonamu/cache";
 import { z } from "zod";
 
+import { sanitizeAgentApiError } from "./application/agent/agent.frame";
 import { monitLogSink } from "./application/monit/log-buffer";
 import {
   rescheduleExpiredTokenReminder,
@@ -30,6 +31,7 @@ import {
 } from "./application/qgrid/token-window-keepalive";
 import { loadSettings, setSettingChangeHandler } from "./application/setting/setting.store";
 import { handleServerError } from "./server-error-handler";
+import { startAgentsRuntime, stopAgentsRuntime } from "./utils/agents/runtime";
 import { AnthropicDispatcher } from "./utils/providers/anthropic/anthropic-dispatcher";
 import { GrokDispatcher, GrokRefreshCoordinator } from "./utils/providers/grok";
 import { GrokMediaClient } from "./utils/providers/grok/grok-media-client";
@@ -249,6 +251,12 @@ export default defineConfig({
           void rescheduleTokenWindowKeepalive();
         };
 
+        await startAgentsRuntime({
+          dispatcher: QgridDispatcher.openaiDispatcher,
+          apiHost: host,
+          apiPort: port,
+        });
+
         startExpiredTokenReminder();
         void startTokenWindowKeepalive();
 
@@ -271,6 +279,10 @@ export default defineConfig({
 
         if (QgridDispatcher.subscriber) QgridDispatcher.subscriber.tokenChangeHandler = null;
 
+        await stopAgentsRuntime().catch((error: Error) => {
+          log.error("agents shutdown failed: {error}", { error });
+        });
+
         if (QgridDispatcher.openaiDispatcher) {
           await QgridDispatcher.openaiDispatcher.stop();
         }
@@ -291,8 +303,14 @@ export default defineConfig({
 
         log.info("graceful shutdown");
       },
-      onError: (error, _request, reply) => {
-        handleServerError(mapRequestBodyTooLarge(error), reply);
+      onError: (error, request, reply) => {
+        const mapped = mapRequestBodyTooLarge(error);
+        handleServerError(
+          request.url.split("?")[0]?.startsWith("/api/agent/")
+            ? sanitizeAgentApiError(mapped)
+            : mapped,
+          reply,
+        );
       },
     },
   },

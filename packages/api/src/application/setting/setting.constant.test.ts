@@ -61,6 +61,40 @@ describe("maskSecret", () => {
 });
 
 describe("SETTING_DEFS", () => {
+  it("agents 설정의 기본값을 등록하고 relay 시대 키는 없다", () => {
+    const defaults = {
+      enabled: "false",
+      sandboxImage: "",
+      subnet: "172.30.0.0/24",
+      maxSessions: "4",
+      idleTtlSec: "1800",
+      retainSec: "86400",
+      maxModelCallsPerTurn: "60",
+      maxTurnSeconds: "1200",
+      minFreeDiskGb: "20",
+      isolationCheck: "enforce",
+      isolationPorts: "5432,6379",
+    };
+
+    for (const [key, fallback] of Object.entries(defaults)) {
+      expect(findSettingDef(`qgrid.agents.${key}`)).toMatchObject({
+        group: "qgrid",
+        applies: "restart",
+        fallback,
+      });
+    }
+
+    for (const removed of ["secret", "relayPort", "hostMode"])
+      expect(findSettingDef(`qgrid.agents.${removed}`)).toBeUndefined();
+    expect(validateSettingValue(findSettingDef("qgrid.agents.isolationCheck")!, "warn").ok).toBe(true);
+    expect(validateSettingValue(findSettingDef("qgrid.agents.isolationCheck")!, "skip").ok).toBe(false);
+    expect(validateSettingValue(findSettingDef("qgrid.agents.isolationPorts")!, "5432, 6379")).toEqual({
+      ok: true,
+      value: "5432,6379",
+    });
+    expect(validateSettingValue(findSettingDef("qgrid.agents.isolationPorts")!, "0,65536").ok).toBe(false);
+  });
+
   it("token window keepalive 비상 스위치를 즉시 적용 설정으로 등록한다", () => {
     expect(findSettingDef("qgrid.tokenWindowKeepaliveEnabled")).toMatchObject({
       group: "qgrid",

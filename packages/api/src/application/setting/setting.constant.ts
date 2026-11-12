@@ -31,6 +31,8 @@ export type SettingDef = {
   max?: number;
   /** `preset` 종류에서 고를 수 있는 값. 이 목록 밖의 값은 저장되지 않는다. */
   presets?: number[];
+  /** 허용된 문자열 값. string 입력도 저장 경계에서 검증한다. */
+  choices?: string[];
   /**
    * 저장값도 env 도 없을 때 실제로 적용되는 값. 화면을 비워두면 "설정 안 됨"으로 읽히지만
    * 실제로는 이 값이 돌고 있다 — 소비처의 기본값과 반드시 같아야 한다.
@@ -46,6 +48,115 @@ export type SettingDef = {
 export const TOKEN_WINDOW_KEEPALIVE_RUNNER_ENV_KEY = "QGRID_TOKEN_WINDOW_KEEPALIVE_ENABLED";
 
 export const SETTING_DEFS: SettingDef[] = [
+  {
+    key: "qgrid.agents.enabled",
+    group: "qgrid",
+    envKey: "QGRID_AGENTS_ENABLED",
+    label: "Agents 사용",
+    kind: "boolean",
+    applies: "restart",
+    fallback: "false",
+  },
+  {
+    key: "qgrid.agents.sandboxImage",
+    group: "qgrid",
+    envKey: "QGRID_AGENTS_SANDBOX_IMAGE",
+    label: "Agents 샌드박스 이미지",
+    kind: "string",
+    applies: "restart",
+    fallback: "",
+    help: "배포한 ghcr.io/cartanova-ai/qgrid-sandbox-pi:<버전> 이미지 태그를 지정합니다",
+  },
+  {
+    key: "qgrid.agents.subnet",
+    group: "qgrid",
+    envKey: "QGRID_AGENTS_SUBNET",
+    label: "Agents 서브넷",
+    kind: "string",
+    applies: "restart",
+    fallback: "172.30.0.0/24",
+  },
+  {
+    key: "qgrid.agents.maxSessions",
+    group: "qgrid",
+    envKey: "QGRID_AGENTS_MAX_SESSIONS",
+    label: "Agents 동시 세션 수",
+    kind: "integer",
+    applies: "restart",
+    min: 1,
+    fallback: "4",
+  },
+  {
+    key: "qgrid.agents.idleTtlSec",
+    group: "qgrid",
+    envKey: "QGRID_AGENTS_IDLE_TTL_SEC",
+    label: "Agents 유휴 정지 시간 (초)",
+    kind: "integer",
+    applies: "restart",
+    min: 1,
+    fallback: "1800",
+  },
+  {
+    key: "qgrid.agents.retainSec",
+    group: "qgrid",
+    envKey: "QGRID_AGENTS_RETAIN_SEC",
+    label: "Agents 작업공간 보존 시간 (초)",
+    kind: "integer",
+    applies: "restart",
+    min: 1,
+    fallback: "86400",
+  },
+  {
+    key: "qgrid.agents.maxModelCallsPerTurn",
+    group: "qgrid",
+    envKey: "QGRID_AGENTS_MAX_MODEL_CALLS_PER_TURN",
+    label: "Agents 턴당 모델 호출 한도",
+    kind: "integer",
+    applies: "restart",
+    min: 1,
+    fallback: "60",
+  },
+  {
+    key: "qgrid.agents.maxTurnSeconds",
+    group: "qgrid",
+    envKey: "QGRID_AGENTS_MAX_TURN_SECONDS",
+    label: "Agents 턴 실행 한도 (초)",
+    kind: "integer",
+    applies: "restart",
+    min: 1,
+    fallback: "1200",
+  },
+  {
+    key: "qgrid.agents.minFreeDiskGb",
+    group: "qgrid",
+    envKey: "QGRID_AGENTS_MIN_FREE_DISK_GB",
+    label: "Agents 최소 디스크 여유 (GiB)",
+    kind: "number",
+    applies: "restart",
+    min: 0,
+    fallback: "20",
+  },
+  {
+    key: "qgrid.agents.isolationCheck",
+    group: "qgrid",
+    envKey: "QGRID_AGENTS_ISOLATION_CHECK",
+    label: "Agents 격리 점검 모드",
+    kind: "string",
+    applies: "restart",
+    choices: ["enforce", "warn"],
+    fallback: "enforce",
+    help: "enforce: 격리 실패 시 기동하지 않음, warn: 경고만 기록 (개발 환경용)",
+  },
+  {
+    key: "qgrid.agents.isolationPorts",
+    group: "qgrid",
+    envKey: "QGRID_AGENTS_ISOLATION_PORTS",
+    label: "Agents 차단 점검 포트",
+    kind: "string",
+    applies: "restart",
+    fallback: "5432,6379",
+    help: "샌드박스에서 닿지 않아야 하는 호스트 TCP 포트를 쉼표로 구분합니다. API 포트는 항상 포함됩니다",
+  },
   {
     key: "qgrid.tokenWindowKeepaliveEnabled",
     fallback: "true",
@@ -163,6 +274,22 @@ export function validateSettingValue(
   raw: string,
 ): { ok: true; value: string } | { ok: false; error: string } {
   const trimmed = raw.trim();
+
+  if (def.choices && !def.choices.includes(trimmed)) {
+    return { ok: false, error: `${def.choices.join(", ")} 중 하나여야 합니다` };
+  }
+
+  if (def.key === "qgrid.agents.isolationPorts" && trimmed !== "") {
+    const ports = trimmed.split(",");
+
+    if (
+      ports.some((port) => !/^\d+$/.test(port.trim()) || Number(port) < 1 || Number(port) > 65535)
+    ) {
+      return { ok: false, error: "1~65535 사이 포트를 쉼표로 구분하세요" };
+    }
+
+    return { ok: true, value: ports.map((port) => String(Number(port))).join(",") };
+  }
 
   if (def.kind === "boolean") {
     if (!["true", "false"].includes(trimmed)) return { ok: false, error: "true 또는 false" };

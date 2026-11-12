@@ -1,5 +1,33 @@
 [
   {
+    "path": "api/src/application/agent-session/agent-session.types.ts",
+    "checksum": "bef57e1029dd715a0516b2ee09aeec13b8b41c88"
+  },
+  {
+    "path": "api/src/application/agent-turn/agent-turn.types.ts",
+    "checksum": "9901e81d51ed7099dc848e562b975c201215b431"
+  },
+  {
+    "path": "api/src/application/agent/agent-session.entity.json",
+    "checksum": "bbea9e179c63d78c8f4dcd9e81f2e04b043060f6"
+  },
+  {
+    "path": "api/src/application/agent/agent-turn.entity.json",
+    "checksum": "b7e39c43128ca5d289ba27adb8127b00245c637a"
+  },
+  {
+    "path": "api/src/application/agent/agent.frame.ts",
+    "checksum": "7d5bde482c77634045aaf28dcf4ebd6392fabb29"
+  },
+  {
+    "path": "api/src/application/agent/agent.model.ts",
+    "checksum": "2e569dd5a23f72c532c631ccbe4e25b8e3126e5c"
+  },
+  {
+    "path": "api/src/application/agent/agent.types.ts",
+    "checksum": "522d2ce421643e571c10a1d7a49ac00a811c1dc6"
+  },
+  {
     "path": "api/src/application/monit/monit.frame.ts",
     "checksum": "ec9a0537d54fb98a51b2c97c9a9ba94fa180b693"
   },
@@ -9,15 +37,15 @@
   },
   {
     "path": "api/src/application/qgrid/qgrid.frame.ts",
-    "checksum": "0930d356273271b7f0f160289c67d88c8cc45590"
+    "checksum": "ab664040cd5de153120cad16f14d4083dd478c2c"
   },
   {
     "path": "api/src/application/qgrid/qgrid.types.ts",
-    "checksum": "972397e3a99849a4a41b4372881f79c42fbdccdd"
+    "checksum": "57cc19e2b04bacef2e1a43f4b85a6ffbb903fbbf"
   },
   {
     "path": "api/src/application/queries.generated.ts",
-    "checksum": "cc2369f488b212af038c1c9b27fe5a5652173a09"
+    "checksum": "eb35e57698e3d0e7344d91e9ff4e9bd2c02ffd33"
   },
   {
     "path": "api/src/application/request-log-step/request-log-step.entity.json",
@@ -37,7 +65,7 @@
   },
   {
     "path": "api/src/application/request-log/request-log.model.ts",
-    "checksum": "4bd659bbfe87f52d520e6db9b5127c1998285c98"
+    "checksum": "426c115d1c616bf860193f9c263941b87b05d77a"
   },
   {
     "path": "api/src/application/request-log/request-log.types.ts",
@@ -57,15 +85,15 @@
   },
   {
     "path": "api/src/application/sonamu.generated.http",
-    "checksum": "feff6b5e2002b13724fe43d7daa41da551d4282f"
+    "checksum": "041d5ff48b604a48b61fd3a29e410b5a71956f19"
   },
   {
     "path": "api/src/application/sonamu.generated.sso.ts",
-    "checksum": "6f9c492b18d9a52f36cc5c8f8109c0d126027353"
+    "checksum": "d69d2897a166985346c2631f6adb733197eb98ce"
   },
   {
     "path": "api/src/application/sonamu.generated.ts",
-    "checksum": "dce34227d87da1bb298e21a895d7b6c7c0d08a51"
+    "checksum": "c0a0487762f989584c1988b7b88ba902b118395c"
   },
   {
     "path": "api/src/application/token/token.entity.json",
@@ -89,11 +117,11 @@
   },
   {
     "path": "api/src/i18n/sd.generated.ts",
-    "checksum": "ca3e82dd88a95dd2712b6ec7d2375588740fa58e"
+    "checksum": "743d0e918a9be69e3dadf7f7172492c1becf69e0"
   },
   {
     "path": "api/src/sonamu.config.ts",
-    "checksum": "0d315e069f42c6c941c2623696bf17a97741701a"
+    "checksum": "932e4dc1b7f83d7de68122ac4273bb76e2381d4f"
   },
   {
     "path": "web/src/i18n/en.ts",
@@ -105,7 +133,19 @@
   },
   {
     "path": "web/src/i18n/sd.generated.ts",
-    "checksum": "765d0d2e2905974dc4b4606a302d9c4226094903"
+    "checksum": "cd713cb46c76da5e32b275efce683e1f45a5b35a"
+  },
+  {
+    "path": "web/src/services/agent-session/agent-session.types.ts",
+    "checksum": "b21c005a36771e27e9a1637b30c3a170f532c28e"
+  },
+  {
+    "path": "web/src/services/agent-turn/agent-turn.types.ts",
+    "checksum": "2380c8299df2d74b3b4b927f165cb9ab47c5a325"
+  },
+  {
+    "path": "web/src/services/agent/agent.types.ts",
+    "checksum": "9e38a38a6222a5c6bde724ca11b220883923cf37"
   },
   {
     "path": "web/src/services/monit/monit.types.ts",
@@ -113,7 +153,7 @@
   },
   {
     "path": "web/src/services/qgrid/qgrid.types.ts",
-    "checksum": "76b29686ec5f3f097bee3b4337791fe878911407"
+    "checksum": "25a7cf710464e8e91970391a582bfeb00e2553eb"
   },
   {
     "path": "web/src/services/request-log-step/request-log-step.types.ts",
@@ -125,7 +165,7 @@
   },
   {
     "path": "web/src/services/services.generated.ts",
-    "checksum": "5bfb7c0f88a280af886766add363ec715323b41c"
+    "checksum": "6f8170abd75a8678e65c2dcfbcdbac26e9da5e27"
   },
   {
     "path": "web/src/services/setting/setting.types.ts",
@@ -133,7 +173,7 @@
   },
   {
     "path": "web/src/services/sonamu.generated.ts",
-    "checksum": "76f1382ff22a68381b05bc84a875770c88695929"
+    "checksum": "26f46465563394b9770e8adc0f4034d9928734d4"
   },
   {
     "path": "web/src/services/token/token.types.ts",

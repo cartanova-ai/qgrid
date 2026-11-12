@@ -18,6 +18,7 @@ import { getCacheManagerRef } from "sonamu/cache";
 import { z } from "zod";
 
 import { type LocalizedString, SD } from "../../i18n/sd.generated";
+import { agentsHealth } from "../../utils/agents/runtime";
 import {
   getAccessToken,
   getExpiresAt,
@@ -2901,6 +2902,7 @@ class QgridFrameClass extends BaseFrameClass {
       // provider 별 라우팅이라 하나만 준비돼도 그 provider 요청은 처리된다.
       ready: Object.values(providers).includes("ready"),
       providers,
+      agents: await agentsHealth(),
     };
   }
 }
