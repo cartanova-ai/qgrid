@@ -50,7 +50,7 @@ describe("qgrid.speech with AI SDK generateSpeech", () => {
     expect(result.providerMetadata.qgrid).toEqual({ mediaType: "audio/mpeg", tokenName: "grok/main", requestLogId: 3 });
   });
 
-  it("omits unset fields so server defaults apply, and warns on unsupported settings", async () => {
+  it("omits unset fields so server defaults apply, passes speed, and warns on unsupported settings", async () => {
     const fetchMock = mockSpeak();
     const result = await generateSpeech({
       model: qgrid.speech("grok/grok-tts"),
@@ -61,13 +61,35 @@ describe("qgrid.speech with AI SDK generateSpeech", () => {
       providerOptions: { xai: { sampleRate: 24000 } },
     });
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(String(init.body)).params).toEqual({ model: "grok/grok-tts", text: "Hello", format: "mp3" });
+    expect(JSON.parse(String(init.body)).params).toEqual({ model: "grok/grok-tts", text: "Hello", speed: 1.2, format: "mp3" });
     expect(result.warnings.map((w) => ("feature" in w ? w.feature : w.message))).toEqual([
       "outputFormat",
       "instructions",
-      "speed",
       "providerOptions.xai.sampleRate",
     ]);
+  });
+
+  it("honors xai.withTimestamps and returns the character timing in qgrid metadata", async () => {
+    const audioTimestamps = { graphChars: ["H", "i"], graphTimes: [[0.08, 0.2], [0.2, 0.5]] };
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        audio: mp3.toString("base64"),
+        mimeType: "audio/mpeg",
+        tokenName: "grok/main",
+        audioTimestamps,
+        durationSec: 0.5,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await generateSpeech({
+      model: qgrid.speech("grok/grok-tts"),
+      text: "Hi",
+      providerOptions: { xai: { withTimestamps: true } },
+    });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).params).toMatchObject({ withTimestamps: true });
+    expect(result.warnings).toEqual([]);
+    expect(result.providerMetadata.qgrid).toMatchObject({ audioTimestamps, duration: 0.5 });
   });
 
   it("rejects over-long text before transport", async () => {
@@ -79,6 +101,44 @@ describe("qgrid.speech with AI SDK generateSpeech", () => {
 });
 
 describe("qgrid.speech with openai/ models", () => {
+  it("asks for aligned timestamps with qgrid.withTimestamps and warns when they are unavailable", async () => {
+    const wav = Buffer.from("RIFF0000WAVEfmt ");
+    const audioTimestamps = { graphChars: ["H", "i"], graphTimes: [[0.1, 0.2], [0.2, 0.3]] };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          audio: wav.toString("base64"),
+          mimeType: "audio/wav",
+          tokenName: "openai/main",
+          audioTimestamps,
+          durationSec: 0.4,
+          timestampsSource: "aligned",
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          audio: wav.toString("base64"),
+          mimeType: "audio/wav",
+          tokenName: "openai/main",
+          timestampsError: "grok down",
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const model = qgrid.speech("openai/gpt-realtime-2.1-mini");
+    const providerOptions = { qgrid: { withTimestamps: true } };
+
+    const aligned = await generateSpeech({ model, text: "Hi", providerOptions });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).params).toMatchObject({ withTimestamps: true });
+    expect(aligned.providerMetadata.qgrid).toMatchObject({ audioTimestamps, duration: 0.4, timestampsSource: "aligned" });
+    expect(aligned.warnings).toEqual([]);
+
+    const failed = await generateSpeech({ model, text: "Hi", providerOptions });
+    expect(failed.providerMetadata.qgrid).toMatchObject({ timestampsError: "grok down" });
+    expect(failed.warnings).toEqual([{ type: "other", message: "timestamps unavailable: grok down" }]);
+  });
+
   it("maps voice, instructions and outputFormat; warns like @ai-sdk/openai for language and speed", async () => {
     vi.stubEnv("QGRID_URL", "https://qgrid.example");
     const wav = Buffer.from("RIFF0000WAVEfmt ");

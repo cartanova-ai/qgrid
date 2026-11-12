@@ -38,7 +38,7 @@ function imageInputUrl(file: ImageModelV3File): string {
 // --- Shared Grok media transport (image, video, transcription, speech) ---
 
 /** Server-side Fastify body limit (`sonamu.config.ts` `bodyLimit`). Larger bodies get a 413. */
-export const QGRID_MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024;
+export const QGRID_MAX_REQUEST_BODY_BYTES = 26 * 1024 * 1024;
 
 /** `config` for `qgrid.image/video/transcription/speech`; same fields as the language model. */
 export type QgridMediaProviderConfig = QgridImageProviderConfig;
@@ -115,10 +115,10 @@ function formatMiB(bytes: number): string {
 
 /**
  * Server `MEDIA_MAX_INLINE_BYTES` (qgrid.types.ts): decoded inline audio, each inline image, and all
- * inline images of one request together. Derived from the 10 MiB body limit: base64 grows bytes by
- * 4/3, so 7 MiB decoded is about 9.3 MiB encoded, leaving room for the rest of the JSON body.
+ * inline images of one request together. Derived from the 26 MiB body limit: base64 grows bytes by
+ * 4/3, so 19 MiB decoded is about 25.3 MiB encoded, leaving room for the rest of the JSON body.
  */
-export const QGRID_MAX_INLINE_MEDIA_BYTES = 7 * 1024 * 1024;
+export const QGRID_MAX_INLINE_MEDIA_BYTES = 19 * 1024 * 1024;
 
 function base64DecodedBytes(data: string): number {
   const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;

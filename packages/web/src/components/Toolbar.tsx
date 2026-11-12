@@ -1,4 +1,6 @@
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link, useRouterState, useSearch } from "@tanstack/react-router";
+
+import { VOICE_TAB_TITLES, type VoiceTab } from "./nav-items";
 
 const ROUTE_TITLES = new Map<string, string>(
   Object.entries({
@@ -6,6 +8,7 @@ const ROUTE_TITLES = new Map<string, string>(
     "/tokens": "Tokens",
     "/logs": "Request Logs",
     "/monit": "Server Logs",
+    "/voice": "Voice",
   }),
 );
 
@@ -15,9 +18,13 @@ interface Breadcrumb {
   current: string;
 }
 
-function getBreadcrumb(pathname: string): Breadcrumb {
+function getBreadcrumb(pathname: string, voiceTab: VoiceTab): Breadcrumb {
   if (pathname.startsWith("/requests/show")) {
     return { parent: "Request Logs", parentPath: "/logs", current: "Detail" };
+  }
+
+  if (pathname === "/voice") {
+    return { parent: "Voice", parentPath: "/voice", current: VOICE_TAB_TITLES[voiceTab] };
   }
 
   return { current: ROUTE_TITLES.get(pathname) ?? pathname };
@@ -25,7 +32,8 @@ function getBreadcrumb(pathname: string): Breadcrumb {
 
 export function Toolbar() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const crumb = getBreadcrumb(pathname);
+  const { tab = "tts" } = useSearch({ strict: false });
+  const crumb = getBreadcrumb(pathname, tab);
 
   return (
     <div className="toolbar-glass h-11 shrink-0 flex items-center px-5">

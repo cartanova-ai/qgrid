@@ -44,12 +44,6 @@ export function buildStandaloneImageRequest(options: OpenAIResponsesOptions) {
 
   const controls = options.imageGeneration === true ? {} : options.imageGeneration;
 
-  if (options.model !== "gpt-image-2" && controls.background !== "transparent") {
-    throw new OpenAIProtocolError(
-      "Standalone images require an explicit transparent background request",
-    );
-  }
-
   if (controls.output_format && controls.output_format !== "png") {
     throw new OpenAIProtocolError("Standalone image generation only supports PNG output");
   }

@@ -120,6 +120,7 @@ export const requestLogSubsetQueries = {
       tool_call_count: "request_logs.tool_call_count",
       is_image_generation: "request_logs.is_image_generation",
       is_structured: "request_logs.is_structured",
+      media_kind: "request_logs.media_kind",
     });
   },
   P: (qbWrapper: PuriWrapper<DatabaseSchemaExtend>) => {
@@ -150,6 +151,7 @@ export const requestLogSubsetQueries = {
       tool_call_count: "request_logs.tool_call_count",
       is_image_generation: "request_logs.is_image_generation",
       is_structured: "request_logs.is_structured",
+      media_kind: "request_logs.media_kind",
     });
   },
   C: (qbWrapper: PuriWrapper<DatabaseSchemaExtend>) => {

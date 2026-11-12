@@ -53,6 +53,22 @@ async function tickTimer(): Promise<void> {
 }
 
 describe("OpenAIDispatcher direct runtime", () => {
+  it("sends Codex's hosted web search only when the request asks for it", async () => {
+    const seen: OpenAIResponsesOptions[] = [];
+
+    const d = dispatcher((options) => {
+      seen.push(options);
+      return events({ type: "completed", responseId: "r" });
+    });
+
+    await d.onTokenAdded(1, "one", credentials);
+    await d.generate(request({ tools: [{ type: "web_search" }] }));
+    await d.generate(request());
+
+    expect(seen[0]?.tools).toEqual([{ type: "web_search", external_web_access: true }]);
+    expect(seen[1]?.tools).toBeUndefined();
+  });
+
   it.each(["gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"])(
     "disables thinking and omits summaries through generate/stream for %s",
     async (model) => {
@@ -127,35 +143,33 @@ describe("OpenAIDispatcher direct runtime", () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
-  it.each(["png", "jpeg", "webp"] as const)("forwards %s format and preserves returned MIME", async (outputFormat) => {
-    const args = QueryInput.parse({ prompt: "draw", imageGeneration: true, imageGenerationOptions: { outputFormat } });
-    let body: ReturnType<typeof buildOpenAIResponsesRequest> | undefined;
+  it.each([
+    { background: "transparent", size: "1024x1024" },
+    { background: "opaque", size: "1152x2560" },
+    { background: "auto", size: "auto" },
+  ] as const)("passes explicit chat-model image controls to standalone Images: %j", async (controls) => {
+    const args = QueryInput.parse({
+      model: "openai/gpt-test", prompt: "an isolated red circle", imageGeneration: true,
+      imageGenerationOptions: { ...controls, quality: "high", outputFormat: "png" },
+    });
+    const generation = { route: "codex-images" as const, model: "gpt-image-2", size: "841x1870", quality: "low" };
+    let received: OpenAIResponsesOptions | undefined;
     const d = dispatcher((options) => {
-      body = buildOpenAIResponsesRequest(options);
-      return events({ type: "image", base64: "data", mimeType: `image/${outputFormat}` }, { type: "completed", responseId: "r" });
+      received = options;
+      return events({ type: "image", base64: "png", mimeType: "image/png", generation }, { type: "completed", responseId: "r", model: "gpt-image-2" });
     });
     await d.onTokenAdded(1, "one", credentials);
     const result = await d.generate(request({ imageGeneration: args.imageGeneration, imageGenerationOptions: args.imageGenerationOptions }));
-    expect(body?.tools).toEqual([{ type: "image_generation", output_format: outputFormat }]);
-    expect(result.images).toMatchObject([{ mediaType: `image/${outputFormat}` }]);
+    const direct = buildStandaloneImageRequest(received!);
+    expect(direct.url).toMatch(/\/images\/generations$/);
+    expect(direct.body).toMatchObject({ model: "gpt-image-2", ...controls, quality: "high" });
+    expect(result).toMatchObject({ model: "gpt-image-2", requestedModel: "gpt-test", images: [{ mediaType: "image/png", generation }] });
   });
 
   it("rejects unsupported output formats and non-PNG transparent requests", () => {
     for (const imageGenerationOptions of [{ outputFormat: "gif" }, { outputFormat: "webp", background: "transparent" }, { outputFormat: "jpeg", background: "transparent" }]) {
       expect(QueryInput.safeParse({ prompt: "draw", imageGeneration: true, imageGenerationOptions }).success).toBe(false);
     }
-  });
-
-  it.each(["auto", "1152x2560"])("forwards %s size hints and preserves hosted observations", async (size) => {
-    const args = QueryInput.parse({ prompt: "draw in 9:20", imageGeneration: true, imageGenerationOptions: { size } });
-    const generation = { route: "codex-responses" as const, size: "841x1870", quality: "low" };
-    const d = dispatcher((options) => {
-      expect(buildOpenAIResponsesRequest(options).tools).toContainEqual({ type: "image_generation", size });
-      return events({ type: "image", base64: "data", mimeType: "image/png", generation }, { type: "completed", responseId: "r" });
-    });
-    await d.onTokenAdded(1, "one", credentials);
-    const result = await d.generate(request({ imageGeneration: args.imageGeneration, imageGenerationOptions: args.imageGenerationOptions }));
-    expect(result.images).toMatchObject([{ generation }]);
   });
 
   beforeEach(() => { refreshMock.mockReset(); });
@@ -253,33 +267,23 @@ describe("OpenAIDispatcher direct runtime", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["transparent", "opaque", "auto"] as const)(
-    "preserves %s background through validation and Responses serialization",
-    async (background) => {
-      const args = QueryInput.parse({
-        model: "openai/gpt-test",
-        prompt: "an isolated red circle",
-        imageGeneration: true,
-        imageGenerationOptions: { background, quality: "high", size: "1024x1024" },
-      });
-      let body: ReturnType<typeof buildOpenAIResponsesRequest> | undefined;
-      const d = dispatcher((options) => {
-        body = buildOpenAIResponsesRequest(options);
-        return events(
-          { type: "image", id: "i", base64: "png", mimeType: "image/png" },
-          { type: "completed", responseId: "r" },
-        );
-      });
-      await d.onTokenAdded(1, "one", credentials);
-      await d.generate(request({
-        imageGeneration: args.imageGeneration,
-        imageGenerationOptions: args.imageGenerationOptions,
-      }));
-      expect(body?.tools).toEqual([{
-        type: "image_generation", background, quality: "high", size: "1024x1024",
-      }]);
-    },
-  );
+  it("re-judges a token updated during its quota lookup instead of reporting it over quota", async () => {
+    let finishOld!: (value: Response) => void;
+    const quota = (percent: number) => new Response(JSON.stringify({
+      rate_limits: { primary_window: { used_percent: percent } },
+    }));
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockResolvedValueOnce(quota(65));
+    const d = new OpenAIDispatcher(config(), { fetch: fetchMock });
+    await d.onTokenAdded(1, "one", credentials, 100);
+    const selection = d.selectToken(1, true, new AbortController().signal);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await d.onTokenUpdated(1, "one", { ...credentials, accessToken: "refreshed" }, 100);
+    finishOld(quota(65));
+    await expect(selection).resolves.toMatchObject({ tokenId: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 
   it("rejects unsupported image backgrounds", () => {
     expect(QueryInput.safeParse({
@@ -418,7 +422,7 @@ describe("OpenAIDispatcher direct runtime", () => {
     expect(onError).toHaveBeenCalledWith(failure);
   });
 
-  it("returns multiple hosted images with one driver request", async () => {
+  it("returns multiple images from one image request", async () => {
     const run = vi.fn(() => events(
       { type: "image", id: "first", base64: "first", mimeType: "image/png" },
       { type: "image", id: "second", base64: "second", mimeType: "image/webp" },
@@ -429,47 +433,6 @@ describe("OpenAIDispatcher direct runtime", () => {
     const result = await d.generate(request({ imageGeneration: true }));
     expect(result.images).toMatchObject([{ data: "first", mediaType: "image/png" }, { data: "second", mediaType: "image/webp" }]);
     expect(run).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([true, false])("preserves aggregate hosted image usage separately from driver usage (driver usage: %s)", async (withDriverUsage) => {
-    const imageUsage = {
-      input_tokens: 2260,
-      input_tokens_details: { image_tokens: 2012, text_tokens: 248 },
-      output_tokens: 1415,
-      output_tokens_details: { image_tokens: 1415, text_tokens: 0 },
-      total_tokens: 3675,
-    };
-    const rawEvents = [
-      ...["first", "second"].map((id) => ({ type: "response.output_item.done", item: {
-        id, type: "image_generation_call", result: "UklGRgAAAABXRUJQ",
-        size: "1037x1516", quality: "medium", background: "opaque", output_format: "webp",
-      } })),
-      { type: "response.completed", response: {
-        id: "r", model: "gpt-6-luna",
-        ...(withDriverUsage ? { usage: { input_tokens: 10, output_tokens: 3, total_tokens: 13 } } : {}),
-        tool_usage: { image_gen: imageUsage },
-        tools: [{ type: "image_generation", model: "gpt-image-2-codex", quality: "auto", size: "auto", background: "auto", output_format: "webp", n: 1 }],
-      } },
-    ];
-    const d = dispatcher((options) => {
-      expect(buildOpenAIResponsesRequest(options).tools).toEqual([{
-        type: "image_generation", quality: "high", size: "1024x1536", output_format: "webp",
-      }]);
-      return events(...rawEvents.map(normalizeOpenAIEvent).filter((event): event is OpenAINormalizedEvent => event !== undefined));
-    });
-    await d.onTokenAdded(1, "one", credentials);
-    const result = await d.generate(request({ model: "gpt-6-luna", imageGeneration: true,
-      imageGenerationOptions: { quality: "high", size: "1024x1536", outputFormat: "webp" },
-    }));
-    expect(result.usage).toMatchObject({
-      inputTokens: withDriverUsage ? 10 : 0,
-      outputTokens: withDriverUsage ? 3 : 0,
-      totalTokens: withDriverUsage ? 13 : 0,
-    });
-    const generation = { route: "codex-responses", model: "gpt-image-2-codex", size: "1037x1516", quality: "medium", background: "opaque" };
-    expect(result.images?.map((image) => image.generation)).toEqual([
-      { ...generation, usage: imageUsage }, generation,
-    ]);
   });
 
   it("registers only the internal image function and allows text-only replies", async () => {
@@ -500,7 +463,7 @@ describe("OpenAIDispatcher direct runtime", () => {
     expect(result.images).toBeUndefined();
   });
 
-  it.each(["zero-usage", "model-config"])("does not treat completed %s metadata as hosted image execution", async (metadata) => {
+  it.each(["zero-usage", "model-config"])("keeps automatic text-only replies when completed responses carry %s image metadata", async (metadata) => {
     const completed = normalizeOpenAIEvent({
       type: "response.completed",
       response: {
@@ -517,7 +480,6 @@ describe("OpenAIDispatcher direct runtime", () => {
         output: [{ type: "message" }],
       },
     });
-    expect(completed).toMatchObject({ type: "completed", imageGeneration: { route: "codex-responses" } });
     const run = vi.fn(() => events({ type: "text-delta", text: "hello" }, completed!));
     const d = dispatcher(run);
     await d.onTokenAdded(1, "one", credentials);
@@ -613,8 +575,6 @@ describe("OpenAIDispatcher direct runtime", () => {
       [{ ...done, item: { ...item, call_id: "" } }],
       [{ ...done, item: { ...item, name: "unexpected" } }],
       [done, { type: "image", base64: "png", mimeType: "image/png" }],
-      [{ type: "output-item", item: { type: "image_generation_call" }, completed: false }],
-      [{ type: "completed", responseId: "native", imageGeneration: { route: "codex-responses", usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 } } }],
     ];
     for (const stream of badEvents) {
       const run = vi.fn(() => events(...stream, { type: "completed", responseId: "driver" }));

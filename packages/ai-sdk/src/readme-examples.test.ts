@@ -11,7 +11,13 @@ import {
 } from "ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { qgrid, QgridVideoTimeoutError, resumeQgridVideo } from "./index";
+import {
+  qgrid,
+  QgridVideoTimeoutError,
+  resumeQgridVideo,
+  type QgridGrokVoice,
+  type QgridOpenAISpeechVoice,
+} from "./index";
 
 const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]).toString("base64");
 const mp3 = new Uint8Array([0xff, 0xfb, 0x90, 0x64, 0, 0, 0, 0]);
@@ -132,7 +138,7 @@ async function grokVoiceExample() {
   const speech = await generateSpeech({
     model: qgrid.speech("grok/grok-tts"),
     text: "Your build is ready.",
-    voice: "ara",
+    voice: "ara" satisfies QgridGrokVoice,
     language: "en",
     outputFormat: "mp3",
   });
@@ -142,7 +148,7 @@ async function grokVoiceExample() {
 
 async function openaiVoiceExample() {
   const transcript = await transcribe({
-    model: qgrid.transcription("openai/gpt-4o-mini-transcribe"),
+    model: qgrid.transcription("openai/gpt-transcribe"),
     audio: await readFile("meeting.wav"),
     providerOptions: { openai: { language: "en", prompt: "qgrid, Codex" } },
   });
@@ -150,7 +156,7 @@ async function openaiVoiceExample() {
   const speech = await generateSpeech({
     model: qgrid.speech("openai/gpt-realtime-2.1-mini"),
     text: "Your build is ready.",
-    voice: "marin",
+    voice: "marin" satisfies QgridOpenAISpeechVoice,
     outputFormat: "wav",
     providerOptions: { openai: { instructions: "Calm and brisk." } },
   });
@@ -197,7 +203,10 @@ describe("README Grok examples", () => {
     const readme = await readTextFile(new URL(`../${file}`, import.meta.url), "utf8");
     const self = await readTextFile(new URL(import.meta.url), "utf8");
     const start = readme.indexOf(file === "README.md" ? "## Using Grok" : "## Grok 사용");
-    const section = readme.slice(start, readme.indexOf("## Telemetry Logger", start));
+    // The GPT-Live section after the voice examples is browser and server code for the HTTP API,
+    // not an SDK example, so the checked section ends before it.
+    const live = file === "README.md" ? "### OpenAI live voice conversation" : "### OpenAI 실시간 음성 대화";
+    const section = readme.slice(start, readme.indexOf(live, start));
     const blocks = [...section.matchAll(/```typescript\n([\s\S]*?)```/g)].map((m) => m[1]!);
     expect(blocks).toHaveLength(5);
     // Comments differ between languages and the examples add `return` lines; compare the code.

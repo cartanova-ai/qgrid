@@ -11,7 +11,7 @@ it("logs observed standalone settings separately from requested controls without
   };
   const [step] = buildImageGenerationToolSteps({
     prompt: "draw", model: "openai/gpt-5.5", imageGenerationOptions: requestedOptions,
-  }, [{ type: "image", data: "png", generation }], 0);
+  }, [{ type: "image", data: "png", generation }], 0, true);
   const args = JSON.parse(step!.tool_args);
   expect(args.requestedOptions).toEqual(requestedOptions);
   expect(args.observedGeneration).toEqual(generation);
@@ -45,7 +45,7 @@ describe("qgrid response log formatting", () => {
     expect(args.pricingAssumption).not.toHaveProperty("background");
   });
 
-  it("includes input images in image-generation tool args", () => {
+  it("records input image metadata in tool args; the run's input_images keeps the bytes", () => {
     expect(
       JSON.parse(
         imageGenerationToolArgs({
@@ -59,7 +59,7 @@ describe("qgrid response log formatting", () => {
       ),
     ).toMatchObject({
       prompt: "stage this room",
-      inputImages: [{ mediaType: "image/webp", data: "UklGRg==", byteSize: 4 }],
+      inputImages: [{ mediaType: "image/webp", byteSize: 4 }],
     });
   });
 
@@ -105,15 +105,25 @@ describe("qgrid response log formatting", () => {
         { type: "image", data: "second", revisedPrompt: "second" },
       ],
       2,
+      true,
     );
 
     expect(JSON.parse(steps[0]!.tool_args).inputImages).toEqual([
-      { mediaType: "image/webp", data: "UklGRg==", byteSize: 4 },
+      { mediaType: "image/webp", byteSize: 4 },
     ]);
     expect(JSON.parse(steps[1]!.tool_args).inputImages).toBeUndefined();
     expect(steps.map((step) => step.tool_call_id)).toEqual([
       "image_generation:2:0",
       "image_generation:2:1",
     ]);
+  });
+
+  it("keeps image bytes in a step only when the run's response does not carry them", () => {
+    const image = { type: "image" as const, data: "iVBORw0KGgo=", revisedPrompt: "dot" };
+    const [inResponse] = buildImageGenerationToolSteps({ prompt: "draw" }, [image], 0, true);
+    const [beforeToolCalls] = buildImageGenerationToolSteps({ prompt: "draw" }, [image], 0, false);
+
+    expect(inResponse!.tool_result).toBe("[image image/png 8 bytes, shown in the response]");
+    expect(beforeToolCalls!.tool_result).toBe(formatImagePartForLog(image));
   });
 });

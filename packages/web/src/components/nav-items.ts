@@ -1,9 +1,21 @@
 import type React from "react";
+import AudioLinesIcon from "~icons/lucide/audio-lines";
 import ActivityIcon from "~icons/lucide/file-text";
 import GaugeIcon from "~icons/lucide/home";
 import KeyRoundIcon from "~icons/lucide/key-round";
 import SettingsIcon from "~icons/lucide/settings";
 import TerminalIcon from "~icons/lucide/terminal";
+
+/** Voice 플레이그라운드의 도구. 사이드바가 Voice 아래에 나열하고, 페이지는 `?tab=` 으로 고른다. */
+export const VOICE_TAB_IDS = ["tts", "stt", "live"] as const;
+
+export type VoiceTab = (typeof VOICE_TAB_IDS)[number];
+
+export const VOICE_TAB_TITLES: Record<VoiceTab, string> = {
+  tts: "TTS",
+  stt: "STT",
+  live: "Live Conversation",
+};
 
 export type NavItem = {
   title: string;
@@ -11,6 +23,8 @@ export type NavItem = {
   shortTitle?: string;
   path: string;
   icon: React.FC<React.SVGProps<SVGSVGElement>>;
+  /** 사이드바에서 항목 아래에 펼치는 하위 도구(데스크톱 전용). */
+  tabs?: readonly VoiceTab[];
 };
 
 export type NavSection = {
@@ -32,6 +46,10 @@ export const NAV_SECTIONS: NavSection[] = [
       { title: "Server Logs", shortTitle: "Server", path: "/monit", icon: TerminalIcon },
       { title: "Settings", path: "/settings", icon: SettingsIcon },
     ],
+  },
+  {
+    label: "Playground",
+    items: [{ title: "Voice", path: "/voice", icon: AudioLinesIcon, tabs: VOICE_TAB_IDS }],
   },
 ];
 

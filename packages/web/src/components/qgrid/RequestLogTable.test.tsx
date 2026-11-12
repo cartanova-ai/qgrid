@@ -55,6 +55,7 @@ const row: RequestLogSubsetP = {
   tool_call_count: 0,
   is_image_generation: false,
   is_structured: false,
+  media_kind: null,
 };
 
 type Query = { data?: unknown; isLoading?: boolean; isError?: boolean };
@@ -110,5 +111,18 @@ describe("RequestLogTable", () => {
     const html = render();
     expect(html).toContain("120 results");
     expect(html).toContain("2 / 3");
+  });
+
+  it("labels speech rows voice/stt and voice/tts in the Fmt column", () => {
+    const rows = [
+      { ...row, id: 1, media_kind: "stt" as const },
+      { ...row, id: 2, media_kind: "tts" as const },
+      row,
+    ];
+    mockQueries({ list: { data: { rows } }, count: { data: { total: 3 } } });
+    const html = render();
+    expect(html).toContain("voice/stt");
+    expect(html).toContain("voice/tts");
+    expect(html).toContain(">text<");
   });
 });

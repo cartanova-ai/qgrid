@@ -5,6 +5,8 @@ import {
   getModelCosts,
   grokImageCost,
   grokReportedCost,
+  openaiSpeechCost,
+  sttCost,
   usdFromGrokTicks,
 } from "./model-cost";
 
@@ -405,5 +407,17 @@ describe("calculateCostUsd", () => {
       calculateCostUsd("claude-sonnet-4-6", usage),
       10,
     );
+  });
+});
+
+describe("voice cost", () => {
+  it("prices OpenAI speech by token type and transcription by minute; unknown models stay unpriced", () => {
+    // The 6-second ballad clip: 226 text in, 66 text out, 131 audio out on gpt-realtime-2.1-mini.
+    const usage = { inputTokens: 226, textTokens: 66, audioTokens: 131 };
+
+    expect(openaiSpeechCost("gpt-realtime-2.1-mini", usage)?.costUsd).toBeCloseTo(0.0029, 4);
+    expect(openaiSpeechCost("gpt-realtime-9", usage)).toBeUndefined();
+    expect(sttCost("openai/gpt-4o-transcribe", 30)?.costUsd).toBeCloseTo(0.003, 6);
+    expect(sttCost("openai/gpt-4o-transcribe", undefined)).toBeUndefined();
   });
 });

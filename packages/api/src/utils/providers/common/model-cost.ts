@@ -455,3 +455,74 @@ export function calculateCostUsd(
     (serviceTier === "fast" ? (OPENAI_FAST_MULTIPLIERS.get(normalizedModel) ?? 1) : 1)
   );
 }
+
+/** A voice call priced from the public API list price; subscription calls have no per-call bill. */
+export type VoiceCost = { costUsd: number; costSource: "pricing_table"; ticks?: undefined };
+
+// Public API list prices, checked 2026-11-09. OpenAI realtime speech: USD per 1M tokens (the usage
+// does not split cached input, so all input is charged as uncached text).
+const OPENAI_SPEECH_PRICES = new Map([
+  ["gpt-realtime-2.1", { textIn: 4, textOut: 24, audioOut: 64 }],
+  ["gpt-realtime-2.1-mini", { textIn: 0.6, textOut: 2.4, audioOut: 20 }],
+]);
+
+// Transcription, USD per minute of audio (OpenAI's published per-minute estimates; Grok $0.10/hour).
+const STT_USD_PER_MINUTE = new Map([
+  ["openai/gpt-4o-transcribe", 0.006],
+  ["openai/gpt-4o-mini-transcribe", 0.003],
+  ["openai/gpt-transcribe", 0.0045],
+  ["openai/gpt-live-transcribe", 0.017],
+  ["openai/gpt-realtime-whisper", 0.017],
+  ["openai/whisper-1", 0.006],
+  ["grok/grok-voice-transcribe-2.0", 0.1 / 60],
+]);
+
+// GPT-Live, USD per minute of session audio (OpenAI list price, billed per second; checked 2026-11-10).
+const LIVE_USD_PER_MINUTE = new Map([["openai/gpt-live-1", 0.05]]);
+
+const GROK_TTS_USD_PER_CHARACTER = 15 / 1_000_000;
+
+const priced = (costUsd: number): VoiceCost => ({ costUsd, costSource: "pricing_table" });
+
+/** OpenAI realtime speech from its response usage; unknown models stay unpriced. */
+export function openaiSpeechCost(
+  model: string,
+  usage: { inputTokens: number; textTokens: number; audioTokens: number },
+): VoiceCost | undefined {
+  const price = OPENAI_SPEECH_PRICES.get(model);
+
+  if (!price) return undefined;
+
+  return priced(
+    (usage.inputTokens * price.textIn +
+      usage.textTokens * price.textOut +
+      usage.audioTokens * price.audioOut) /
+      1_000_000,
+  );
+}
+
+/** Transcription by audio length; unknown models or a missing duration stay unpriced. */
+export function sttCost(route: string, durationSec: number | undefined): VoiceCost | undefined {
+  const perMinute = STT_USD_PER_MINUTE.get(route);
+
+  return perMinute === undefined || durationSec === undefined
+    ? undefined
+    : priced((perMinute * durationSec) / 60);
+}
+
+/** A live session by the audio time the session reported; unknown time stays unpriced. */
+export function liveCost(
+  route: string,
+  audioDurationMs: number | undefined,
+): VoiceCost | undefined {
+  const perMinute = LIVE_USD_PER_MINUTE.get(route);
+
+  return perMinute === undefined || audioDurationMs === undefined
+    ? undefined
+    : priced((perMinute * audioDurationMs) / 60_000);
+}
+
+/** Grok `/tts` by input characters. */
+export function grokSpeechCost(characters: number): VoiceCost {
+  return priced(characters * GROK_TTS_USD_PER_CHARACTER);
+}

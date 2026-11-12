@@ -5,6 +5,65 @@
 
 import { z } from "zod";
 
+// ─── Served models ───
+
+// qgrid 가 실제로 서비스하는 텍스트 모델(provider 별 최신순).
+// dispatcher 는 provider prefix 없는 모델을 라우팅하지 못하므로 항상 접두사를 포함한다.
+// ai-sdk 의 QgridSupportedModel union 중 실제로 서비스되는 모델만 provider 별로 최신순 나열한다.
+// sonamu sync 로 web 에 내려가 대시보드 채팅과 GPT-Live 위임 모델 선택이 쓰고, liveCall 이 위임 모델을
+// 이 목록으로 검사한다. ai-sdk 와 공유하지 않으므로 모델을 추가할 때 ai-sdk union 도 함께 갱신한다.
+// union 에는 남아 있지만 여기서 제외한 항목:
+//  - `gpt-5.4`, `gpt-5.4-mini`: qgrid 가 쓰는 ChatGPT 구독 Codex 경로에서 2026-08-31 retired
+//    (대체 gpt-5.6-terra / gpt-5.6-luna).
+//  - `gpt-5.2`, `gpt-5.3-codex`: 같은 경로에서 이미 제공 종료.
+//  - `gpt-5.3-codex-spark`: 같은 경로에서 400("not supported when using Codex with a ChatGPT account"),
+//    Codex 카탈로그에서도 빠짐(2026-09-29 확인).
+//  - `gpt-5.5`: Codex/ChatGPT 경로에서 2026-10-14 은퇴 예정(대체 gpt-6.1-sol / gpt-6-luna).
+//  - `claude-opus-4`, `claude-sonnet-4`: 2026-06-15 retired, Claude Code 에서 모델 오류.
+//  - `claude-opus-4-1`: 2026-08-05 retired, Claude Code 가 claude-opus-5-5 로 대체 서빙.
+//  - `claude-sonnet-4-5`: 2026-09-30 deprecated, 2026-11-30 retirement 예정(대체 claude-sonnet-5-5).
+//  - `claude-sonnet-4-7`: 공식 카탈로그에 없는 유령 항목.
+export const QGRID_MODEL_GROUPS: { label: string; models: string[] }[] = [
+  {
+    label: "OpenAI",
+    models: [
+      "openai/gpt-6-astra",
+      "openai/gpt-6.1-sol",
+      "openai/gpt-6.1-terra",
+      "openai/gpt-6-sol",
+      "openai/gpt-6-luna",
+      "openai/gpt-5.6-terra",
+      "openai/gpt-5.6-sol",
+      "openai/gpt-5.6-luna",
+    ],
+  },
+  {
+    label: "Anthropic",
+    models: [
+      "anthropic/claude-fable-5-1",
+      "anthropic/claude-fable-5",
+      "anthropic/claude-opus-5-5",
+      "anthropic/claude-opus-5",
+      "anthropic/claude-sonnet-5-5",
+      "anthropic/claude-sonnet-5",
+      "anthropic/claude-haiku-5-5",
+      "anthropic/claude-opus-4-8",
+      "anthropic/claude-opus-4-7",
+      "anthropic/claude-opus-4-6",
+      "anthropic/claude-opus-4-5",
+      "anthropic/claude-sonnet-4-6",
+      "anthropic/claude-haiku-4-5",
+    ],
+  },
+  {
+    label: "Grok",
+    // ai-sdk QgridGrokModel 의 구독 카탈로그 id(grok-4.7 이 기본). Grok 4.6/4.7 은 Build 모델로 라우팅된다.
+    models: ["grok/grok-4.7", "grok/grok-4.7-build-fast", "grok/grok-4.6", "grok/grok-4.5"],
+  },
+];
+
+export const QGRID_MODELS = QGRID_MODEL_GROUPS.flatMap((group) => group.models);
+
 // ─── Query ───
 
 export const Effort = z.enum(["low", "medium", "high"]);
@@ -321,14 +380,16 @@ export type StreamEvents = z.infer<typeof StreamEvents>;
 
 const MiB = 1024 * 1024;
 
-// Fastify bodyLimit for every JSON request; sonamu.config.ts reads it from here.
-export const REQUEST_BODY_LIMIT_BYTES = 10 * MiB;
+// Fastify bodyLimit for every JSON request; sonamu.config.ts reads it from here. Sized so a ~5 MB
+// compressed recording still fits once a browser decodes it to the 24 kHz PCM16 WAV that OpenAI
+// realtime transcription requires (19 MiB holds about 6.9 minutes).
+export const REQUEST_BODY_LIMIT_BYTES = 26 * MiB;
 
-// Media rides inside that JSON body as base64 (4 chars per 3 bytes), so a 10 MiB body carries at
-// most 10 MiB x 3/4 = 7.5 MiB of decoded bytes; 0.5 MiB is left for the prompt, options and JSON
+// Media rides inside that JSON body as base64 (4 chars per 3 bytes), so a 26 MiB body carries at
+// most 26 MiB x 3/4 = 19.5 MiB of decoded bytes; 0.5 MiB is left for the prompt, options and JSON
 // framing. The same budget bounds the audio clip, each inline image, and the sum of a request's
 // inline images, so every request the schema accepts also fits the transport.
-export const MEDIA_MAX_INLINE_BYTES = 7 * MiB;
+export const MEDIA_MAX_INLINE_BYTES = 19 * MiB;
 const MEDIA_MAX_INLINE_LABEL = `${MEDIA_MAX_INLINE_BYTES / MiB} MiB`;
 export const MEDIA_MAX_REFERENCE_IMAGES = 5;
 
@@ -535,6 +596,12 @@ export const TranscribeInput = z.object({
 
 export type TranscribeInput = z.infer<typeof TranscribeInput>;
 
+const TranscribedWord = z.object({
+  text: z.string(),
+  start: z.number(),
+  end: z.number(),
+});
+
 export const TranscribeOutput = z.object({
   text: z.string(),
   language: z.string().optional(),
@@ -542,9 +609,85 @@ export const TranscribeOutput = z.object({
   model: z.string(),
   tokenName: z.string(),
   requestLogId: z.number().optional(),
+  // Each heard word with its [start, end] seconds. Grok times its own transcript; for OpenAI qgrid's
+  // aligner places the transcript in the input audio (omitted without the aligner model, or when the
+  // clip is too long to align).
+  words: z.array(TranscribedWord).optional(),
 });
 
 export type TranscribeOutput = z.infer<typeof TranscribeOutput>;
+
+// Voice ids, default first. Synced to the dashboard; the AI SDK mirrors them (voices.ts).
+// OpenAI realtime speech presets (Codex v2 list, protocol.rs); the server rejects any other.
+export const OPENAI_SPEECH_VOICES = [
+  "marin",
+  "cedar",
+  "alloy",
+  "ash",
+  "ballad",
+  "coral",
+  "echo",
+  "sage",
+  "shimmer",
+  "verse",
+] as const;
+
+// GPT-Live voices (Codex v3 list, RealtimeVoicesList::builtin). Any other voice still gets a 201
+// from /calls, but the session never starts (sideband 404), so the server rejects it first.
+export const OPENAI_LIVE_VOICES = [
+  "cove",
+  "juniper",
+  "maple",
+  "spruce",
+  "ember",
+  "vale",
+  "breeze",
+  "arbor",
+  "sol",
+  "aube",
+  "bubbie",
+  "haetsal",
+  "hanul",
+  "himari",
+  "leher",
+  "miko",
+  "neer",
+  "porto",
+  "rindo",
+  "rio",
+  "rivage",
+  "selva",
+  "sonna",
+  "tinta",
+  "viola",
+] as const;
+
+// Grok /tts voices xAI lists for the subscription token (2026-11-06). Not validated: other ids
+// pass through to xAI.
+export const GROK_TTS_VOICES = {
+  female: ["ara", "aurora", "carina", "celeste", "eve", "iris", "liora", "luna", "ursa"],
+  male: [
+    "altair",
+    "atlas",
+    "castor",
+    "cosmo",
+    "helios",
+    "helix",
+    "kepler",
+    "leo",
+    "lumen",
+    "lux",
+    "naksh",
+    "orion",
+    "perseus",
+    "rex",
+    "rigel",
+    "sal",
+    "sirius",
+    "zagan",
+    "zenith",
+  ],
+} as const;
 
 export const SpeakInput = z.object({
   model: VoiceModelId.optional(),
@@ -554,6 +697,12 @@ export const SpeakInput = z.object({
   format: z.enum(["mp3", "wav", "pcm", "mulaw", "alaw"]).optional(),
   // OpenAI realtime speech only: style guidance appended to the verbatim-repeat instruction.
   instructions: z.string().min(1).max(2_000).optional(),
+  // Grok only: speaking rate, xAI's documented 0.7–1.5 (1 = normal).
+  speed: z.number().min(0.7).max(1.5).optional(),
+  // Per-character timing in the output (`audioTimestamps`). Grok returns it natively; for OpenAI
+  // realtime (no timing data) qgrid force-aligns the text to the generated audio with its built-in
+  // aligner (`timestampsSource: "aligned"`; without the aligner model, `timestampsError`).
+  withTimestamps: z.boolean().optional(),
   ...MediaCallOptions,
 });
 
@@ -565,9 +714,85 @@ export const SpeakOutput = z.object({
   mimeType: z.string(),
   tokenName: z.string(),
   requestLogId: z.number().optional(),
+  // Only with `withTimestamps`: input characters (spaces, punctuation, tags included) and the
+  // `[start, end]` seconds of each, index-aligned; named as @ai-sdk/xai exposes them.
+  audioTimestamps: z
+    .object({
+      graphChars: z.array(z.string()),
+      graphTimes: z.array(z.tuple([z.number(), z.number()])),
+    })
+    .optional(),
+  durationSec: z.number().optional(),
+  // "provider" when the TTS provider timed the audio itself, "aligned" when qgrid's aligner placed
+  // the text in the audio.
+  timestampsSource: z.enum(["provider", "aligned"]).optional(),
+  // Set when timestamps were requested but could not be produced; the audio is still returned.
+  timestampsError: z.string().optional(),
 });
 
 export type SpeakOutput = z.infer<typeof SpeakOutput>;
+
+// GPT-Live voice conversation (openai/gpt-live-1). The caller's WebRTC peer makes the SDP offer;
+// qgrid exchanges it with the subscription token and returns the answer, then logs the
+// conversation when the session ends. Audio flows between the caller and OpenAI only. The caller
+// ends the session by sending {"type":"session.close"} on its "oai-events" data channel; a dropped
+// peer keeps the session (and its billed time) running for about 30 s.
+// An earlier conversation the session starts from: a past live session's turns or a text chat
+// alike. Measured on the subscription route (2026-11-10): past 128 items, or with a system role,
+// OpenAI accepts the call but never starts the session; 1,000,000 characters still opened.
+export const LiveHistoryItem = z.object({
+  role: z.enum(["user", "assistant", "developer"]),
+  text: z.string().min(1),
+});
+
+export type LiveHistoryItem = z.infer<typeof LiveHistoryItem>;
+
+export const LiveCallInput = z.object({
+  model: z.literal("openai/gpt-live-1").optional(),
+  sdp: z
+    .string()
+    .startsWith("v=0", "sdp must be an SDP offer")
+    .max(64 * 1024),
+  // One of the live voices (cove by default); the realtime TTS voices do not apply.
+  voice: z.string().min(1).max(64).optional(),
+  instructions: z.string().min(1).max(8_000).optional(),
+  history: z
+    .array(LiveHistoryItem)
+    .max(128, "history holds at most 128 items")
+    .refine(
+      (items) => items.reduce((total, item) => total + item.text.length, 0) <= 1_000_000,
+      "history text exceeds 1,000,000 characters",
+    )
+    .optional(),
+  // What the voice hands off (lookups, reasoning) runs as a qgrid query on this model, chosen per
+  // session: any served model in QGRID_MODELS (default openai/gpt-6-luna at low effort).
+  // webSearch turns on the provider's hosted web search (openai/ and grok/ only).
+  delegation: z
+    .object({
+      model: z
+        .string()
+        .refine((id) => QGRID_MODELS.includes(id), "model must be one of QGRID_MODELS")
+        .optional(),
+      effort: Effort.optional(),
+      webSearch: z.boolean().optional(),
+    })
+    .optional(),
+  ...MediaCallOptions,
+});
+
+export type LiveCallInput = z.infer<typeof LiveCallInput>;
+
+export const LiveCallOutput = z.object({
+  // The SDP answer for the caller's peer connection.
+  sdp: z.string(),
+  callId: z.string(),
+  model: z.string(),
+  voice: z.string(),
+  tokenName: z.string(),
+  requestLogId: z.number().optional(),
+});
+
+export type LiveCallOutput = z.infer<typeof LiveCallOutput>;
 
 // ─── Run Lifecycle ───
 

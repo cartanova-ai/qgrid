@@ -187,10 +187,12 @@ describe("GrokVoiceClient.speak", () => {
       () => new Response(mp3, { status: 200, headers: { "content-type": "audio/mpeg" } }),
     );
     const client = new GrokVoiceClient({ fetch: fake.impl, platform });
+    const before = Date.now();
     const result = await client.speak("tok", { text: "hello", voice: "ara" });
 
     expect(result.mediaType).toBe("audio/mpeg");
     expect(result.audio).toEqual(mp3);
+    expect(result.firstByteAt).toBeGreaterThanOrEqual(before);
     expect(fake.calls).toHaveLength(1);
     const { url, init } = fake.calls[0]!;
     expect(url).toBe("https://api.x.ai/v1/tts");
@@ -206,7 +208,7 @@ describe("GrokVoiceClient.speak", () => {
     });
   });
 
-  it("passes explicit language and format and strips content-type parameters", async () => {
+  it("passes explicit language, format and speed and strips content-type parameters", async () => {
     const fake = fakeFetch(
       () =>
         new Response(mp3, { status: 200, headers: { "content-type": "audio/wav; codecs=1" } }),
@@ -217,12 +219,45 @@ describe("GrokVoiceClient.speak", () => {
       voice: "eve",
       language: "fr",
       format: "wav",
+      speed: 0.8,
     });
     expect(result.mediaType).toBe("audio/wav");
     const body = fake.calls[0]!.init.body;
     expect(typeof body === "string" && JSON.parse(body)).toMatchObject({
       language: "fr",
       format: "wav",
+      speed: 0.8,
+    });
+  });
+
+  it("asks for timestamps and decodes the JSON envelope, shifting mp3 timing by the encoder delay", async () => {
+    const fake = fakeFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            audio: Buffer.from(mp3).toString("base64"),
+            content_type: "audio/mpeg",
+            duration: 0.5,
+            audio_timestamps: { graph_chars: ["H", "i"], graph_times: [[0.08, 0.2], [0.2, 0.5]] },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const client = new GrokVoiceClient({ fetch: fake.impl });
+    const result = await client.speak("tok", { text: "Hi", with_timestamps: true });
+
+    const body = fake.calls[0]!.init.body;
+    expect(typeof body === "string" && JSON.parse(body)).toMatchObject({ with_timestamps: true });
+    expect(result.audio).toEqual(mp3);
+    expect(result.mediaType).toBe("audio/mpeg");
+    expect(result.durationSec).toBe(0.5);
+    // +46 ms: the mp3 decoder delay (1105 samples at 24 kHz).
+    expect(result.audioTimestamps).toEqual({
+      graphChars: ["H", "i"],
+      graphTimes: [
+        [0.126, 0.246],
+        [0.246, 0.546],
+      ],
     });
   });
 

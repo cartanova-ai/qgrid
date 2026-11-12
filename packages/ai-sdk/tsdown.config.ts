@@ -1,7 +1,7 @@
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: ["src/index.ts", "src/realtime.ts", "src/voices.ts"],
   dts: true,
   clean: true,
   deps: {

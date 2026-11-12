@@ -347,8 +347,9 @@ qgrid는 `grok/*` 모델을 qgrid 대시보드에 등록한 xAI 구독 토큰(�
 | `qgrid(id)` | `grok/grok-4.7`(카탈로그 기본 모델), `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`, 그 밖의 `grok/<id>` | `generateText`, `streamText` |
 | `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0` | `generateImage` |
 | `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
-| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI 구독: `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/gpt-transcribe`, `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`, `openai/whisper-1` | `transcribe` |
-| `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임); OpenAI 구독: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1`, `openai/gpt-realtime-1.5` | `generateSpeech` |
+| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI 구독: `openai/gpt-transcribe`(권장), `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`; `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/whisper-1`은 OpenAI가 종료하는 2027-02-26까지 | `transcribe` |
+| `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임); OpenAI 구독: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1` | `generateSpeech` |
+| `qgrid.realtime(id)`(2.20.0+; 브라우저: `@cartanova/qgrid-ai-sdk/realtime`의 `createQgridRealtime`) | `openai/gpt-live-1` | `experimental_useRealtime`(실험적, WebRTC) |
 
 qgrid는 카탈로그에 없는 language model ID를 거부하지 않고 그대로 전달합니다(OpenAI와 같음). 판단은
 subscription backend가 하며 다른 모델로 응답할 수 있으므로, 실제로 실행된 모델은 request log의 응답 모델(또는
@@ -394,11 +395,11 @@ Grok language model은 user 이미지 part(https URL 또는 inline bytes)를 버
 | Image | `n`(호출당 최대 3), `aspectRatio`, `xai.resolution`(`1k`/`1.5k`/`2k`), `xai.quality`, `xai.aspect_ratio`(`aspectRatio`가 없을 때) | 참조 `images`는 `referenceImages`(edit endpoint), `xai.output_format`은 `outputFormat`이 되며 `png`, `jpeg`, `webp`만 허용 | `size`, `seed`, `mask`, `xai.sync_mode`, `xai.user` |
 | Video | `duration`(정수 1-15), `aspectRatio`, `xai.resolution`(`480p`/`720p`/`1080p`), `xai.mode: "reference-to-video"`(지원하는 유일한 mode, `xai.referenceImageUrls` 필요), `xai.pollIntervalMs`, `xai.pollTimeoutMs` | `resolution` `WxH`는 `@ai-sdk/xai`와 같이 매핑(`1280x720` → `720p`), prompt `image`는 시작 프레임, `xai.referenceImageUrls`(7개가 아닌 최대 5개)는 `referenceImages`, `xai.lastFrame`(qgrid 확장, `grok-imagine-video-1.5` 전용) | `fps`, `seed`, `xai.keyframes`, `xai.storageOptions`, `xai.referenceVoiceIds`, `xai.user`. `xai.mode` `edit-video`/`extend-video`와 `xai.videoUrl`은 예외 |
 | Transcription | `xai.language` | 오디오 bytes는 base64로, `mediaType`은 파라미터 제거(`audio/webm;codecs=opus` → `audio/webm`) | 나머지 모든 `xai` 키(`audioFormat`, `sampleRate`, `format`, `diarize`, `keyterm`, ...) |
-| Speech | `voice`, `language` | `outputFormat`은 `format`(`mp3`, `wav`, `pcm`, `mulaw`, `alaw`, 그 외 값은 `@ai-sdk/xai`처럼 warning과 함께 `mp3`) | `instructions`, `speed`, 모든 `xai` 키(`sampleRate`, `bitRate`, `withTimestamps`, ...) |
+| Speech | `voice`, `language`, `speed`(0.7-1.5, 2.18.0+), `xai.withTimestamps` | `outputFormat`은 `format`(`mp3`, `wav`, `pcm`, `mulaw`, `alaw`, 그 외 값은 `@ai-sdk/xai`처럼 warning과 함께 `mp3`) | `instructions`, 그 밖의 모든 `xai` 키(`sampleRate`, `bitRate`, `replace`, ...) |
 
-**요청 크기.** qgrid 서버는 최대 10 MiB JSON body를 받습니다. inline 미디어는 base64로 전송되어 3분의 1만큼
+**요청 크기.** qgrid 서버는 최대 26 MiB JSON body를 받습니다. inline 미디어는 base64로 전송되어 3분의 1만큼
 커지므로, 서버는 inline 오디오, 각 inline 이미지, 한 요청의 inline 이미지 합계(비디오: `image` + `lastFrame` +
-참조 이미지)를 디코딩 기준 7 MiB로 제한합니다. SDK는 더 큰 입력을 전송 전에 거부하고, 서버 413도 같은 크기
+참조 이미지)를 디코딩 기준 19 MiB로 제한합니다(2.19.0+, 이전 서버와 SDK는 10 MiB와 7 MiB). SDK는 더 큰 입력을 전송 전에 거부하고, 서버 413도 같은 크기
 오류로 보여줍니다. 입력을 압축하거나, 옵션이 허용하면 https 이미지 URL을 넘기세요.
 
 ### Grok 이미지
@@ -465,7 +466,7 @@ import {
   generateSpeech,
   transcribe,
 } from "ai";
-import { qgrid } from "@cartanova/qgrid-ai-sdk";
+import { qgrid, type QgridGrokVoice } from "@cartanova/qgrid-ai-sdk";
 
 const transcript = await transcribe({
   model: qgrid.transcription("grok/grok-voice-transcribe-2.0"),
@@ -478,23 +479,26 @@ transcript.durationInSeconds;
 const speech = await generateSpeech({
   model: qgrid.speech("grok/grok-tts"),
   text: "Your build is ready.",
-  voice: "ara",
+  voice: "ara" satisfies QgridGrokVoice,
   language: "en",
   outputFormat: "mp3",
 });
 speech.audio.uint8Array;
 ```
 
-- `transcribe`는 bytes로 오디오 형식을 감지하고 실패하면 `audio/wav`를 씁니다. 서버는 `audio/*`가 아닌 값을 거부합니다. transcript에는 segment가 없습니다(`segments: []`).
-- 음성 합성 텍스트는 최대 15,000자입니다. `voice`, `language`, `outputFormat`을 지정하지 않으면 서버 기본값 `ara`, `en`, `mp3`가 쓰이며, live 검증된 조합은 이것뿐입니다. 다른 voice, language(`@ai-sdk/xai`의 `auto` 포함), codec은 그대로 전달되지만 미검증입니다. 서버가 돌려준 오디오 MIME 타입은 `providerMetadata.qgrid.mediaType`에 있고, AI SDK의 `speech.audio.mediaType`은 bytes에서 추정한 값입니다.
+- `transcribe`는 bytes로 오디오 형식을 감지하고 실패하면 `audio/wav`를 씁니다. 서버는 `audio/*`가 아닌 값을 거부합니다. transcript는 들린 단어마다 segment 하나를 담습니다(`segments: [{ text, startSecond, endSecond }]`). Grok은 직접 시간을 재고(2.17.0+), OpenAI는 서버가 내장 정렬기로 transcript를 오디오에 맞춥니다(서버 2.19.0+). 정렬에는 클립 길이의 약 5%만큼 시간이 더 듭니다. 서버에 정렬기가 없거나 클립이 정렬 한도(빽빽한 음성 기준 약 4분)를 넘으면 OpenAI segment는 비어 있습니다.
+- 음성 합성 텍스트는 최대 15,000자입니다. `voice`, `language`, `outputFormat`을 지정하지 않으면 서버 기본값 `ara`, `en`, `mp3`가 쓰입니다. 구독 토큰에 보이는 보이스 28종(여성 9, 남성 19. 예: `ara`, `eve`, `rex`. `QGRID_GROK_VOICES`, 타입 `QgridGrokVoice`로 export. 모든 보이스 목록은 브라우저/React Native 코드용으로 import가 없는 `@cartanova/qgrid-ai-sdk/voices`(2.21.0+)에서도 가져올 수 있음)은 2026-11-09에 모두 영어·mp3로 live 생성했습니다. 다른 language(`@ai-sdk/xai`의 `auto` 포함)와 codec은 그대로 전달되지만 미검증입니다. xAI 목록의 음성 태그(`[pause]`, `[laugh]`, `<whisper>...</whisper>` 등)는 2026-11 확인에서 글자로 읽히지 않았고, `[deadpan]` 같은 ElevenLabs식 감정 태그는 그 목록에 없습니다. `speed`는 말하기 속도입니다(1이 보통, 0.7-1.5 밖의 값은 서버가 거부). 서버가 돌려준 오디오 MIME 타입은 `providerMetadata.qgrid.mediaType`에 있고, AI SDK의 `speech.audio.mediaType`은 bytes에서 추정한 값입니다.
+- 단어 타이밍: `providerOptions: { xai: { withTimestamps: true } }`(2.16.0+, Grok) 또는 `providerOptions: { qgrid: { withTimestamps: true } }`(2.17.0+, Grok·OpenAI)를 주면 글자별 타이밍이 `providerMetadata.qgrid.audioTimestamps`에 담깁니다. `graphChars`는 입력 글자(공백·문장부호·음성 태그 포함), `graphTimes`는 같은 인덱스의 `[start, end]` 초이고, 전체 길이는 `providerMetadata.qgrid.duration`입니다. `@ai-sdk/xai`가 `providerMetadata.xai`에 담는 모양과 같습니다. `providerMetadata.qgrid.timestampsSource`는 Grok이면 `"provider"`(Grok이 직접 잰 값), OpenAI면 `"aligned"`입니다. OpenAI는 서버가 내장 정렬기로 생성된 오디오에 원문을 맞춰 만듭니다(서버 2.19.0+, 이전 서버는 Grok STT를 거쳤음). 정렬기는 qgrid Docker 이미지에 들어 있고 npm이나 pnpm 설치에서는 `qgrid --install-aligner`로 설치합니다. 정렬기가 없는 서버와 정렬기 한도(빽빽한 음성 기준 약 4분)를 넘는 긴 음성은 `timestampsError`를 돌려줍니다(오류에 그 대본의 한도가 나옴). 타이밍 단계가 실패해도 오디오는 돌려주고, 메타데이터에 `timestampsError`와 AI SDK warning을 남깁니다. 텍스트 정규화로 풀린 토큰은 첫 글자가 전체 구간을 가집니다. Grok mp3에는 앞부분 무음 정보(gapless 태그)가 없어 재생기가 인코더 지연을 그대로 재생하므로, 서버 2.19.0부터 qgrid가 Grok 타이밍에 그 46ms를 더해 실제 재생과 맞춥니다(`@ai-sdk/xai`의 원래 값보다 46ms 늦음).
 
 ### OpenAI 음성 인식과 합성 (ChatGPT 구독)
 
 `openai/` 음성 ID는 qgrid가 Codex에 쓰는 ChatGPT 구독 토큰으로 OpenAI realtime 세션을 사용합니다. 음성 인식은 Codex의 `/realtime/calls` 흐름을, 음성 합성은 텍스트를 그대로 읽는 realtime 대화 모델을 씁니다(구독에는 `gpt-4o-mini-tts`, `tts-1`이 없습니다). 옵션은 `providerOptions.openai` 아래 `@ai-sdk/openai` 이름을 따르고, `providerOptions.qgrid.tokenName`은 `openai/` 접두사가 필요합니다.
 
 ```typescript
+import { type QgridOpenAISpeechVoice } from "@cartanova/qgrid-ai-sdk";
+
 const transcript = await transcribe({
-  model: qgrid.transcription("openai/gpt-4o-mini-transcribe"),
+  model: qgrid.transcription("openai/gpt-transcribe"),
   audio: await readFile("meeting.wav"), // PCM16 WAV 또는 raw PCM만
   providerOptions: { openai: { language: "en", prompt: "qgrid, Codex" } },
 });
@@ -502,7 +506,7 @@ const transcript = await transcribe({
 const speech = await generateSpeech({
   model: qgrid.speech("openai/gpt-realtime-2.1-mini"),
   text: "Your build is ready.",
-  voice: "marin",
+  voice: "marin" satisfies QgridOpenAISpeechVoice,
   outputFormat: "wav",
   providerOptions: { openai: { instructions: "Calm and brisk." } },
 });
@@ -510,12 +514,117 @@ const speech = await generateSpeech({
 
 | 모델 | 그대로 전달(`@ai-sdk/openai` 이름) | 변환 | 미지원(경고) |
 | --- | --- | --- | --- |
-| Transcription | `openai.language`, `openai.prompt`(`gpt-realtime-whisper`는 HTTP 400으로 거부, `whisper-1`은 받지만 업스트림이 무시) | 입력은 PCM16 WAV(`audio/wav`) 또는 raw PCM(`audio/pcm;rate=…;channels=…`)만 가능하며 mp3/webm/ogg는 디코더가 추가되기 전까지 서버가 HTTP 400으로 거부합니다. `durationInSeconds`는 보낸 오디오에서 계산하고 `language`는 요청값을 그대로 돌려줍니다(realtime 세션은 둘 다 보고하지 않음). `segments`는 비어 있습니다 | `openai.temperature`, `openai.include`, `openai.timestampGranularities`, `openai.responseFormat`, `openai.chunkingStrategy`, `openai.streaming` |
-| Speech | `voice`(기본 `marin`; Codex v2 목록 `alloy ash ballad coral echo sage shimmer verse marin cedar`, 그 외는 HTTP 400), `instructions` / `openai.instructions`(원문 그대로 읽기 지시문 뒤에 붙는 스타일 안내) | `outputFormat`은 `wav`(기본, PCM16 24 kHz) 또는 `pcm`; 그 외 값은 `@ai-sdk/openai`가 `mp3`로 되돌리듯 경고와 함께 `wav`로 바뀝니다 | `language`, `speed`, `openai.speed` |
+| Transcription | `openai.language`(`gpt-transcribe`에는 목록 `languages`로 보냄), `openai.prompt`(`gpt-realtime-whisper`는 HTTP 400으로 거부, `whisper-1`은 받지만 업스트림이 무시) | 입력은 PCM16 WAV(`audio/wav`) 또는 raw PCM(`audio/pcm;rate=…;channels=…`)만 가능하며 mp3/webm/ogg는 디코더가 추가되기 전까지 서버가 HTTP 400으로 거부합니다. `durationInSeconds`는 보낸 오디오에서 계산하고 `language`는 요청값을 그대로 돌려줍니다(realtime 세션은 둘 다 보고하지 않음). `segments`에는 정렬한 단어 타이밍이 담깁니다(서버 2.19.0+) | `openai.temperature`, `openai.include`, `openai.timestampGranularities`, `openai.responseFormat`, `openai.chunkingStrategy`, `openai.streaming` |
+| Speech | `voice`(기본 `marin`; Codex v2 목록 `alloy ash ballad coral echo sage shimmer verse marin cedar`, `QGRID_OPENAI_SPEECH_VOICES`로 export; 그 외는 HTTP 400), `instructions` / `openai.instructions`(원문 그대로 읽기 지시문 뒤에 붙는 스타일 안내) | `outputFormat`은 `wav`(기본, PCM16 24 kHz) 또는 `pcm`; 그 외 값은 `@ai-sdk/openai`가 `mp3`로 되돌리듯 경고와 함께 `wav`로 바뀝니다 | `language`, `speed`, `openai.speed` |
 
-- 음성 인식은 먼저 Codex realtime call에서 25초 예산으로 실행됩니다(call은 생성 약 30초 뒤 정리됨). 그 안에 전사가 오지 않으면 서버가 직접 realtime 전사 소켓으로 1회 재시도합니다(최대 60초). 7 MiB 인라인 제한(24 kHz PCM 약 2.5분)은 보통 첫 경로에서 몇 초 안에 끝납니다.
+- 음성 인식은 먼저 Codex realtime call에서 25초 예산으로 실행됩니다(call은 생성 약 30초 뒤 정리됨). 그 안에 전사가 오지 않으면 서버가 직접 realtime 전사 소켓으로 1회 재시도합니다(최대 60초). 19 MiB 인라인 제한에는 24 kHz mono WAV가 약 6.9분 들어갑니다. 6.7분 영어 클립은 첫 경로에서 약 20초에 끝났고, transcript가 더 길게 나온 6.4분 클립은 기한을 넘겨 재시도 경로에서 52초에 끝났습니다.
 - 음성 합성은 TTS 모델이 아니라 텍스트를 읽는 대화 모델입니다. qgrid는 `<script>` 태그 안의 텍스트만 읽고 답하지 말라고 지시합니다. 원문 그대로 읽는지는 짧은 영어 문장과 질문형 영어 캐릭터 대사에서 검증했습니다. 모델이 실제로 말한 transcript를 요청 로그에 함께 남겨 비교할 수 있지만, 한영 혼합 텍스트에서는 transcript가 일치해도 영어 음성을 알아듣기 어려운 경우가 있었습니다.
-- 모델별 동작은 서버 저장소의 `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`에 기록되어 있습니다. 2026-10-17 기준 알려진 한계: `gpt-live-transcribe`, `gpt-realtime-whisper`는 60초 클립의 절반 정도만 반환하므로 짧은 발화에 쓰세요. `gpt-realtime-whisper`는 `openai.prompt`를 거부합니다(서버가 업스트림 호출 전에 HTTP 400). `whisper-1`은 `openai.prompt`를 받지만 무시합니다. 음성 합성은 `gpt-realtime-2.1-mini`가 모든 테스트 문장을 그대로 읽었고(13/13), `gpt-realtime-2.1`은 1회 의역(12/13), `gpt-realtime-1.5`는 텍스트를 읽지 않고 답변하는 경우가 잦았습니다(6/13). 2026-11-06에는 현재 프롬프트로 `gpt-realtime-2.1`과 `gpt-realtime-2.1-mini` 모두 질문형 캐릭터 대사 12/12를 그대로 읽었습니다(이전 프롬프트에서는 `gpt-realtime-2.1`이 7/12를 답변). `gpt-realtime-1.5`는 다시 측정하지 않았습니다. 정확성이 중요하면 로그의 transcript를 입력과 비교하세요.
+- `openai/gpt-transcribe`를 쓰세요. OpenAI는 `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1`을 2027-02-26에 종료합니다. 2026-11-10 합성 음성 벤치에서 `gpt-transcribe`는 영어 108클립에서 `gpt-4o-transcribe`와 같은 수준이었고(차이는 "21st"를 "twenty-first"로 쓰는 숫자 표기였음), 한영 혼합 18클립의 글자 오류율을 14.5%에서 4.4%로 낮췄습니다. `gpt-4o-transcribe`가 실패한 229초 클립도 끝까지 받아 적었고, `gpt-4o-transcribe`가 없는 말을 지어낸 무음과 잡음에는 아무것도 돌려주지 않았습니다. 학습자의 문법 오류를 고쳐 적을 때가 있으므로("we eat chicken"을 "we ate chicken"으로), 받아쓴 결과만으로 문법을 채점하지 마세요.
+- 모델별 동작은 서버 저장소의 `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`에 기록되어 있습니다. 2026-10-17 기준 알려진 한계: `gpt-live-transcribe`, `gpt-realtime-whisper`는 60초 클립의 절반 정도만 반환하므로 짧은 발화에 쓰세요. `gpt-realtime-whisper`는 `openai.prompt`를 거부합니다(서버가 업스트림 호출 전에 HTTP 400). `whisper-1`은 `openai.prompt`를 받지만 무시합니다. 음성 합성은 `gpt-realtime-2.1-mini`가 모든 테스트 문장을 그대로 읽었고(13/13), `gpt-realtime-2.1`은 1회 의역(12/13)했습니다. `gpt-realtime-1.5`는 텍스트를 읽지 않고 답변하는 경우가 잦아(6/13) 2.18.0에서 제외했습니다. 2026-11-06에는 현재 프롬프트로 `gpt-realtime-2.1`과 `gpt-realtime-2.1-mini` 모두 질문형 캐릭터 대사 12/12를 그대로 읽었습니다(이전 프롬프트에서는 `gpt-realtime-2.1`이 7/12를 답변). 2026-11-09에 독립 STT 2종으로 영어 108건(6문장, 보이스 `marin` `cedar` `ballad`, 각 3회)을 판정한 결과 `gpt-realtime-2.1`은 54/54, `gpt-realtime-2.1-mini`는 53/54였고, 실패 1건은 "Sure, let me read that out loud for you exactly as written."으로 시작했습니다. 한영 혼합 문장은 두 모델 모두 끝까지 읽었습니다(각 9/9). 모델이 남기는 transcript에는 이런 서두가 나타나지 않으므로, 정확성이 중요하면 transcript 대신 STT나 `withTimestamps`(정렬이 덧붙은 말을 건너뜀)로 오디오를 확인하세요.
+
+### OpenAI 실시간 음성 대화 (GPT-Live)
+
+서버 2.19.2+는 ChatGPT 구독 토큰으로 `openai/gpt-live-1` 대화를 엽니다. GPT-Live는 듣는 동안에도 말하는 대화 모델이라 음성 합성과는 다릅니다.
+
+오디오는 qgrid를 지나지 않습니다. 브라우저의 WebRTC 피어가 SDP offer를 만들고, 앱 서버가 이를 `POST /api/qgrid/liveCall`로 보낸 뒤, 돌아온 SDP answer를 브라우저에 적용합니다. 그 뒤 오디오와 이벤트는 브라우저와 OpenAI가 직접 주고받습니다. qgrid는 대화 텍스트와 세션 오디오 시간을 로그에 남기고, 오디오는 저장하지 않습니다.
+
+#### AI SDK 실험적 realtime 런타임으로 (SDK 2.20.0+)
+
+`qgrid.realtime("openai/gpt-live-1")`은 AI SDK `Experimental_RealtimeModelV4`입니다. 마이크, 재생, WebRTC 피어, 데이터 채널은 AI SDK realtime 세션(`@ai-sdk/react`의 `experimental_useRealtime`, `ai` 7.0.102+)이 맡고, 앱 서버 라우트는 SDP만 교환합니다. AI SDK에서 실험적 API라 `ai` 버전에 따라 바뀔 수 있습니다.
+
+```tsx
+// 브라우저: Node 전용 코드가 없는 /realtime 진입점에서 import합니다.
+import { createQgridRealtime } from "@cartanova/qgrid-ai-sdk/realtime";
+import { experimental_useRealtime } from "@ai-sdk/react";
+
+// 모듈 최상단에 둡니다. 훅은 model 객체가 바뀌면 세션을 새로 만듭니다.
+const model = createQgridRealtime("openai/gpt-live-1");
+
+function LiveConversation() {
+  // sessionConfig는 넘기지 않습니다. 보이스와 지시문은 서버 라우트가 정합니다.
+  const realtime = experimental_useRealtime({ model, api: { session: "/api/live" } });
+
+  return (
+    <>
+      <button onClick={() => realtime.connect()}>시작</button>
+      <button onClick={() => realtime.close()}>종료</button>
+      <p>{realtime.status}: {realtime.session?.usage?.seconds ?? 0}초</p>
+      {realtime.session?.transcripts.map((part, i) => (
+        <span key={i}>{part.speaker === "user" ? "🧑 " : ""}{part.delta}</span>
+      ))}
+    </>
+  );
+}
+```
+
+```typescript
+// 앱 서버 라우트: 훅이 { sdp, sessionConfig }를 보내고 { sdp, sessionId }를 기대합니다.
+import { qgrid, type QgridLiveVoice, type QgridRealtimeProviderOptions } from "@cartanova/qgrid-ai-sdk";
+
+app.post("/api/live", async (req, res) => {
+  const answer = await qgrid.realtime("openai/gpt-live-1").doCreateWebRTCSession({
+    sdp: req.body.sdp,
+    // 서버에서 정합니다. 브라우저가 보낸 sessionConfig는 믿지 않습니다.
+    sessionConfig: {
+      voice: "cove" satisfies QgridLiveVoice,
+      instructions: "You are a friendly English tutor.",
+      providerOptions: {
+        qgrid: { delegation: { model: "openai/gpt-6-luna", webSearch: true } } satisfies QgridRealtimeProviderOptions,
+      },
+    },
+  });
+  res.json(answer); // { sdp, sessionId, requestLogId }
+});
+```
+
+- `providerOptions.qgrid`(`QgridRealtimeProviderOptions`): `delegation`, `history`, `tokenName`, `logger`이며 아래 HTTP `params`와 같은 필드입니다. `sessionConfig.voice`와 `sessionConfig.instructions`는 `voice`, `instructions`로 보내고, 나머지 `sessionConfig` 필드는 보내지 않습니다. 이 값은 훅이 아니라 서버 호출에서 정하세요. 훅은 `sessionConfig` 객체가 바뀌면 세션을 새로 만들기 때문에, 호출부에 객체를 바로 쓰면 렌더할 때마다 세션이 다시 시작됩니다. `serverUrl`과 `projectName`은 `createQgridRealtime(id, config)` 또는 `QGRID_URL` / `QGRID_PROJECT_NAME`에서 가져옵니다.
+- 음성 모델의 위임은 qgrid 서버가 답합니다. 그래서 각 `delegation-created` 이벤트는 `target: "provider"`로 표시되며, 앱이 돌려보낼 것은 없습니다. 세션은 `delegationMode`를 알리지 않습니다. AI SDK 런타임이 `"provider"`를 거부하고, `"client"`는 앱이 답해야 한다는 뜻이기 때문입니다.
+- 지원하는 명령: `close()`(`session.close`를 보내고 최종 사용량을 기다림)와 `sendEvent({ type: "context-append", content, delegationId })`(음성이 쓸 텍스트 추가, 세션 전체에는 `delegationId: null`). 마이크 끄기, 세션 변경 등 나머지 명령은 `UnsupportedFunctionalityError`를 던집니다.
+- 이벤트: `session.transcripts`에 말한 텍스트가 `transcript-fragment` 이벤트(`speaker`, `delta`, `startMs`, `endMs`)로 쌓입니다. 조각은 턴의 일부이지 턴 전체가 아닙니다. `session.usage.seconds`는 세션 오디오 시간입니다. GPT-Live 원본 이벤트는 각 이벤트의 `raw`에 있습니다.
+
+#### AI SDK 없이 (HTTP)
+
+```typescript
+// 브라우저
+const pc = new RTCPeerConnection();
+const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+mic.getTracks().forEach((track) => pc.addTrack(track));
+pc.addEventListener("track", (event) => {
+  speaker.srcObject = new MediaStream([event.track]); // <audio autoplay> 요소
+});
+
+const events = pc.createDataChannel("oai-events");
+events.addEventListener("message", (event) => console.log(JSON.parse(event.data)));
+
+const offer = await pc.createOffer();
+await pc.setLocalDescription(offer);
+const { sdp } = await fetch("/live", { method: "POST", body: offer.sdp }).then((r) => r.json());
+await pc.setRemoteDescription({ type: "answer", sdp });
+
+// 종료: 피어만 닫으면 세션과 과금 시간이 약 30초 더 이어집니다.
+events.send(JSON.stringify({ type: "session.close" }));
+
+// 앱 서버
+app.post("/live", async (req, res) => {
+  const response = await fetch(`${QGRID_URL}/api/qgrid/liveCall`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      params: { sdp: req.body, voice: "cove", instructions: "You are a friendly English tutor.", projectName: "my-app" },
+    }),
+  });
+  res.status(response.status).json(await response.json());
+});
+```
+
+- 위임: GPT-Live는 혼자 답할 수 없는 일(검색, 추론)을 클라이언트에 넘기고, 답이 올 때까지 말을 이어갑니다. Codex가 자기 에이전트로 이 요청을 처리하듯 qgrid가 처리합니다. 지금까지의 대화와 함께 세션의 위임 모델로 qgrid query를 돌리고, 음성이 그 답을 말합니다. 세션마다 `params.delegation`으로 고릅니다. `model`(qgrid가 서비스하는 모델, 대시보드 채팅과 같은 목록인 서버 `qgrid.types.ts`의 `QGRID_MODELS`. 기본 `openai/gpt-6-luna`, 목록 밖은 HTTP 400), `effort`(기본 `low`, `medium`, `high`), `webSearch`(제공자의 hosted 웹 검색, `openai/`·`grok/`만, 기본 꺼짐). 위임이 실패하면 짧은 실패 안내를 돌려주어 음성이 기다리지 않고 그 사실을 말하게 합니다. 위임은 각각 `delegation` tool 단계로 기록되고, 백엔드 비용이 실행 비용에 더해집니다.
+- 이전 대화: `params.history`로 세션을 이전 대화에서 시작합니다. 형식은 `[{ role: "user" | "assistant" | "developer", text }]`이고 오래된 것부터 넣습니다. 지난 live 세션의 턴이든 텍스트 채팅 기록이든 똑같이 넣으면, 음성과 위임 모두 이미 나눈 대화로 받아들입니다. 최대 128개, 100만 자까지입니다. 128개를 넘거나 다른 역할을 넣으면 OpenAI가 call은 받지만 세션을 시작하지 않아서, 서버가 미리 HTTP 400으로 막습니다. 세션을 넘겨 대화를 이어 가거나 네트워크가 끊긴 뒤 다시 붙을 때는 지난 세션의 턴을 넣으면 됩니다.
+- 요청 `params`: `sdp`(offer, 필수), `voice`, `instructions`, `history`, `delegation`, 그리고 다른 엔드포인트와 같은 `tokenName`(`openai/` 접두사), `projectName`, `logger`. `model`은 생략하거나 `openai/gpt-live-1`만 됩니다. 다른 값은 HTTP 400입니다.
+- 응답: `sdp`(answer), `callId`, `model`, `voice`, `tokenName`, `requestLogId`. 요청 로그는 세션 내내 `running`이고, 턴이 끝날 때마다 세션 시간이 붙은 대화가 갱신되어 진행 중에도 볼 수 있습니다. 세션이 끝나면 비용 추정치(세션 오디오 분당 $0.05, API 정가)와 함께 마무리됩니다.
+- 음성(`QGRID_LIVE_VOICES`, 타입 `QgridLiveVoice`, `/realtime` 진입점에서도 export): `cove`(기본) `juniper maple spruce ember vale breeze arbor sol aube bubbie haetsal hanul himari leher miko neer porto rindo rio rivage selva sonna tinta viola`. realtime 음성 합성용 음성(`marin` 등)은 쓸 수 없습니다. OpenAI가 call은 받아 주지만 세션이 시작되지 않기 때문에 서버가 HTTP 400으로 막습니다.
+- 데이터 채널 이벤트: `turn.created`, `turn.delta`, `turn.done`이 말하는 대로 각 턴의 `role`과 `transcript`를 전하고, `session.usage.updated`와 `session.closed`가 `usage.audio_duration_ms`를 전합니다. 세션은 시작 2시간 뒤 스스로 끝납니다.
+- 엔드포인트는 브라우저가 아니라 앱 서버에서 부르세요. qgrid에는 호출자 인증이 없고 CORS 헤더도 보내지 않습니다.
+- 업스트림이 요청한 모델 이름을 무시해서 실제 모델은 확인할 수 없습니다. Codex도 qgrid도 `gpt-live-1-codex`를 보냅니다. 호출자가 정의한 도구는 열지 않았습니다. 음성의 위임은 qgrid가 고른 모델로만 처리합니다.
 
 ## Telemetry Logger
 

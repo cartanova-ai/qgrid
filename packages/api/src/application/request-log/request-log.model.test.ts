@@ -154,6 +154,23 @@ describe("RequestLogModel TTFT", () => {
       }),
     );
   });
+
+  it("prefers an explicit ttft_ms for runs without generate steps", async () => {
+    const ubRegister = vi.fn();
+    const transaction = vi.fn(async (cb: (trx: { ubUpsert: () => Promise<number[]> }) => void) =>
+      cb({ ubUpsert: vi.fn(async () => [7]) }),
+    );
+    const derived = vi.spyOn(RequestLogModel, "firstGenerateStepTtft").mockResolvedValue(55);
+    vi.spyOn(
+      RequestLogModel as unknown as { getPuri: () => { ubRegister: typeof ubRegister; transaction: typeof transaction } },
+      "getPuri",
+    ).mockReturnValue({ ubRegister, transaction });
+
+    await RequestLogModel.finishRun(7, { status: "error", error_message: "boom", ttft_ms: 240 });
+
+    expect(ubRegister).toHaveBeenCalledWith("request_logs", expect.objectContaining({ id: 7, ttft_ms: 240 }));
+    expect(derived).not.toHaveBeenCalled();
+  });
 });
 
 describe("RequestLogModel toolsView", () => {
@@ -414,6 +431,25 @@ describe("RequestLogModel run lifecycle", () => {
     );
     expect(candidateChain.where).toHaveBeenCalledWith("request_log_steps.tool_result", null);
     expect(candidateChain.where).toHaveBeenCalledWith("request_log_steps.error", null);
+  });
+
+  it("closes only live runs still running past the threshold", async () => {
+    const chain = { from: vi.fn(), where: vi.fn(), update: vi.fn(async () => 2) };
+    chain.from.mockReturnValue(chain);
+    chain.where.mockReturnValue(chain);
+    vi.spyOn(
+      RequestLogModel as unknown as { getPuri: () => typeof chain },
+      "getPuri",
+    ).mockReturnValue(chain);
+    const threshold = new Date("2026-11-10T00:00:00.000Z");
+
+    await expect(RequestLogModel.expireStaleLiveRuns(threshold, "server stopped")).resolves.toBe(2);
+
+    expect(chain.from).toHaveBeenCalledWith("request_logs");
+    expect(chain.where).toHaveBeenCalledWith("media_kind", "live");
+    expect(chain.where).toHaveBeenCalledWith("status", "running");
+    expect(chain.where).toHaveBeenCalledWith("created_at", "<", threshold);
+    expect(chain.update).toHaveBeenCalledWith({ status: "error", error_message: "server stopped" });
   });
 
   it("expires stale candidates independently", async () => {

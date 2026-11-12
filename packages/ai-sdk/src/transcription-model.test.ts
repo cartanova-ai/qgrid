@@ -58,6 +58,28 @@ describe("qgrid.transcription with AI SDK transcribe", () => {
     expect(result.providerMetadata.qgrid).toEqual({ tokenName: "grok/main", requestLogId: 5 });
   });
 
+  it("maps Grok word timing to AI SDK segments", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          text: "hello world",
+          model: "grok/grok-voice-transcribe-2.0",
+          tokenName: "grok/main",
+          words: [
+            { text: "hello", start: 0.1, end: 0.4 },
+            { text: "world", start: 0.5, end: 0.9 },
+          ],
+        }),
+      ),
+    );
+    const result = await transcribe({ model: qgrid.transcription("grok/grok-voice-transcribe-2.0"), audio: mp3 });
+    expect(result.segments).toEqual([
+      { text: "hello", startSecond: 0.1, endSecond: 0.4 },
+      { text: "world", startSecond: 0.5, endSecond: 0.9 },
+    ]);
+  });
+
   it("passes base64 strings through and strips media type parameters", async () => {
     const fetchMock = mockTranscribe();
     const model = qgrid.transcription("grok/grok-voice-transcribe-2.0");
@@ -69,16 +91,16 @@ describe("qgrid.transcription with AI SDK transcribe", () => {
   it("rejects oversized audio and non-audio media types before transport", async () => {
     const fetchMock = mockTranscribe();
     const model = qgrid.transcription("grok/grok-voice-transcribe-2.0");
-    await expect(model.doGenerate({ audio: new Uint8Array(8 * 1024 * 1024), mediaType: "audio/wav" }))
-      .rejects.toThrow("above the qgrid server limit of 7.00 MiB");
+    await expect(model.doGenerate({ audio: new Uint8Array(20 * 1024 * 1024), mediaType: "audio/wav" }))
+      .rejects.toThrow("above the qgrid server limit of 19.00 MiB");
     await expect(model.doGenerate({ audio: mp3, mediaType: "video/mp4" })).rejects.toThrow("mediaType must be audio/*");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("accepts audio at exactly the 7 MiB inline limit", async () => {
+  it("accepts audio at exactly the 19 MiB inline limit", async () => {
     const fetchMock = mockTranscribe();
     const model = qgrid.transcription("grok/grok-voice-transcribe-2.0");
-    await model.doGenerate({ audio: new Uint8Array(7 * 1024 * 1024), mediaType: "audio/wav" });
+    await model.doGenerate({ audio: new Uint8Array(19 * 1024 * 1024), mediaType: "audio/wav" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

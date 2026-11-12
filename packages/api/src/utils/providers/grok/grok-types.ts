@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { type CharTimestamps } from "../../speech-alignment";
 import { type JsonValue } from "../common/provider-types";
 import { GROK_AUTH_ISSUER } from "./grok-constants";
 
@@ -274,6 +275,18 @@ export const GrokSttResponse = z.looseObject({
   text: z.string(),
   language: z.string().optional(),
   duration: z.number().nonnegative().optional(),
+  // Word-level timing, sent by default (verified on the subscription token 2026-11-09); `speaker`
+  // only with diarize.
+  words: z
+    .array(
+      z.looseObject({
+        text: z.string(),
+        start: z.number(),
+        end: z.number(),
+        speaker: z.number().optional(),
+      }),
+    )
+    .optional(),
 });
 
 export type GrokSttResponse = z.infer<typeof GrokSttResponse>;
@@ -284,6 +297,10 @@ export const GrokTtsRequest = z.object({
   voice: z.string().min(1),
   language: z.string().min(1),
   format: z.string().min(1),
+  // true switches /tts to a JSON envelope with per-character timing (verified on the subscription
+  // token 2026-11-09).
+  with_timestamps: z.boolean().optional(),
+  speed: z.number().optional(),
 });
 
 export type GrokTtsRequest = z.infer<typeof GrokTtsRequest>;
@@ -364,6 +381,11 @@ export interface GrokTranscribeRequest {
 export interface GrokSpeechResult {
   audio: Uint8Array;
   mediaType: string;
+  /** Only with `with_timestamps`; named as `@ai-sdk/xai` exposes it. */
+  audioTimestamps?: CharTimestamps;
+  durationSec?: number;
+  /** Epoch ms when the response headers arrived; /tts is not streamed, so this is first byte. */
+  firstByteAt?: number;
 }
 
 export interface GrokVoicePort {

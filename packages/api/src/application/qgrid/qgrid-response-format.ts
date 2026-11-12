@@ -46,14 +46,26 @@ export function formatImagePartForLog(image: Extract<QgridContent, { type: "imag
   return `<img src="data:${image.mediaType ?? "image/png"};base64,${image.data}" alt="${alt}" />`;
 }
 
+/** Stands in for an image the run's response already carries, so the request log stores it once. */
+export function imagePlaceholderForLog(mediaType: string | undefined, base64: string): string {
+  return `[image ${mediaType ?? "image/png"} ${base64ByteSize(base64)} bytes, shown in the response]`;
+}
+
 export function imageGenerationToolArgs(
   args: QueryInput,
   options: { includeInputImages?: boolean; generation?: ImageGenerationMetadata } = {},
 ): string {
   const resolved = resolveImageGenerationOptions(args.imageGenerationOptions);
 
+  // The run's input_images column keeps the bytes; the step keeps only what was sent.
   const inputImages =
-    options.includeInputImages === false ? [] : extractInputImagesForToolArgs(args);
+    options.includeInputImages === false
+      ? []
+      : extractInputImagesForToolArgs(args).map(({ mediaType, url, byteSize }) => ({
+          mediaType,
+          url,
+          byteSize,
+        }));
 
   // Keys are assigned in their serialized order; request logs store this JSON text.
   const toolArgs: Record<string, JsonValue> = {};
@@ -94,10 +106,12 @@ export function imageGenerationToolArgs(
   return JSON.stringify(toolArgs);
 }
 
+/** `imagesInResponse`: the run's response stores these images, so the steps keep placeholders. */
 export function buildImageGenerationToolSteps(
   args: QueryInput,
   images: Extract<QgridContent, { type: "image" }>[],
   stepIndex: number,
+  imagesInResponse: boolean,
 ): Array<{
   step_index: number;
   type: "tool_call";
@@ -119,7 +133,9 @@ export function buildImageGenerationToolSteps(
       includeInputImages: index === 0,
       generation: image.generation,
     }),
-    tool_result: formatImagePartForLog(image),
+    tool_result: imagesInResponse
+      ? imagePlaceholderForLog(image.mediaType, image.data)
+      : formatImagePartForLog(image),
   }));
 }
 

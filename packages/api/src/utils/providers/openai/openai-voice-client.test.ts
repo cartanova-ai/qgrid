@@ -3,10 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { CODEX_CLI_ORIGINATOR } from "./openai-backend-protocol";
 import type { OpenAIWebSocketFactory, OpenAIWebSocketLike } from "./openai-direct-client";
 import {
+  buildLiveSession,
   buildOpenAIRealtimeHeaders,
   buildSpeechSession,
   buildTranscriptionSession,
   decodeWav,
+  OPENAI_LIVE_WS_URL,
   OPENAI_REALTIME_CALLS_URL,
   OPENAI_REALTIME_WS_URL,
   prepareRealtimeInput,
@@ -157,10 +159,14 @@ describe("openai realtime protocol", () => {
       audio: {
         input: {
           format: { type: "audio/pcm", rate: 24000 },
-          transcription: { model: "gpt-transcribe", language: "en", prompt: "qgrid" },
+          transcription: { model: "gpt-transcribe", languages: ["en"], prompt: "qgrid" },
           turn_detection: null,
         },
       },
+    });
+
+    expect(buildTranscriptionSession({ model: "gpt-4o-transcribe", language: "ko" })).toMatchObject({
+      audio: { input: { transcription: { model: "gpt-4o-transcribe", language: "ko" } } },
     });
   });
 
@@ -175,7 +181,7 @@ describe("openai realtime protocol", () => {
         input: {
           format: { type: "audio/pcm", rate: 24000 },
           noise_reduction: { type: "near_field" },
-          transcription: { model: "gpt-4o-mini-transcribe" },
+          transcription: { model: "gpt-transcribe" },
           turn_detection: {
             type: "server_vad",
             interrupt_response: true,
@@ -520,7 +526,10 @@ describe("OpenAIVoiceClient.speak", () => {
 
     const pcm = Buffer.alloc(4800, 1);
     socket.message({ type: "response.created" });
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     socket.message({ type: "response.output_audio.delta", delta: pcm.subarray(0, 2400).toString("base64") });
+    await tick();
+    now.mockReturnValue(2_000);
     socket.message({ type: "response.output_audio.delta", delta: pcm.subarray(2400).toString("base64") });
     socket.message({ type: "response.output_audio_transcript.done", transcript: "Hello from qgrid." });
     socket.message({
@@ -537,6 +546,9 @@ describe("OpenAIVoiceClient.speak", () => {
     expect(decodeWav(speech.audio).samples.length).toBe(2400);
     expect(speech.transcript).toBe("Hello from qgrid.");
     expect(speech.usage).toEqual({ textTokens: 30, audioTokens: 32, inputTokens: 30, outputTokens: 62 });
+    // First delta, not the last one or response.done.
+    expect(speech.firstAudioAt).toBe(1_000);
+    now.mockRestore();
   });
 
   it("rejects voices outside the Codex v2 list and empty text before connecting", async () => {
@@ -574,3 +586,206 @@ describe("OpenAIVoiceClient.speak", () => {
   });
 });
 
+describe("OpenAIVoiceClient.createLiveCall", () => {
+  // Shapes observed live on 2026-11-10 (SON-592): a browser peer in conversation with gpt-live-1.
+  const userTurn = {
+    type: "turn.done",
+    turn: { id: "turn_u", role: "user", start_ms: 600, end_ms: 5800, transcript: "Hi there?" },
+  };
+
+  const assistantTurn = {
+    type: "turn.done",
+    turn: { id: "turn_a", role: "assistant", start_ms: 5600, end_ms: 9400, transcript: "Hello!" },
+  };
+
+  it("exchanges the offer through /calls with the alpha header and summarizes the sideband", async () => {
+    const fetchMock = vi.fn(async () => callsResponse("rtc_live"));
+    const ws = mockedWebSocket();
+
+    const client = new OpenAIVoiceClient({
+      fetch: fetchMock as unknown as typeof fetch,
+      webSocketFactory: ws.factory,
+    });
+
+    const progress: number[] = [];
+
+    const call = await client.createLiveCall(credentials, {
+      sdp: "v=0\r\noffer",
+      voice: "hanul",
+      instructions: "Be brief.",
+      onTurn: (turns) => progress.push(turns.length),
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`${OPENAI_REALTIME_CALLS_URL}?intent=quicksilver&architecture=avas`);
+    const headers = init.headers as Record<string, string>;
+    expect(headers["OpenAI-Alpha"]).toBe("quicksilver=v2");
+    expect(headers.Authorization).toBe("Bearer access");
+
+    expect(JSON.parse(String(init.body))).toEqual({
+      sdp: "v=0\r\noffer",
+      session: {
+        model: "gpt-live-1-codex",
+        instructions: "Be brief.",
+        audio: { output: { voice: "hanul" } },
+        delegation: { type: "client" },
+      },
+    });
+
+    expect(buildLiveSession({ voice: "cove" })).toMatchObject({ instructions: "" });
+    expect(call).toMatchObject({ sdp: "v=0", callId: "rtc_live" });
+    expect(call.quotaHeaders.get("x-codex-primary-used-percent")).toBe("88");
+    expect(ws.calls[0]?.url).toBe(`${OPENAI_LIVE_WS_URL}/rtc_live`);
+    expect(ws.calls[0]?.headers["OpenAI-Alpha"]).toBe("quicksilver=v2");
+
+    const socket = ws.sockets[0]!;
+    socket.emit("open");
+    socket.message({ type: "session.started", session: { id: "rtc_live", expires_at: 1 } });
+    socket.message({ type: "session.input_audio.append", audio: "AAAA" });
+    socket.message(userTurn);
+    socket.message({ type: "session.output_audio.delta", delta: "AAAA" });
+    socket.message(assistantTurn);
+    socket.message({ type: "session.usage.updated", usage: { audio_duration_ms: 5000 } });
+
+    socket.message({
+      type: "session.closed",
+      reason: "client_request",
+      usage: { audio_duration_ms: 9400 },
+    });
+
+    await expect(call.ended).resolves.toMatchObject({
+      turns: [
+        { role: "user", transcript: "Hi there?", startMs: 600, endMs: 5800 },
+        { role: "assistant", transcript: "Hello!", startMs: 5600, endMs: 9400 },
+      ],
+      audioDurationMs: 9400,
+      endReason: "client_request",
+    });
+    expect(progress).toEqual([1, 2]);
+    // The session belongs to the caller's peer: qgrid sends nothing on the sideband.
+    expect(socket.sent).toHaveLength(0);
+    expect(socket.closed?.code).toBe(1000);
+  });
+
+  it("answers a delegation on the sideband and keeps the session's events", async () => {
+    const ws = mockedWebSocket();
+
+    const client = new OpenAIVoiceClient({
+      fetch: (async () => callsResponse("rtc_live")) as unknown as typeof fetch,
+      webSocketFactory: ws.factory,
+    });
+
+    const onDelegation = vi.fn(async () => "Nvidia is in today's top story.");
+    const call = await client.createLiveCall(credentials, { sdp: "v=0", onDelegation });
+    const socket = ws.sockets[0]!;
+    socket.emit("open");
+    socket.message({ type: "session.input_audio.append", audio: "AAAA" });
+    socket.message({ type: "turn.delta", delta: " news", turn_id: "turn_u" });
+
+    socket.message({
+      type: "delegation.created",
+      item: {
+        id: "item_d",
+        type: "delegation",
+        target: "client",
+        handoff_id: "handoff_1",
+        content: [{ type: "input_text", text: "Look up today's top tech news" }],
+      },
+    });
+
+    await tick();
+    await tick();
+
+    expect(onDelegation).toHaveBeenCalledWith({ itemId: "item_d", text: "Look up today's top tech news" });
+    expect(socket.sentEvents()).toEqual([
+      {
+        type: "delegation.context.append",
+        delegation_item_id: "item_d",
+        content: [{ type: "input_text", text: "Nvidia is in today's top story." }],
+      },
+    ]);
+
+    socket.message({ type: "session.closed", reason: "client_request", usage: { audio_duration_ms: 1 } });
+    const summary = await call.ended;
+
+    // Audio copies and word-level text are skipped; qgrid's own answer is logged with them.
+    expect(summary.events.map(({ event }) => (event as { type: string }).type)).toEqual([
+      "delegation.created",
+      "delegation.context.append",
+      "session.closed",
+    ]);
+  });
+
+  it("seeds the session with history as Codex's initial_items", async () => {
+    const fetchMock = vi.fn(async () => callsResponse("rtc_live"));
+    const client = new OpenAIVoiceClient({ fetch: fetchMock as unknown as typeof fetch });
+
+    await client.createLiveCall(credentials, {
+      sdp: "v=0",
+      history: [
+        { role: "developer", text: "Stay in character as Kuma." },
+        { role: "user", text: "My name is Dongseon." },
+        { role: "assistant", text: "Nice to meet you!" },
+      ],
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).session.initial_items).toEqual([
+      { type: "message", role: "developer", content: [{ type: "input_text", text: "Stay in character as Kuma." }] },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "My name is Dongseon." }] },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "Nice to meet you!" }] },
+    ]);
+  });
+
+  it("ends at a bare sideband close with the last reported usage", async () => {
+    const ws = mockedWebSocket();
+
+    const client = new OpenAIVoiceClient({
+      fetch: (async () => callsResponse("rtc_live")) as unknown as typeof fetch,
+      webSocketFactory: ws.factory,
+    });
+
+    const call = await client.createLiveCall(credentials, { sdp: "v=0" });
+    const socket = ws.sockets[0]!;
+    socket.emit("open");
+    socket.message(userTurn);
+    socket.message({ type: "session.usage.updated", usage: { audio_duration_ms: 27_400 } });
+    socket.emit("close", 1006, Buffer.from(""));
+
+    await expect(call.ended).resolves.toMatchObject({
+      turns: [{ role: "user" }],
+      audioDurationMs: 27_400,
+      endReason: "sideband closed (1006)",
+    });
+  });
+
+  it("resolves, never rejects, when the sideband handshake fails", async () => {
+    const ws = mockedWebSocket();
+
+    const client = new OpenAIVoiceClient({
+      fetch: (async () => callsResponse("rtc_live")) as unknown as typeof fetch,
+      webSocketFactory: ws.factory,
+    });
+
+    const call = await client.createLiveCall(credentials, { sdp: "v=0" });
+    ws.sockets[0]!.emit("unexpected-response", {}, { statusCode: 404 });
+
+    await expect(call.ended).resolves.toEqual({
+      turns: [],
+      events: [],
+      audioDurationMs: undefined,
+      endReason: "sideband error",
+      error: "realtime socket handshake rejected with HTTP 404",
+    });
+  });
+
+  it("rejects voices outside the live list before any network call", async () => {
+    const fetchMock = vi.fn();
+    const client = new OpenAIVoiceClient({ fetch: fetchMock as unknown as typeof fetch });
+
+    await expect(
+      client.createLiveCall(credentials, { sdp: "v=0", voice: "marin" }),
+    ).rejects.toBeInstanceOf(OpenAIVoiceInputError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

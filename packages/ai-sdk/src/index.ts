@@ -47,6 +47,7 @@ import {
   THREAD_COORD_TTL_MS,
   TOP_LEVEL_SCHEMA_WARNING,
 } from "./qgrid.constant";
+import { createQgridRealtime } from "./realtime";
 import { createQgridSpeech } from "./speech-model";
 import { createQgridTranscription } from "./transcription-model";
 import {
@@ -1065,6 +1066,16 @@ qgrid.transcription = createQgridTranscription;
 
 qgrid.speech = createQgridSpeech;
 
+qgrid.realtime = createQgridRealtime;
+
+export {
+  createQgridRealtime,
+  type QgridLiveRealtimeModel,
+  type QgridRealtimeConfig,
+  type QgridRealtimeModel,
+  type QgridRealtimeProviderOptions,
+} from "./realtime";
+
 export {
   QGRID_MAX_REQUEST_BODY_BYTES,
   QgridMediaHttpError,
@@ -1089,6 +1100,15 @@ export {
 } from "./transcription-model";
 
 export { type QgridOpenAISpeechProviderOptions } from "./speech-model";
+
+export {
+  QGRID_GROK_VOICES,
+  QGRID_LIVE_VOICES,
+  QGRID_OPENAI_SPEECH_VOICES,
+  type QgridGrokVoice,
+  type QgridLiveVoice,
+  type QgridOpenAISpeechVoice,
+} from "./voices";
 
 export { createQgridLogger } from "./logger";
 

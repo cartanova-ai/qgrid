@@ -7,12 +7,12 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { z } from "zod";
 import ArrowLeftIcon from "~icons/lucide/arrow-left";
-import CheckIcon from "~icons/lucide/check";
 import ChevronDownIcon from "~icons/lucide/chevron-down";
-import CopyIcon from "~icons/lucide/copy";
 import XIcon from "~icons/lucide/x";
 import ZapIcon from "~icons/lucide/zap";
 
+import { CodePanel, CopyButton, highlightCode } from "@/components/qgrid/CodePanel";
+import { TimedPlayer, type TimedWord } from "@/components/qgrid/TimedPlayer";
 import { cacheHitRate, formatMicroUsd } from "@/lib/cost";
 import { requestModelDisplay } from "@/lib/request-model";
 import { type ToolDefinitions, type ToolView } from "@/services/request-log/request-log.types";
@@ -73,63 +73,49 @@ function safeParseJson(text: string | null | undefined): JsonValue {
   }
 }
 
-function CopyButton({ text, dark }: { text: string; dark?: boolean }) {
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return undefined;
-    const id = setTimeout(() => setCopied(false), 1500);
+type ImageSegment =
+  | { type: "text"; text: string }
+  | { type: "image"; src: string; alt: string }
+  | { type: "audio"; src: string };
 
-    return () => clearTimeout(id);
-  }, [copied]);
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-  };
-
-  return (
-    <button
-      type="button"
-      className={`absolute top-2 right-2 p-1 rounded transition-colors ${
-        dark ? "text-sand-500 hover:text-sand-300" : "text-sand-400 hover:text-sand-600"
-      }`}
-      onClick={handleCopy}
-    >
-      {copied ? (
-        <CheckIcon className="size-3.5 text-sage-500" />
-      ) : (
-        <CopyIcon className="size-3.5" />
-      )}
-    </button>
-  );
-}
-
-type ImageSegment = { type: "text"; text: string } | { type: "image"; src: string; alt: string };
-
-const DATA_IMAGE_TAG_RE =
-  /<img\s+[^>]*src=["'](data:image\/[^"']+;base64,[^"']+)["'][^>]*(?:alt=["']([^"']*)["'][^>]*)?\/?>/gi;
+// Image rows embed `<img src="data:image/...">`; speech rows embed `<audio src="data:audio/...">`.
+const DATA_MEDIA_TAG_RE =
+  /<img\s+[^>]*src=["'](data:image\/[^"']+;base64,[^"']+)["'][^>]*(?:alt=["']([^"']*)["'][^>]*)?\/?>|<audio\s+[^>]*src=["'](data:audio\/[^"']+;base64,[^"']+)["'][^>]*>(?:<\/audio>)?/gi;
 
 function parseImageSegments(text: string): ImageSegment[] {
   const segments: ImageSegment[] = [];
   let cursor = 0;
 
-  for (const match of text.matchAll(DATA_IMAGE_TAG_RE)) {
+  for (const match of text.matchAll(DATA_MEDIA_TAG_RE)) {
     const index = match.index ?? 0;
 
     if (index > cursor) segments.push({ type: "text", text: text.slice(cursor, index) });
-    segments.push({ type: "image", src: match[1], alt: match[2] ?? "generated image" });
+    segments.push(
+      match[3]
+        ? { type: "audio", src: match[3] }
+        : { type: "image", src: match[1], alt: match[2] ?? "generated image" },
+    );
     cursor = index + match[0].length;
   }
 
   if (cursor < text.length) segments.push({ type: "text", text: text.slice(cursor) });
 
-  return segments.filter((segment) => segment.type === "image" || segment.text.trim().length > 0);
+  return segments.filter((segment) => segment.type !== "text" || segment.text.trim().length > 0);
 }
 
-function ImageAwareContent({ text, markdown }: { text: string; markdown?: boolean }) {
+function ImageAwareContent({
+  text,
+  markdown,
+  audioWords,
+}: {
+  text: string;
+  markdown?: boolean;
+  /** Word timing for an embedded audio clip (voice rows); renders it with clickable words. */
+  audioWords?: TimedWord[];
+}) {
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const segments = parseImageSegments(text);
-  const hasImage = segments.some((segment) => segment.type === "image");
+  const hasImage = segments.some((segment) => segment.type !== "text");
 
   if (!hasImage) {
     return markdown ? (
@@ -158,6 +144,15 @@ function ImageAwareContent({ text, markdown }: { text: string; markdown?: boolea
             >
               {segment.text}
             </pre>
+          )
+        ) : segment.type === "audio" ? (
+          audioWords ? (
+            <div key={`audio-${index}`} className="flex max-w-xl flex-col gap-2">
+              <TimedPlayer src={segment.src} words={audioWords} className="w-full max-w-md" />
+            </div>
+          ) : (
+            // oxlint-disable-next-line jsx-a11y/media-has-caption -- the spoken text is the user prompt shown above.
+            <audio key={`audio-${index}`} controls src={segment.src} className="w-full max-w-md" />
           )
         ) : (
           <button
@@ -203,7 +198,15 @@ function ImageAwareContent({ text, markdown }: { text: string; markdown?: boolea
   );
 }
 
-function FormattedContent({ text, markdown }: { text: string; markdown?: boolean }) {
+function FormattedContent({
+  text,
+  markdown,
+  audioWords,
+}: {
+  text: string;
+  markdown?: boolean;
+  audioWords?: TimedWord[];
+}) {
   const parsed = tryParseJson(text);
   const [mode, setMode] = useState<"pretty" | "plain">("pretty");
 
@@ -212,7 +215,7 @@ function FormattedContent({ text, markdown }: { text: string; markdown?: boolean
 
   if (!parsed.ok || jsonContainer === null) {
     if (markdown) {
-      return <ImageAwareContent text={text} markdown />;
+      return <ImageAwareContent text={text} markdown audioWords={audioWords} />;
     }
 
     return <ImageAwareContent text={parsed.ok ? JSON.stringify(parsed.value, null, 2) : text} />;
@@ -408,7 +411,12 @@ function MetricsPanel({ data, toolCallCount }: { data: RequestLog; toolCallCount
           )}
         />
         <Metric
-          label="Driver"
+          // Voice rows have no driver model; their cost is the API list-price estimate of the call.
+          label={
+            data.media_kind === "stt" || data.media_kind === "tts" || data.media_kind === "live"
+              ? "Voice"
+              : "Driver"
+          }
           value={data.cost_usd !== null ? formatMicroUsd(data.cost_usd) : "—"}
         />
         <Metric
@@ -684,6 +692,27 @@ function ToolInputImages({ images }: { images: ToolInputImage[] }) {
       </div>
     </div>
   );
+}
+
+const VoiceStepResult = z.object({
+  words: z.array(z.object({ text: z.string(), start: z.number(), end: z.number() })).optional(),
+});
+
+/**
+ * Voice rows keep their word timing in the speech/transcription step result (TTS output words, or
+ * the words heard in the STT input). The step is fetched once so the embedded clip can show its
+ * words; rows without timing render as plain content.
+ */
+function VoiceAwareContent({ text, stepId }: { text: string; stepId: number | null }) {
+  const { data: detail } = RequestLogStepService.useRequestLogStep("A", stepId ?? 0, {
+    enabled: stepId !== null,
+  });
+
+  const words = detail
+    ? VoiceStepResult.safeParse(safeParseJson(detail.tool_result)).data?.words
+    : undefined;
+
+  return <FormattedContent text={text} markdown audioWords={words} />;
 }
 
 // run.input_images가 없는 이전 이미지 생성 로그는 첫 image_generation step에서 읽는다.
@@ -1143,7 +1172,7 @@ function ToolsHeaderMetadata({ tools }: { tools: ToolDefinitions }) {
 }
 
 function ToolInputZod({ code, fullCode }: { code: string; fullCode?: string }) {
-  const highlighted = useMemo(() => highlightTypeText(code), [code]);
+  const highlighted = useMemo(() => highlightCode(code), [code]);
 
   return (
     <pre
@@ -1217,111 +1246,43 @@ function ToolsPanel({ id, tools }: { id: number; tools: ToolDefinitions }) {
   );
 }
 
-// 서버가 생성한 type 선언·zod 표현식 텍스트의 토큰 분류. 우리가 만든 통제된
-// 문법이라 하이라이트 라이브러리 없이 정규식 하나로 정확하게 나뉜다.
-const TYPE_TOKEN_RE =
-  /("(?:[^"\\]|\\.)*")|(\b\d+(?:\.\d+)?\b)|(\btype\b|\bz\b(?=\.))|(\b(?:string|number|boolean|null|unknown|Record)\b)|([{}[\]()<>|?:,.=])|([A-Za-z_$][\w$]*)|(\s+|.)/g;
-
-function highlightTypeText(text: string): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  let afterTypeKeyword = false;
-
-  for (const match of text.matchAll(TYPE_TOKEN_RE)) {
-    const [token, str, num, kw, builtin, punct, ident] = match;
-    const key = `${match.index}-${token}`;
-
-    if (str || num) {
-      nodes.push(
-        <span key={key} className="text-sage-400">
-          {token}
-        </span>,
-      );
-    } else if (kw) {
-      // `type` 키워드만 다음 식별자를 타입 이름으로 승격한다. `z.`는 접두 토큰일 뿐.
-      afterTypeKeyword = token === "type";
-      nodes.push(
-        <span key={key} className="text-sienna-400">
-          {token}
-        </span>,
-      );
-    } else if (builtin) {
-      nodes.push(
-        <span key={key} className="text-blue-300">
-          {token}
-        </span>,
-      );
-    } else if (punct) {
-      nodes.push(
-        <span key={key} className="text-sand-500">
-          {token}
-        </span>,
-      );
-    } else if (ident && afterTypeKeyword) {
-      // `type` 바로 다음 식별자 = 타입 이름
-      afterTypeKeyword = false;
-      nodes.push(
-        <span key={key} className="font-semibold text-sand-50">
-          {token}
-        </span>,
-      );
-    } else {
-      nodes.push(token);
-    }
-  }
-
-  return nodes;
-}
-
 // structured output 요청의 응답 타입 요약 — JSON Schema 에서 재구성한 zod 표현식이
 // 기본이고, 간결한 `type` 선언으로 전환할 수 있다(refine/transform 은 직렬화 시점에
 // 소실되므로 미포함). 변환은 서버가 한다 — 스키마가 없거나 변환 실패면 그리지 않는다.
 // 호출부가 structured 행에서만 마운트한다.
-function ResponseTypePanel({ id }: { id: number }) {
+function ResponseTypeSection({ id }: { id: number }) {
   const { data } = RequestLogService.useResponseTypeTs(id);
   const [mode, setMode] = useState<"zod" | "ts">("zod");
   const { zod = null, typescript = null } = data ?? {};
   const code = mode === "zod" ? (zod ?? typescript) : (typescript ?? zod);
-  const highlighted = useMemo(() => (code === null ? null : highlightTypeText(code)), [code]);
 
-  if (!data || code === null || highlighted === null) return null;
+  if (!data || code === null) return null;
 
   return (
-    <div className="panel overflow-hidden">
-      <div className="panel-header flex items-center px-4 py-2">
-        <span className="text-[11px] uppercase tracking-wider text-sand-500 font-medium">
-          Response Type
-        </span>
-        <div className="ml-auto flex gap-1">
-          {(
-            [
-              { value: "zod", label: "zod", available: zod !== null },
-              { value: "ts", label: "ts", available: typescript !== null },
-            ] as const
-          ).map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              disabled={!option.available}
-              className={`px-3 py-1 text-[12px] font-mono rounded-md transition-colors ${
-                mode === option.value
-                  ? "bg-sand-200 text-sand-700"
-                  : "text-sand-400 hover:text-sand-600 disabled:text-sand-300 disabled:cursor-not-allowed"
-              }`}
-              onClick={() => setMode(option.value)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="relative">
-        <CopyButton text={code} dark />
-        {/* monit 터미널(bg-sand-900)과 같은 다크 코드블록 톤 */}
-        <pre className="bg-sand-900 px-4 py-3 text-[12px] text-sand-200 whitespace-pre-wrap wrap-break-word font-mono leading-relaxed max-h-64 overflow-auto">
-          {highlighted}
-        </pre>
-      </div>
-    </div>
+    <CodePanel
+      title="Response Type"
+      code={code}
+      actions={(
+        [
+          { value: "zod", label: "zod", available: zod !== null },
+          { value: "ts", label: "ts", available: typescript !== null },
+        ] as const
+      ).map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          disabled={!option.available}
+          className={`px-3 py-1 text-[12px] font-mono rounded-md transition-colors ${
+            mode === option.value
+              ? "bg-sand-200 text-sand-700"
+              : "text-sand-400 hover:text-sand-600 disabled:text-sand-300 disabled:cursor-not-allowed"
+          }`}
+          onClick={() => setMode(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    />
   );
 }
 
@@ -1388,6 +1349,8 @@ function RequestDetail({ id }: { id: number }) {
   const firstImageGenerationStepId =
     toolCalls.find((toolCall) => toolCall.toolName === "image_generation")?.id ?? null;
 
+  const voiceStepId = toolCalls.find((toolCall) => toolCall.toolName === "speech")?.id ?? null;
+
   const hasSteps = stepTree.length > 0;
   const tokensPerSecEnabled = isTokensPerSecEnabled(data);
   const history = data.history ?? null;
@@ -1396,25 +1359,39 @@ function RequestDetail({ id }: { id: number }) {
   const hasTools = tools !== null && tools.length > 0;
 
   // structured 행에서만 마운트 — 쿼리도 그때만 나간다.
-  const responseTypePanel = data.is_structured ? <ResponseTypePanel id={id} /> : null;
+  const responseTypePanel = data.is_structured ? <ResponseTypeSection id={id} /> : null;
 
   const promptSections = (
     <div className="space-y-4">
-      <Section title="System">
+      <Section
+        title={
+          data.media_kind === "tts"
+            ? "Style instructions"
+            : data.media_kind === "stt"
+              ? "Prompt"
+              : data.media_kind === "live"
+                ? "Instructions"
+                : "System"
+        }
+      >
         <div className="relative">
           <CopyButton text={data.system_prompt ?? "null"} />
           <FormattedContent text={data.system_prompt ?? "null"} markdown />
         </div>
       </Section>
-      <Section title="User">
-        <div className="space-y-3">
-          <div className="relative">
-            <CopyButton text={data.user_prompt ?? "null"} />
-            <FormattedContent text={data.user_prompt ?? "null"} markdown />
+      {/* A live session's user side is in the conversation below. */}
+      {data.media_kind !== "live" && (
+        <Section title="User">
+          <div className="space-y-3">
+            <div className="relative">
+              <CopyButton text={data.user_prompt ?? "null"} />
+              {/* STT input is shown as plain audio; its word timing stays in the step result. */}
+              <FormattedContent text={data.user_prompt ?? "null"} markdown />
+            </div>
+            <RequestInputImages images={data.input_images} stepId={firstImageGenerationStepId} />
           </div>
-          <RequestInputImages images={data.input_images} stepId={firstImageGenerationStepId} />
-        </div>
-      </Section>
+        </Section>
+      )}
     </div>
   );
 
@@ -1453,10 +1430,14 @@ function RequestDetail({ id }: { id: number }) {
         </>
       )}
 
-      <Section title="Response">
+      <Section title={data.media_kind === "live" ? "Conversation" : "Response"}>
         <div className="relative">
           <CopyButton text={data.response} />
-          <FormattedContent text={data.response} markdown />
+          {data.media_kind === "tts" ? (
+            <VoiceAwareContent text={data.response} stepId={voiceStepId} />
+          ) : (
+            <FormattedContent text={data.response} markdown />
+          )}
         </div>
       </Section>
 

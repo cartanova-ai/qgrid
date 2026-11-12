@@ -1,10 +1,7 @@
 import { getLogger } from "@logtape/logtape";
 import { z } from "zod";
 
-import {
-  type ImageGenerationMetadata,
-  QuotaThresholdExceededError,
-} from "../../../application/qgrid/qgrid.types";
+import { QuotaThresholdExceededError } from "../../../application/qgrid/qgrid.types";
 import { TokenModel } from "../../../application/token/token.model";
 import { type OpenAICredentials } from "../../../application/token/token.types";
 import { isOpenAICredentials } from "../common/credentials";
@@ -36,6 +33,8 @@ import { handleChatgptAuthTokensRefresh } from "./openai-refresh";
 import { type OpenAITransportKind, resolveOpenAITransportKind } from "./openai-transport-config";
 import {
   isUnauthorizedRealtimeError,
+  type OpenAILiveCall,
+  type OpenAILiveCallRequest,
   type OpenAISpeakRequest,
   type OpenAISpeechResult,
   type OpenAITranscribeRequest,
@@ -249,6 +248,12 @@ const AUTO_IMAGE_TOOL: OpenAIResponseItem = {
   },
 };
 
+/**
+ * Hosted web search as Codex sends it (tools/src/tool_spec.rs); `external_web_access` asks for
+ * live search rather than the cached index. Answered on the subscription route (2026-11-10).
+ */
+const WEB_SEARCH_TOOL: OpenAIResponseItem = { type: "web_search", external_web_access: true };
+
 function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
   const { outputFormat, ...imageControls } = req.imageGenerationOptions ?? {};
   const auto = req.imageGeneration === "auto";
@@ -272,6 +277,11 @@ function requestOptions(req: GenerateRequest): OpenAIResponsesOptions {
     options.instructions = [req.systemPrompt, AUTO_IMAGE_INSTRUCTIONS].filter(Boolean).join("\n\n");
     options.parallelToolCalls = false;
     options.tools = [AUTO_IMAGE_TOOL];
+  }
+
+  // Function tools reach OpenAI through qgrid's tool emulation; only hosted search goes native.
+  if (req.tools?.some((tool) => tool.type === "web_search")) {
+    options.tools = [...(options.tools ?? []), WEB_SEARCH_TOOL];
   }
 
   const reasoning = asReasoning(req);
@@ -359,6 +369,18 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     );
   }
 
+  async startLive(
+    request: OpenAILiveCallRequest & OpenAIVoiceSelection,
+  ): Promise<OpenAIVoiceDispatchResult<OpenAILiveCall>> {
+    const { preferredTokenId, requirePreferredToken, ...liveRequest } = request;
+
+    return this.runVoice(
+      { preferredTokenId, requirePreferredToken },
+      request.signal,
+      (credentials) => this.voiceClient.createLiveCall(credentials, liveRequest),
+    );
+  }
+
   /**
    * Selects a token, runs the realtime call, and on one 401 refreshes that token's credentials and
    * retries once (as the Responses transports do). Any other failure propagates: a realtime
@@ -419,6 +441,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
   }
 
   async stop(): Promise<void> {
+    this.voiceClient.closeLiveSessions();
     this.clients.forEach(({ client }) => client.close?.());
     this.clients.clear();
     this.retiredClients.forEach((entry) => entry.client.close?.());
@@ -673,14 +696,9 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             streamedMessageIds.add(itemId);
           }
         } else if (event.type === "image") {
-          if (auto)
-            throw new ImageGenerationError("incomplete", "Unexpected hosted image generation");
+          if (auto) throw new ImageGenerationError("incomplete", "Unexpected image output");
           imageAttempted = true;
           images.push(generatedImageFrom(event));
-        } else if (event.type === "output-item" && event.item.type === "image_generation_call") {
-          if (auto)
-            throw new ImageGenerationError("incomplete", "Unexpected hosted image generation");
-          imageAttempted = true;
         } else if (auto && event.type === "output-item" && event.item.type === "function_call") {
           if (event.item.name !== IMAGE_TOOL) {
             throw new ImageGenerationError("incomplete", "Unexpected automatic image tool call");
@@ -727,17 +745,6 @@ export class OpenAIDispatcher implements ProviderDispatcher {
             num_last_images_to_include: args.num_last_images_to_include,
           });
         } else if (event.type === "completed") {
-          const imageUsage = event.imageGeneration?.usage;
-
-          // The backend also reports all-zero image usage for text-only responses.
-          if (
-            auto &&
-            imageUsage &&
-            (imageUsage.input_tokens > 0 ||
-              imageUsage.output_tokens > 0 ||
-              imageUsage.total_tokens > 0)
-          )
-            throw new ImageGenerationError("incomplete", "Unexpected hosted image generation");
           driverCompleted = true;
           servingModel = event.model ?? servingModel;
 
@@ -749,31 +756,6 @@ export class OpenAIDispatcher implements ProviderDispatcher {
               cachedInputTokens: event.usage.cachedInputTokens,
               reasoningOutputTokens: event.usage.reasoningTokens,
             };
-          }
-
-          if (event.imageGeneration) {
-            const hostedImages = images.filter(
-              (image) => image.generation?.route === "codex-responses",
-            );
-
-            for (const [index, image] of hostedImages.entries()) {
-              const generation: ImageGenerationMetadata = {
-                route: "codex-responses",
-                ...image.generation,
-              };
-
-              // The image's own model wins; the response-level model only fills a gap.
-              if (generation.model === undefined && event.imageGeneration.model) {
-                generation.model = event.imageGeneration.model;
-              }
-
-              // Tool usage covers the whole response, not each returned image.
-              if (index === 0 && event.imageGeneration.usage) {
-                generation.usage = event.imageGeneration.usage;
-              }
-
-              image.generation = generation;
-            }
           }
         } else if (event.type === "error") {
           if (req.imageGeneration)
@@ -1119,8 +1101,13 @@ export class OpenAIDispatcher implements ProviderDispatcher {
     if (token.quotaThreshold === null || token.quotaThreshold === undefined) return true;
     const generation = token.generation;
     const result = await readOpenAIQuotaUsage(async () => this.getRateLimitsByTokenId(id, signal));
+    const current = this.tokenMetadata.get(id);
 
-    if (this.tokenMetadata.get(id) !== token || token.generation !== generation) return false;
+    // A token update (credential refresh, sync) landed mid-lookup: judge the updated token
+    // instead of reporting it over quota.
+    if (current !== token || token.generation !== generation) {
+      return current?.active ? this.isQuotaEligible(id, current, signal) : false;
+    }
 
     if (result.kind === "lookup_failed") {
       this.quotaBlocked.delete(id);

@@ -220,6 +220,13 @@
       "type": "boolean",
       "desc": "structured output(jsonSchema) 요청 여부 (목록 구분 표시용)",
       "dbDefault": "false"
+    },
+    {
+      "name": "media_kind",
+      "type": "enum",
+      "id": "RequestLogMediaKind",
+      "nullable": true,
+      "desc": "미디어 엔드포인트 종류(image/video/stt/tts/live). 텍스트 요청은 null (목록 Fmt 표시용)"
     }
   ],
   "indexes": [
@@ -311,7 +318,8 @@
       "error_message",
       "tool_call_count",
       "is_image_generation",
-      "is_structured"
+      "is_structured",
+      "media_kind"
     ],
     "P": [
       "id",
@@ -339,7 +347,8 @@
       "response_json_ok",
       "tool_call_count",
       "is_image_generation",
-      "is_structured"
+      "is_structured",
+      "media_kind"
     ],
     "C": [
       "id",
@@ -386,6 +395,13 @@
       "succeeded": "성공",
       "error": "에러",
       "aborted": "중단"
+    },
+    "RequestLogMediaKind": {
+      "image": "이미지",
+      "video": "비디오",
+      "stt": "음성 인식",
+      "tts": "음성 합성",
+      "live": "실시간 대화"
     }
   }
 }

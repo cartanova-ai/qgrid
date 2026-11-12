@@ -18,6 +18,11 @@ import { composeSystemWithSchemaContract } from "./schema-prompt";
 
 const logger = getLogger(["qgrid", "run-lifecycle"]);
 const STALE_RUN_THRESHOLD_MS = 30 * 60 * 1000;
+
+// Live voice sessions expire two hours after creation and their watcher gives up five minutes
+// later (OPENAI_LIVE_WATCH_LIMIT_MS); a live run still running after this lost its server.
+const STALE_LIVE_RUN_THRESHOLD_MS = (2 * 60 + 15) * 60 * 1000;
+
 const STALE_CLEANUP_INTERVAL_MS = 60 * 1000;
 let staleCleanupInFlight: Promise<void> | undefined;
 let lastStaleCleanupStartedAt = 0;
@@ -46,13 +51,22 @@ const StoredHistoryMessage = z.looseObject({
 
 type StoredHistoryMessage = z.infer<typeof StoredHistoryMessage>;
 
+// Images in history were stored with the run that sent or generated them, and nothing reads them
+// back from here: keep only their length. Base64 has no quotes or escapes, so a match is exactly one
+// JSON string value.
+const DATA_URL_STRING = /"data:[^",;\\]*;base64,[A-Za-z0-9+/=]*"/g;
+
+function maskDataUrls(rawHistory: string): string {
+  return rawHistory.replace(DATA_URL_STRING, (match) => `"[data-url ${match.length - 2} chars]"`);
+}
+
 function filterHistoryForStorage(
   rawHistory: string | undefined,
 ): StoredHistoryMessage[] | undefined {
   if (!rawHistory) return undefined;
 
   try {
-    const items = z.array(z.unknown()).parse(JSON.parse(rawHistory));
+    const items = z.array(z.unknown()).parse(JSON.parse(maskDataUrls(rawHistory)));
 
     const filtered = items.flatMap((item) => {
       const message = StoredHistoryMessage.safeParse(item);
@@ -223,7 +237,10 @@ export async function afterQuery(
     ? 0
     : estimateImageGenerationCostMicroUsd(result, args.imageGenerationOptions);
 
-  for (const step of buildImageGenerationToolSteps(args, imageParts, stepIndex)) {
+  // A tool-calls step ends without a response, so only then do its steps keep the image bytes.
+  const imagesInResponse = result.finishReason !== "tool-calls";
+
+  for (const step of buildImageGenerationToolSteps(args, imageParts, stepIndex, imagesInResponse)) {
     await RequestLogModel.appendStep(requestLogId, step);
   }
 
@@ -402,7 +419,12 @@ async function performStaleRunCleanup(): Promise<void> {
       errorMessage,
     );
 
-    const cleanedCount = staleIds.length;
+    const liveCount = await RequestLogModel.expireStaleLiveRuns(
+      new Date(Date.now() - STALE_LIVE_RUN_THRESHOLD_MS),
+      "live session: the server stopped before the session ended",
+    );
+
+    const cleanedCount = staleIds.length + liveCount;
 
     if (cleanedCount > 0) {
       logger.info(`cleaned up ${cleanedCount} stale running request logs`);

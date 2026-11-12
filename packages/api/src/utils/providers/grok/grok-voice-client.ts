@@ -118,6 +118,19 @@ function transportError(message: string, afterSend: boolean, cause: unknown): Gr
   return new GrokHttpError(classification, "", {}, { cause });
 }
 
+// `with_timestamps: true` envelope; optional fields nullable like @ai-sdk/xai's parser.
+const GrokTtsTimestampsResponse = z.object({
+  audio: z.string(),
+  content_type: z.string().nullish(),
+  duration: z.number().nullish(),
+  audio_timestamps: z
+    .object({
+      graph_chars: z.array(z.string()),
+      graph_times: z.array(z.tuple([z.number(), z.number()])),
+    })
+    .nullish(),
+});
+
 function invalidBodyError(response: Response, message: string, cause?: unknown): GrokHttpError {
   return new GrokHttpError(
     { ...classifyGrokHttpError(502, "", response.headers), message, shouldRetry: false },
@@ -125,6 +138,56 @@ function invalidBodyError(response: Response, message: string, cause?: unknown):
     readGrokResponseHeaders(response.headers),
     cause === undefined ? undefined : { cause },
   );
+}
+
+/** Decodes the `with_timestamps` JSON envelope into audio bytes plus per-character timing. */
+// LAME's 1105-sample encoder delay at the 24 kHz /tts output (SON-589 measured ~46-49 ms).
+const MP3_DECODER_DELAY_SEC = 1105 / 24_000;
+
+const roundMs = (seconds: number) => Math.round(seconds * 1000) / 1000;
+
+async function readTimestampsBody(
+  response: Response,
+  format: string,
+  firstByteAt: number,
+): Promise<GrokSpeechResult> {
+  let parsed: z.infer<typeof GrokTtsTimestampsResponse>;
+
+  try {
+    parsed = GrokTtsTimestampsResponse.parse(await response.json());
+  } catch (error) {
+    throw invalidBodyError(response, "invalid timestamped TTS response", error);
+  }
+
+  const audio = new Uint8Array(Buffer.from(parsed.audio, "base64"));
+
+  if (audio.byteLength === 0) throw invalidBodyError(response, "empty audio body");
+
+  const result: GrokSpeechResult = {
+    audio,
+    mediaType:
+      parsed.content_type ?? MEDIA_TYPE_BY_FORMAT.get(format) ?? "application/octet-stream",
+    firstByteAt,
+  };
+
+  if (parsed.audio_timestamps) {
+    // Timing refers to the audio before mp3 encoding. The mp3 has no gapless tag, so decoders keep
+    // the encoder delay and play the speech later; shift the timing to match what plays.
+    const shift = result.mediaType === "audio/mpeg" ? MP3_DECODER_DELAY_SEC : 0;
+
+    result.audioTimestamps = {
+      graphChars: parsed.audio_timestamps.graph_chars,
+      graphTimes: parsed.audio_timestamps.graph_times.map(([start, end]): [number, number] => [
+        roundMs(start + shift),
+        roundMs(end + shift),
+      ]),
+    };
+  }
+
+  if (parsed.duration !== null && parsed.duration !== undefined)
+    result.durationSec = parsed.duration;
+
+  return result;
 }
 
 function audioExtension(mediaType: string): string {
@@ -203,6 +266,8 @@ export class GrokVoiceClient implements GrokVoicePort {
       voice: request.voice ?? GROK_TTS_DEFAULT_VOICE,
       language: request.language ?? GROK_TTS_DEFAULT_LANGUAGE,
       format: request.format ?? GROK_TTS_DEFAULT_FORMAT,
+      with_timestamps: request.with_timestamps,
+      speed: request.speed,
     });
 
     const headers = {
@@ -211,7 +276,10 @@ export class GrokVoiceClient implements GrokVoicePort {
     };
 
     return this.post("/tts", headers, JSON.stringify(body), request.signal, async (response) => {
+      const firstByteAt = Date.now();
       const mediaType = contentMediaType(response);
+
+      if (body.with_timestamps) return readTimestampsBody(response, body.format, firstByteAt);
 
       if (mediaType === "application/json" || mediaType?.startsWith("text/"))
         throw invalidBodyError(response, `expected audio, got ${mediaType}`);
@@ -228,6 +296,7 @@ export class GrokVoiceClient implements GrokVoicePort {
       return {
         audio,
         mediaType: mediaType ?? MEDIA_TYPE_BY_FORMAT.get(body.format) ?? "application/octet-stream",
+        firstByteAt,
       };
     });
   }

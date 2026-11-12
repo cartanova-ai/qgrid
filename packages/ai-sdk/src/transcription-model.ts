@@ -102,6 +102,7 @@ const transcribeOutputSchema = z.object({
   model: z.string(),
   tokenName: z.string(),
   requestLogId: z.number().optional(),
+  words: z.array(z.object({ text: z.string(), start: z.number(), end: z.number() })).optional(),
 });
 
 // "audio/webm;codecs=opus" → "audio/webm": the server accepts the bare type only.
@@ -142,7 +143,7 @@ export function createQgridTranscription(
           : parseGrokQgridOptions(options.providerOptions?.qgrid, LABEL);
 
       const warnings: SharedV3Warning[] = [];
-      // Also throws before transport when the JSON body would exceed the 10 MiB body limit.
+      // Also throws before transport when the JSON body would exceed the 26 MiB body limit.
       const params: JSONObject = { model: modelId, audio, mediaType };
 
       if (provider === "openai") {
@@ -194,8 +195,12 @@ export function createQgridTranscription(
 
       return {
         text: data.text,
-        // The qgrid server returns no word or segment timings.
-        segments: [],
+        // Grok times each heard word itself; for OpenAI the server's aligner places them (2.19.0+).
+        segments: (data.words ?? []).map((word) => ({
+          text: word.text,
+          startSecond: word.start,
+          endSecond: word.end,
+        })),
         // OpenAI: echo of the requested language (the realtime session reports none) and a
         // duration computed from the PCM qgrid sent.
         language: data.language,

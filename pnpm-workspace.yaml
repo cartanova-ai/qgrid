@@ -177,6 +177,7 @@ catalog:
   node-sql-parser: ^5.4.0
   nodemon: ^3.1.14
   npm-run-all: ^4.1.5
+  onnxruntime-node: 1.31.1
   oxc-transform: ^0.155.0
   oxfmt: ^0.74.0
   oxlint: 1.89.0
@@ -256,6 +257,7 @@ allowBuilds:
   esbuild: true
   libpq: true
   msw: false
+  onnxruntime-node: false
   protobufjs: false
   sharp: true
   sodium-native: true

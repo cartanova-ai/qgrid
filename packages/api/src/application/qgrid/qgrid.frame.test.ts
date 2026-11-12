@@ -47,6 +47,7 @@ const {
   requestLogFinishRunMock,
   appendStepMock,
   continueToolRunMock,
+  recordRunProgressMock,
   dispatcherQueryMock,
   dispatcherQueryStreamMock,
   beforeQueryMock,
@@ -75,6 +76,7 @@ const {
     requestLogFinishRunMock: vi.fn(),
     appendStepMock: vi.fn(),
     continueToolRunMock: vi.fn(),
+    recordRunProgressMock: vi.fn(),
     dispatcherQueryMock: vi.fn(),
     dispatcherQueryStreamMock: vi.fn(),
     beforeQueryMock: vi.fn(),
@@ -105,6 +107,11 @@ vi.mock("sonamu/cache", () => {
   };
 });
 
+// The aligner needs the MMS-FA model; its own tests cover the alignment itself.
+const alignSpeechMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../utils/speech-aligner", () => ({ alignSpeech: alignSpeechMock }));
+
 // Token exchange and device endpoints hit xAI; startGrokOAuth stays real (fetch is stubbed).
 vi.mock("../../utils/providers/grok", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../utils/providers/grok")>()),
@@ -121,6 +128,7 @@ vi.mock("../request-log/request-log.model", () => ({
     finishRun: requestLogFinishRunMock,
     appendStep: appendStepMock,
     continueToolRun: continueToolRunMock,
+    recordRunProgress: recordRunProgressMock,
   },
 }));
 
@@ -900,13 +908,13 @@ describe("QgridFrame.query request logging", () => {
     expect(dispatcherQueryMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { imageGenerationOptions: { outputFormat: "webp" as const } },
-    { tools: [{ name: "lookup", inputSchema: { type: "object" } }] },
-    { jsonSchema: '{"type":"object"}' },
-  ])("rejects unsupported auto image controls before logging: %j", async (options) => {
+  it.each(["auto" as const, true].flatMap((imageGeneration) => [
+    { imageGeneration, imageGenerationOptions: { outputFormat: "webp" as const } },
+    { imageGeneration, tools: [{ name: "lookup", inputSchema: { type: "object" } }] },
+    { imageGeneration, jsonSchema: '{"type":"object"}' },
+  ]))("rejects unsupported OpenAI chat-model image controls before logging: %j", async (options) => {
     await expect(QgridFrame.query({
-      prompt: "draw", model: "openai/gpt-6-luna", imageGeneration: "auto", ...options,
+      prompt: "draw", model: "openai/gpt-6-luna", ...options,
     })).rejects.toMatchObject({ statusCode: 400 });
     expect(beforeQueryMock).not.toHaveBeenCalled();
     expect(dispatcherQueryMock).not.toHaveBeenCalled();
@@ -1979,7 +1987,7 @@ describe("QgridFrame Grok media and voice (U11)", () => {
         prompt: "x",
         referenceImages: ["data:image/png;base64," + "A".repeat(28 * 1024 * 1024)],
       },
-      "7 MiB",
+      "19 MiB",
     ],
   ])("generateImages rejects invalid input %#", async (input, message) => {
     await expect(QgridFrame.generateImages(input)).rejects.toThrow(message);
@@ -2001,7 +2009,7 @@ describe("QgridFrame Grok media and voice (U11)", () => {
     // The aggregate counts every inline image of the request, not just each one.
     const split = GenerateImagesInput.safeParse({ ...largest, referenceImages: [half, half] });
     expect(split.success).toBe(false);
-    expect(split.error?.issues.map((issue) => issue.message)).toContain("inline images exceed 7 MiB in total");
+    expect(split.error?.issues.map((issue) => issue.message)).toContain("inline images exceed 19 MiB in total");
     expect(
       VideoStartInput.safeParse({ model: "grok/grok-imagine-video", prompt: "x", image: half, lastFrame: half }).success,
     ).toBe(false);
@@ -2040,7 +2048,7 @@ describe("QgridFrame Grok media and voice (U11)", () => {
         payload,
       });
       expect(tooLarge.statusCode).toBe(413);
-      expect(tooLarge.json()).toEqual({ name: "Error", message: SD("qgrid.requestBodyTooLarge")(10) });
+      expect(tooLarge.json()).toEqual({ name: "Error", message: SD("qgrid.requestBodyTooLarge")(26) });
 
       const ok = await server.inject({ method: "POST", url: "/media", payload: { ok: true } });
       expect(ok.statusCode).toBe(200);
@@ -2179,7 +2187,15 @@ describe("QgridFrame Grok media and voice (U11)", () => {
 
   it("transcribe decodes base64 audio and returns the transcript", async () => {
     grok.transcribe!.mockResolvedValueOnce({
-      result: { text: "hello there", language: "en", duration: 1.5 },
+      result: {
+        text: "hello there",
+        language: "en",
+        duration: 1.5,
+        words: [
+          { text: "hello", start: 0.1, end: 0.5, confidence: 0.9 },
+          { text: "there", start: 0.6, end: 1.0 },
+        ],
+      },
       tokenId: 3,
       tokenName: "grok/a",
     });
@@ -2194,13 +2210,23 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       model: "grok/grok-voice-transcribe-2.0",
       tokenName: "grok/a",
       requestLogId: 77,
+      // Word timing passes through without provider-only extras.
+      words: [
+        { text: "hello", start: 0.1, end: 0.5 },
+        { text: "there", start: 0.6, end: 1.0 },
+      ],
     });
     const request = grok.transcribe!.mock.calls[0]![0] as { audio: Uint8Array; mediaType: string; model: string };
     expect(Buffer.from(request.audio).toString()).toBe("RIFFfakewav");
     expect(request).toMatchObject({ mediaType: "audio/wav", model: "grok-voice-transcribe-2.0" });
+    // Priced at the Grok STT list price: $0.10/hour × 1.5 s ≈ 42 micro-USD.
     expect(requestLogFinishRunMock).toHaveBeenCalledWith(
       77,
-      expect.objectContaining({ status: "succeeded", response: "hello there", cost_usd: null, cost_source: null }),
+      expect.objectContaining({ status: "succeeded", response: "hello there", cost_usd: 42, cost_source: "pricing_table" }),
+    );
+    // The input audio is kept playable in the user prompt, as TTS output is in the response.
+    expect(requestLogCreateRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({ user_prompt: `<audio src="data:audio/wav;base64,${audio}"></audio>`, media_kind: "stt" }),
     );
   });
 
@@ -2226,10 +2252,383 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       requestLogId: 77,
     });
     expect(Buffer.from(out.audio, "base64")).toEqual(Buffer.from(bytes));
-    // No ticks reported: the cost is unknown, not a guessed 0.
+    // Priced at the Grok TTS list price: $15 per 1M characters × 2 characters = 30 micro-USD.
     expect(requestLogFinishRunMock).toHaveBeenCalledWith(
       77,
-      expect.objectContaining({ status: "succeeded", cost_usd: null, cost_source: null }),
+      expect.objectContaining({ status: "succeeded", cost_usd: 30, cost_source: "pricing_table" }),
+    );
+  });
+
+  it("speak logs a tts row with playable audio and time to first byte", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: 10_000 });
+    const bytes = new Uint8Array([0xff, 0xfb, 1, 2]);
+    grok.speak!.mockResolvedValueOnce({
+      result: { audio: bytes, mediaType: "audio/mpeg", firstByteAt: 10_250 },
+      tokenId: 3,
+      tokenName: "grok/a",
+    });
+
+    await QgridFrame.speak({ text: "hi" });
+    vi.useRealTimers();
+
+    expect(requestLogCreateRunMock).toHaveBeenCalledWith(expect.objectContaining({ media_kind: "tts" }));
+    expect(requestLogFinishRunMock).toHaveBeenCalledWith(
+      77,
+      expect.objectContaining({
+        response: `<audio src="data:audio/mpeg;base64,${Buffer.from(bytes).toString("base64")}"></audio>`,
+        ttft_ms: 250,
+      }),
+    );
+  });
+
+  it("speak passes withTimestamps to Grok and returns the character timing", async () => {
+    const audioTimestamps = { graphChars: ["h", "i"], graphTimes: [[0, 0.1], [0.1, 0.3]] as Array<[number, number]> };
+    grok.speak!.mockResolvedValueOnce({
+      result: { audio: new Uint8Array([1, 2]), mediaType: "audio/mpeg", audioTimestamps, durationSec: 0.3 },
+      tokenId: 3,
+      tokenName: "grok/a",
+    });
+
+    const out = await QgridFrame.speak({ text: "hi", withTimestamps: true });
+
+    expect(grok.speak).toHaveBeenCalledWith(expect.objectContaining({ with_timestamps: true }));
+    expect(out).toMatchObject({ audioTimestamps, durationSec: 0.3, timestampsSource: "provider" });
+    // The step result keeps word timing for the request-log detail player.
+    const step = appendStepMock.mock.calls.at(-1)![1] as { tool_result: string };
+    expect(JSON.parse(step.tool_result).words).toEqual([{ text: "hi", start: 0, end: 0.3 }]);
+  });
+
+  describe("OpenAI speech withTimestamps", () => {
+    // 0.5 s of silence: 44-byte header + 24,000 bytes of PCM16 at 24 kHz.
+    const wav = new Uint8Array(44 + 24_000);
+    let openaiSpeak: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      openaiSpeak = vi.fn().mockResolvedValue({
+        result: { audio: wav, mediaType: "audio/wav", transcript: "Hi there.", usage: {}, firstAudioAt: Date.now() },
+        tokenName: "openai/a",
+      });
+      Object.assign(QgridDispatcher, { openaiDispatcher: { speak: openaiSpeak } });
+    });
+
+    it("aligns the script in the generated audio without calling Grok", async () => {
+      const audioTimestamps = { graphChars: Array.from("Hi"), graphTimes: [[0.1, 0.15], [0.15, 0.2]] };
+      alignSpeechMock.mockResolvedValueOnce(audioTimestamps);
+
+      const out = await QgridFrame.speak({
+        model: "openai/gpt-realtime-2.1-mini",
+        text: "Hi there.",
+        instructions: "Speak warmly.",
+        withTimestamps: true,
+      });
+
+      // The style instructions are kept as the run's system prompt for the request log.
+      expect(requestLogCreateRunMock).toHaveBeenCalledWith(expect.objectContaining({ system_prompt: "Speak warmly." }));
+      // PCM after the 44-byte WAV header, at the realtime sample rate.
+      expect(alignSpeechMock).toHaveBeenCalledWith(wav.subarray(44), 24_000, "Hi there.");
+      expect(grok.transcribe).not.toHaveBeenCalled();
+      expect(out).toMatchObject({ timestampsSource: "aligned", durationSec: 0.5, audioTimestamps });
+    });
+
+    it("keeps the OpenAI STT prompt as the run's system prompt", async () => {
+      const transcribe = vi.fn().mockResolvedValue({
+        result: { text: "hi", durationSec: 0.5, callId: "c", transport: "realtime-calls" },
+        tokenName: "openai/a",
+      });
+      Object.assign(QgridDispatcher, { openaiDispatcher: { speak: openaiSpeak, transcribe } });
+
+      await QgridFrame.transcribe({
+        model: "openai/gpt-4o-transcribe",
+        audio: Buffer.from(wav).toString("base64"),
+        mediaType: "audio/wav",
+        prompt: "qgrid, Kuma",
+      });
+
+      expect(requestLogCreateRunMock).toHaveBeenCalledWith(expect.objectContaining({ system_prompt: "qgrid, Kuma", media_kind: "stt" }));
+    });
+
+    describe("OpenAI transcription word timing", () => {
+      // 0.5 s of raw PCM16 at the realtime sample rate.
+      const pcm = new Uint8Array(24_000);
+      const transcribeOnce = () => {
+        const transcribe = vi.fn().mockResolvedValue({
+          result: { text: "hi", durationSec: 0.5, callId: "c", transport: "realtime-calls" },
+          tokenName: "openai/a",
+        });
+        Object.assign(QgridDispatcher, { openaiDispatcher: { transcribe } });
+
+        return QgridFrame.transcribe({
+          model: "openai/gpt-4o-transcribe",
+          audio: Buffer.from(pcm).toString("base64"),
+          mediaType: "audio/pcm",
+        });
+      };
+      const stepResult = () => JSON.parse((appendStepMock.mock.calls.at(-1)![1] as { tool_result: string }).tool_result);
+
+      it("aligns the transcript in the input audio", async () => {
+        alignSpeechMock.mockResolvedValueOnce({ graphChars: Array.from("hi"), graphTimes: [[0.1, 0.2], [0.2, 0.3]] });
+
+        const out = await transcribeOnce();
+
+        expect(alignSpeechMock).toHaveBeenCalledWith(pcm, 24_000, "hi");
+        expect(out.words).toEqual([{ text: "hi", start: 0.1, end: 0.3 }]);
+        expect(stepResult().words).toEqual(out.words);
+      });
+
+      it("returns the transcript without words when alignment fails", async () => {
+        alignSpeechMock.mockRejectedValueOnce(new Error("speech is too long to align"));
+
+        const out = await transcribeOnce();
+
+        expect(out).toMatchObject({ text: "hi" });
+        expect(out.words).toBeUndefined();
+        expect(stepResult().wordsError).toBe("speech is too long to align");
+      });
+    });
+
+    it("still returns the audio when the timing step fails", async () => {
+      alignSpeechMock.mockRejectedValueOnce(new Error("speech aligner model is not installed"));
+
+      const out = await QgridFrame.speak({ model: "openai/gpt-realtime-2.1-mini", text: "Hi there.", withTimestamps: true });
+
+      expect(out.audio).toBe(Buffer.from(wav).toString("base64"));
+      expect(out.audioTimestamps).toBeUndefined();
+      expect(out.timestampsError).toBe("speech aligner model is not installed");
+    });
+  });
+
+  describe("GPT-Live call", () => {
+    type Summary = { turns: object[]; audioDurationMs?: number; endReason: string; error?: string };
+    let endSession: (summary: Summary) => void;
+    let startLive: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      recordRunProgressMock.mockReset().mockResolvedValue(undefined);
+      dispatcherQueryMock.mockReset();
+      const ended = new Promise<Summary>((resolve) => (endSession = resolve));
+      startLive = vi.fn().mockResolvedValue({
+        result: { sdp: "v=0 answer", callId: "rtc_x", quotaHeaders: new Map(), ended },
+        tokenName: "openai/a",
+      });
+      Object.assign(QgridDispatcher, { openaiDispatcher: { startLive } });
+    });
+
+    afterEach(() => {
+      Object.assign(QgridDispatcher, { openaiDispatcher: null });
+    });
+
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    it("answers at once, fills the running log turn by turn, and finishes it at the end", async () => {
+      const out = await QgridFrame.liveCall({ sdp: "v=0 offer", instructions: "Be brief.", projectName: "p" });
+
+      expect(out).toEqual({
+        sdp: "v=0 answer",
+        callId: "rtc_x",
+        model: "openai/gpt-live-1",
+        voice: "cove",
+        tokenName: "openai/a",
+        requestLogId: 77,
+      });
+      expect(startLive).toHaveBeenCalledWith(
+        expect.objectContaining({ sdp: "v=0 offer", voice: "cove", instructions: "Be brief." }),
+      );
+      expect(requestLogCreateRunMock).toHaveBeenCalledWith(
+        expect.objectContaining({ media_kind: "live", system_prompt: "Be brief.", requested_model_name: "openai/gpt-live-1" }),
+      );
+      // A resolved step: a pending one would fall to the 30-minute tool-wait cleanup.
+      expect(appendStepMock).toHaveBeenCalledWith(
+        77,
+        expect.objectContaining({
+          tool_name: "live_session",
+          tool_call_id: "live_session:rtc_x",
+          tool_result: JSON.stringify({ status: "live", callId: "rtc_x" }),
+        }),
+      );
+      expect(recordRunProgressMock).toHaveBeenCalledWith(77, { token_name: "openai/a" });
+
+      // The watcher reports each finished turn; the running row's conversation follows it.
+      const { onTurn } = startLive.mock.calls[0]![0] as { onTurn: (turns: object[]) => void };
+      onTurn([{ role: "user", transcript: "Hi there?", startMs: 600, endMs: 5800 }]);
+      await settle();
+      expect(recordRunProgressMock).toHaveBeenLastCalledWith(77, { response: "**user** 0:00  \nHi there?" });
+      expect(requestLogFinishRunMock).not.toHaveBeenCalled();
+
+      const summary = {
+        turns: [
+          { role: "user", transcript: "Hi there?", startMs: 600, endMs: 5800 },
+          { role: "assistant", transcript: " Hello!", startMs: 65_600, endMs: 69_400 },
+        ],
+        audioDurationMs: 60_000,
+        endReason: "client_request",
+      };
+      endSession(summary);
+      await settle();
+
+      expect(continueToolRunMock).toHaveBeenCalledWith(77, [
+        { toolCallId: "live_session:rtc_x", output: JSON.stringify(summary), isError: false },
+      ]);
+      expect(requestLogFinishRunMock).toHaveBeenCalledWith(
+        77,
+        expect.objectContaining({
+          status: "succeeded",
+          token_name: "openai/a",
+          response: "**user** 0:00  \nHi there?\n\n**assistant** 1:05  \nHello!",
+          // One minute of session audio at $0.05/min.
+          cost_usd: 50_000,
+          cost_source: "pricing_table",
+        }),
+      );
+    });
+
+    type LiveHooks = {
+      onTurn: (turns: object[]) => void;
+      onDelegation: (delegation: { itemId: string; text: string }) => Promise<string>;
+    };
+
+    const hooks = () => startLive.mock.calls[0]![0] as LiveHooks;
+
+    it("answers delegations with a query on the session's model and logs each as a step", async () => {
+      await QgridFrame.liveCall({
+        sdp: "v=0 offer",
+        instructions: "Be a tutor.",
+        delegation: { model: "grok/grok-4.7", effort: "medium", webSearch: true },
+      });
+      dispatcherQueryMock.mockResolvedValueOnce({
+        text: "Here is today's news.",
+        model: "grok-4.7",
+        tokenName: "grok/a",
+        usage: { input_tokens: 10, output_tokens: 5 },
+        costUsd: 0.002,
+      });
+
+      hooks().onTurn([{ role: "user", transcript: "What's new?", startMs: 0, endMs: 1000 }]);
+      const reply = await hooks().onDelegation({ itemId: "item_d", text: "Look up the news" });
+
+      expect(reply).toBe("Here is today's news.");
+      expect(dispatcherQueryMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: "grok/grok-4.7",
+          effort: "medium",
+          webSearch: true,
+          prompt: "Conversation so far:\nuser: What's new?\n\nRequest from the voice assistant:\nLook up the news",
+          system: expect.stringContaining("The voice assistant's instructions:\nBe a tutor."),
+        }),
+      );
+      expect(appendStepMock).toHaveBeenLastCalledWith(
+        77,
+        expect.objectContaining({
+          tool_name: "delegation",
+          tool_call_id: "delegation:item_d",
+          tool_call_index: 1,
+          tool_result: expect.stringContaining("Here is today's news."),
+        }),
+      );
+
+      // The run's cost is the session audio plus every delegation's backend call.
+      endSession({ turns: [], audioDurationMs: 60_000, endReason: "client_request" });
+      await settle();
+      expect(requestLogFinishRunMock).toHaveBeenCalledWith(77, expect.objectContaining({ cost_usd: 52_000 }));
+    });
+
+    it("starts from a history, logs it, and gives it to delegations before the session's turns", async () => {
+      const history = [
+        { role: "user" as const, text: "My dog is Kuma." },
+        { role: "assistant" as const, text: "Kuma is a lovely name." },
+      ];
+
+      await QgridFrame.liveCall({ sdp: "v=0 offer", history });
+
+      expect(startLive).toHaveBeenCalledWith(expect.objectContaining({ history }));
+      expect(requestLogCreateRunMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          history: [
+            { type: "message", role: "user", content: "My dog is Kuma." },
+            { type: "message", role: "assistant", content: "Kuma is a lovely name." },
+          ],
+        }),
+      );
+
+      dispatcherQueryMock.mockResolvedValueOnce({ text: "ok", usage: {}, costUsd: 0 });
+      hooks().onTurn([{ role: "user", transcript: "What's his name?", startMs: 0, endMs: 1 }]);
+      await hooks().onDelegation({ itemId: "item_d", text: "Recall the dog's name" });
+
+      expect(dispatcherQueryMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt:
+            "Conversation so far:\nuser: My dog is Kuma.\nassistant: Kuma is a lovely name.\nuser: What's his name?\n\nRequest from the voice assistant:\nRecall the dog's name",
+        }),
+      );
+
+      // Past 128 items OpenAI never starts the session, so qgrid refuses first.
+      const tooLong = Array.from({ length: 129 }, () => ({ role: "user" as const, text: "hi" }));
+      await expect(QgridFrame.liveCall({ sdp: "v=0", history: tooLong })).rejects.toMatchObject({
+        statusCode: 400,
+      });
+    });
+
+    it("tells the voice when a delegation fails instead of leaving it waiting", async () => {
+      await QgridFrame.liveCall({ sdp: "v=0 offer" });
+      dispatcherQueryMock.mockRejectedValueOnce(new Error("quota exceeded"));
+
+      const reply = await hooks().onDelegation({ itemId: "item_d", text: "Look up the news" });
+
+      expect(dispatcherQueryMock).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "openai/gpt-6-luna", effort: "low", webSearch: false }),
+      );
+      expect(reply).toContain("could not answer (quota exceeded)");
+      expect(appendStepMock).toHaveBeenLastCalledWith(
+        77,
+        expect.objectContaining({ tool_name: "delegation", error: "quota exceeded" }),
+      );
+    });
+
+    it("rejects an unserved delegation model or anthropic web search before logging or dispatch", async () => {
+      await expect(
+        QgridFrame.liveCall({ sdp: "v=0", delegation: { model: "openai/gpt-5.5" } }),
+      ).rejects.toMatchObject({ statusCode: 400 });
+      await expect(
+        QgridFrame.liveCall({
+          sdp: "v=0",
+          delegation: { model: "anthropic/claude-sonnet-5", webSearch: true },
+        }),
+      ).rejects.toMatchObject({ statusCode: 400 });
+      expect(requestLogCreateRunMock).not.toHaveBeenCalled();
+      expect(startLive).not.toHaveBeenCalled();
+    });
+
+    it("records a sideband that failed before any turn as an error run", async () => {
+      await QgridFrame.liveCall({ sdp: "v=0 offer", voice: "hanul" });
+      endSession({ turns: [], endReason: "sideband error", error: "handshake rejected with HTTP 404" });
+      await settle();
+
+      expect(requestLogFinishRunMock).toHaveBeenCalledWith(
+        77,
+        expect.objectContaining({ status: "error", error_message: "handshake rejected with HTTP 404" }),
+      );
+    });
+
+    it("rejects any model but openai/gpt-live-1 before logging or dispatch", async () => {
+      await expect(
+        QgridFrame.liveCall({ model: "openai/gpt-realtime-2.1", sdp: "v=0" } as never),
+      ).rejects.toMatchObject({ statusCode: 400 });
+      expect(requestLogCreateRunMock).not.toHaveBeenCalled();
+      expect(startLive).not.toHaveBeenCalled();
+    });
+  });
+
+  it("speak keeps the byte-count placeholder for audio a browser cannot play", async () => {
+    grok.speak!.mockResolvedValueOnce({
+      result: { audio: new Uint8Array(6), mediaType: "audio/pcm" },
+      tokenId: 3,
+      tokenName: "grok/a",
+    });
+
+    await QgridFrame.speak({ text: "hi", format: "pcm" });
+
+    expect(requestLogFinishRunMock).toHaveBeenCalledWith(
+      77,
+      expect.objectContaining({ response: "[audio audio/pcm 6 bytes]" }),
     );
   });
 

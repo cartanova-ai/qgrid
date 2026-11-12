@@ -152,9 +152,11 @@ describe("standalone transparent images", () => {
 });
 
 describe("standalone image model", () => {
-  it.each([true, { background: "opaque" }, { background: "auto" }])(
-    "generates ordinary PNGs directly without the Responses transport (%j)",
-    async (imageGeneration) => {
+  // Chat models use the same route: hosted Responses images reject driver reasoning effort.
+  it.each(["gpt-image-2", "gpt-6-luna"].flatMap((model) =>
+    [true, { background: "opaque" }, { background: "auto" }].map((imageGeneration) => [model, imageGeneration] as const)))(
+    "generates ordinary PNGs for %s directly without the Responses transport (%j)",
+    async (model, imageGeneration) => {
       const stream = vi.fn();
       const fetchMock = vi.fn<typeof fetch>(async () => Response.json({
         data: [{ b64_json: png([255, 255]) }],
@@ -165,7 +167,7 @@ describe("standalone image model", () => {
         transport: { stream },
       });
       const events = await Array.fromAsync(client.responses({
-        ...options, model: "gpt-image-2", imageGeneration,
+        ...options, model, imageGeneration, reasoning: { effort: "high" },
       }));
       expect(stream).not.toHaveBeenCalled();
       expect(fetchMock).toHaveBeenCalledTimes(1);

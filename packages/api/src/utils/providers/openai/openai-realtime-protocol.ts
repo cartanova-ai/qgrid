@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { OPENAI_LIVE_VOICES, OPENAI_SPEECH_VOICES } from "../../../application/qgrid/qgrid.types";
 import { CODEX_CLI_ORIGINATOR, codexCliUserAgent, type JsonValue } from "./openai-backend-protocol";
 
 // Wire contract for OpenAI realtime audio on a ChatGPT subscription, mirroring Codex
@@ -24,8 +25,14 @@ export const OPENAI_REALTIME_WS_URL = "wss://api.openai.com/v1/realtime" as cons
 /** realtime_websocket/methods_common.rs:26 */
 export const OPENAI_REALTIME_SAMPLE_RATE = 24_000;
 
-/** realtime_websocket/methods_v2.rs:37 */
-export const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+/**
+ * Fallback id inside the OpenAI voice client (a transcribe request without `model` routes to Grok)
+ * and the input transcription model of the speech session. Codex's own default (methods_v2.rs:37)
+ * is gpt-4o-mini-transcribe, which shuts down 2027-02-26. On the 2026-11-10 bench (SON-593)
+ * gpt-transcribe transcribed 60 s and 229 s clips in full, returned nothing for silence and
+ * noise, and was more accurate than gpt-live-transcribe.
+ */
+export const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-transcribe";
 
 /** qgrid default; Codex's own default is gpt-realtime-1.5 (core/src/realtime_conversation.rs:112). */
 export const OPENAI_REALTIME_DEFAULT_SPEECH_MODEL = "gpt-realtime-2.1-mini";
@@ -33,24 +40,10 @@ export const OPENAI_REALTIME_DEFAULT_SPEECH_MODEL = "gpt-realtime-2.1-mini";
 /** protocol/src/protocol.rs:408 (RealtimeVoicesList::builtin default_v2) */
 export const OPENAI_REALTIME_DEFAULT_VOICE = "marin";
 
-/** protocol/src/protocol.rs:368-379 (v2 voice list) */
-export const OPENAI_REALTIME_VOICES = [
-  "alloy",
-  "ash",
-  "ballad",
-  "coral",
-  "echo",
-  "sage",
-  "shimmer",
-  "verse",
-  "marin",
-  "cedar",
-] as const;
-
-export type OpenAIRealtimeVoice = (typeof OPENAI_REALTIME_VOICES)[number];
+export type OpenAIRealtimeVoice = (typeof OPENAI_SPEECH_VOICES)[number];
 
 export function isOpenAIRealtimeVoice(value: string): value is OpenAIRealtimeVoice {
-  return OPENAI_REALTIME_VOICES.some((voice) => voice === value);
+  return OPENAI_SPEECH_VOICES.some((voice) => voice === value);
 }
 
 /**
@@ -58,7 +51,9 @@ export function isOpenAIRealtimeVoice(value: string): value is OpenAIRealtimeVoi
  * docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md). Known limits, kept as documentation
  * rather than exclusions (user decision): gpt-live-transcribe and gpt-realtime-whisper returned
  * about half of a 60 s clip; gpt-realtime-whisper rejects `prompt` (server `invalid_value`);
- * whisper-1 accepts but ignores `prompt`.
+ * whisper-1 accepts but ignores `prompt`. gpt-live-transcribe still cut clips short on 2026-11-10
+ * (51 of 126 words on 60 s). OpenAI shuts down gpt-4o-mini-transcribe, gpt-4o-transcribe and
+ * whisper-1 on 2027-02-26; remove them here, from the SDK union and from the READMEs then.
  */
 export const OPENAI_TRANSCRIPTION_MODELS = [
   "gpt-4o-mini-transcribe",
@@ -76,14 +71,138 @@ export const OPENAI_TRANSCRIPTION_MODELS_WITHOUT_PROMPT: ReadonlySet<string> = n
 
 /**
  * Text-to-speech (realtime conversational) ids. Verbatim fidelity on the 2026-10-17 matrix:
- * gpt-realtime-2.1-mini 13/13, gpt-realtime-2.1 12/13 (one paraphrase), gpt-realtime-1.5 6/13
- * (often answers the text instead of repeating it). Default stays 2.1-mini.
+ * gpt-realtime-2.1-mini 13/13, gpt-realtime-2.1 12/13 (one paraphrase). Default stays 2.1-mini.
+ * gpt-realtime-1.5 was removed on 2026-11-09: it answered the text instead of repeating it (6/13).
  */
-export const OPENAI_SPEECH_MODELS = [
-  "gpt-realtime-2.1-mini",
-  "gpt-realtime-2.1",
-  "gpt-realtime-1.5",
-] as const;
+export const OPENAI_SPEECH_MODELS = ["gpt-realtime-2.1-mini", "gpt-realtime-2.1"] as const;
+
+// GPT-Live (Codex realtime v3, "frameless") on a ChatGPT subscription, mirroring openai/codex main
+// @ 2026-11-10. The caller's own WebRTC peer carries the audio; qgrid only exchanges its SDP offer
+// through /realtime/calls and watches the call's sideband for the transcript and usage. The direct
+// /v1/live sockets refuse the subscription token ("Voice session access denied"), as Codex expects
+// (core/src/realtime_conversation.rs realtime_api_key). Probe notes: SON-591, SON-592.
+
+/** codex-api/src/endpoint/realtime_call.rs configure_realtime_call_request (backend shape + v3). */
+export const OPENAI_LIVE_CALLS_QUERY = "intent=quicksilver&architecture=avas";
+
+/**
+ * Undocumented; Codex sends it for v3 (core/src/realtime_conversation.rs realtime_request_headers).
+ * Required on both the /calls POST (else 400 invalid_quicksilver_alpha_header) and the sideband.
+ */
+export const OPENAI_LIVE_ALPHA_HEADER = { "OpenAI-Alpha": "quicksilver=v2" } as const;
+
+/** Sideband base: wss://api.openai.com/v1/live/<rtc_id> (realtime_websocket/methods.rs). */
+export const OPENAI_LIVE_WS_URL = "wss://api.openai.com/v1/live" as const;
+
+/** The only live model qgrid exposes. */
+export const OPENAI_LIVE_MODEL = "gpt-live-1";
+
+/**
+ * Sent as session.model, as Codex does (DEFAULT_FRAMELESS_REALTIME_MODEL). The backend ignores the
+ * field on this route: made-up names opened a session too (2026-11-10).
+ */
+const OPENAI_LIVE_WIRE_MODEL = "gpt-live-1-codex";
+
+export const OPENAI_LIVE_DEFAULT_VOICE = "cove";
+
+export function isOpenAILiveVoice(value: string): boolean {
+  return OPENAI_LIVE_VOICES.some((voice) => voice === value);
+}
+
+/** A message the session starts from; user and developer text is input, assistant text output. */
+export interface LiveHistoryMessage {
+  role: "user" | "assistant" | "developer";
+  text: string;
+}
+
+type LiveInitialItem = {
+  type: "message";
+  role: LiveHistoryMessage["role"];
+  content: Array<{ type: "input_text" | "output_text"; text: string }>;
+};
+
+/** The session sent with the call: codex-api methods_frameless_bidi.rs session_json. */
+export type LiveSessionPayload = {
+  model: string;
+  instructions: string;
+  audio: { output: { voice: string } };
+  delegation: { type: "client" };
+  /** The history, as Codex's initial items. */
+  initial_items?: LiveInitialItem[];
+};
+
+export function buildLiveSession(options: {
+  voice: string;
+  instructions?: string;
+  history?: readonly LiveHistoryMessage[];
+}): LiveSessionPayload {
+  const session: LiveSessionPayload = {
+    model: OPENAI_LIVE_WIRE_MODEL,
+    instructions: options.instructions ?? "",
+    audio: { output: { voice: options.voice } },
+    delegation: { type: "client" },
+  };
+
+  if (options.history?.length) {
+    session.initial_items = options.history.map(({ role, text }) => ({
+      type: "message",
+      role,
+      content: [{ type: role === "assistant" ? "output_text" : "input_text", text }],
+    }));
+  }
+
+  return session;
+}
+
+/** One finished turn; the sideband also mirrors both audio streams, which qgrid skips. */
+export const liveTurnDoneEvent = z.looseObject({
+  type: z.literal("turn.done"),
+  turn: z.looseObject({
+    role: z.string(),
+    transcript: z.string(),
+    start_ms: z.number(),
+    end_ms: z.number(),
+  }),
+});
+
+/**
+ * With `delegation.type: "client"` the voice model hands work it cannot do itself (lookups,
+ * reasoning) to the client and keeps talking until the answer arrives; Codex runs it as a turn of
+ * its own agent (core/src/realtime_conversation.rs route_realtime_text_input). Left unanswered,
+ * the voice stalls with filler indefinitely (SON-592). `responses` delegation, where OpenAI runs
+ * the backend, fails on the subscription route (2026-11-10).
+ */
+export const liveDelegationCreatedEvent = z.looseObject({
+  type: z.literal("delegation.created"),
+  item: z.looseObject({
+    id: z.string(),
+    target: z.literal("client"),
+    content: z.array(z.looseObject({ type: z.string(), text: z.string().optional() })),
+  }),
+});
+
+/** The answer to a delegation; no channel means speakable (codex-api methods_frameless_bidi.rs). */
+export function liveDelegationAnswerEvent(delegationItemId: string, text: string): JsonValue {
+  return {
+    type: "delegation.context.append",
+    delegation_item_id: delegationItemId,
+    content: [{ type: "input_text", text }],
+  };
+}
+
+const liveUsage = z.looseObject({ audio_duration_ms: z.number() });
+
+/** Running usage, about every 15 s; the last one stands in when the session ends without close. */
+export const liveUsageUpdatedEvent = z.looseObject({
+  type: z.literal("session.usage.updated"),
+  usage: liveUsage,
+});
+
+export const liveSessionClosedEvent = z.looseObject({
+  type: z.literal("session.closed"),
+  reason: z.string().optional(),
+  usage: liveUsage.optional(),
+});
 
 /**
  * A minimal Opus-only SDP offer. Codex sends a real WebRTC offer; qgrid has no RTP peer and only
@@ -171,7 +290,12 @@ export function buildOpenAIRealtimeHeaders(
 
 const pcmFormat = { type: "audio/pcm", rate: OPENAI_REALTIME_SAMPLE_RATE } as const;
 
-type TranscriptionConfig = { model: string; language?: string; prompt?: string };
+type TranscriptionConfig = {
+  model: string;
+  language?: string;
+  languages?: string[];
+  prompt?: string;
+};
 
 type TranscriptionInput = {
   format: typeof pcmFormat;
@@ -197,7 +321,12 @@ export interface OpenAITranscriptionSessionOptions {
 export function buildTranscriptionSession(options: OpenAITranscriptionSessionOptions): JsonValue {
   const transcription: TranscriptionConfig = { model: options.model };
 
-  if (options.language !== undefined) transcription.language = options.language;
+  // gpt-transcribe takes the list `languages` (sending `language` too is an `invalid_value` error);
+  // the gpt-4o family rejects `languages`. Subscription probe, 2026-11-10.
+  if (options.language !== undefined) {
+    if (options.model === "gpt-transcribe") transcription.languages = [options.language];
+    else transcription.language = options.language;
+  }
 
   if (options.prompt !== undefined) transcription.prompt = options.prompt;
   const input: TranscriptionInput = { format: pcmFormat, transcription };

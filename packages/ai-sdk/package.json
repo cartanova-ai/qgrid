@@ -1,6 +1,6 @@
 {
   "name": "@cartanova/qgrid-ai-sdk",
-  "version": "2.15.3",
+  "version": "2.21.0",
   "description": "AI SDK LanguageModelV3 and ImageModelV3 provider for qgrid",
   "repository": {
     "type": "git",
@@ -17,6 +17,14 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./realtime": {
+      "import": "./dist/realtime.js",
+      "types": "./dist/realtime.d.ts"
+    },
+    "./voices": {
+      "import": "./dist/voices.js",
+      "types": "./dist/voices.d.ts"
     }
   },
   "scripts": {
@@ -38,8 +46,8 @@
     "zod": "catalog:"
   },
   "peerDependencies": {
-    "@ai-sdk/provider": "^4.0.0",
-    "ai": "^7.0.0",
+    "@ai-sdk/provider": "^4.0.15",
+    "ai": "^7.0.102",
     "zod": "^3.25.76 || ^4.1.8"
   },
   "engines": {

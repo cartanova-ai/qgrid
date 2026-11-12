@@ -236,7 +236,8 @@ Content-Type: application/json
       "response_json_ok": null,
       "tool_call_count": 0,
       "is_image_generation": false,
-      "is_structured": false
+      "is_structured": false,
+      "media_kind": null
     }
   ]
 }
@@ -722,6 +723,36 @@ Content-Type: application/json
     "language": "LANGUAGE",
     "format": "mp3",
     "instructions": "INSTRUCTIONS",
+    "speed": 0.7,
+    "withTimestamps": false,
+    "tokenName": "TOKENNAME",
+    "projectName": "PROJECTNAME",
+    "logger": false
+  }
+}
+
+###
+
+POST {{baseUrl}}/api/qgrid/liveCall
+Content-Type: application/json
+
+{
+  "params": {
+    "model": "openai/gpt-live-1",
+    "sdp": "SDP",
+    "voice": "VOICE",
+    "instructions": "INSTRUCTIONS",
+    "history": [
+      {
+        "role": "user",
+        "text": "TEXT"
+      }
+    ],
+    "delegation": {
+      "model": "MODEL",
+      "effort": "low",
+      "webSearch": false
+    },
     "tokenName": "TOKENNAME",
     "projectName": "PROJECTNAME",
     "logger": false

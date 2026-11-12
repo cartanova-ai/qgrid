@@ -4,54 +4,23 @@ import {
   buildCodexIdentityHeaders,
   buildOpenAIResponsesRequest,
   codexCliUserAgent,
+  imageMimeType,
   normalizeOpenAIEvent,
 } from "./openai-backend-protocol";
 
 describe("OpenAI Codex backend protocol", () => {
-  it.each(["png", "jpeg", "webp"])("preserves reported hosted %s generation settings", (output_format) => {
-    expect(normalizeOpenAIEvent({ type: "response.output_item.done", item: {
-      type: "image_generation_call", result: "aGVsbG8=", output_format,
-      size: "841x1870", quality: "low", background: "opaque",
-    } })).toMatchObject({ generation: {
-      route: "codex-responses", size: "841x1870", quality: "low", background: "opaque",
-    } });
-  });
-
-  it("reports PNG byte dimensions instead of a conflicting backend size", () => {
-    const bytes = Buffer.alloc(24);
-    Buffer.from("89504e470d0a1a0a", "hex").copy(bytes);
-    bytes.writeUInt32BE(841, 16);
-    bytes.writeUInt32BE(1870, 20);
-    expect(normalizeOpenAIEvent({ type: "response.output_item.done", item: {
-      type: "image_generation_call", result: bytes.toString("base64"), size: "1152x2560",
-    } })).toMatchObject({ generation: { route: "codex-responses", size: "841x1870" } });
-  });
   it("distinguishes partial function items from completed arguments", () => {
     const item = { type: "function_call", call_id: "call", name: "generate_image", arguments: "{}" };
     expect(normalizeOpenAIEvent({ type: "response.output_item.added", item })).toEqual({ type: "output-item", item, completed: false });
     expect(normalizeOpenAIEvent({ type: "response.output_item.done", item })).toEqual({ type: "output-item", item, completed: true });
   });
-  it("uses returned bytes rather than a mismatched format label", () => {
-    expect(normalizeOpenAIEvent({ type: "response.output_item.done", item: {
-      type: "image_generation_call", result: "UklGRgAAAABXRUJQ", output_format: "png",
-    } })).toMatchObject({ mimeType: "image/webp" });
-  });
-
-  it("detects JPEG when the format label is absent", () => {
-    expect(normalizeOpenAIEvent({ type: "response.output_item.done", item: {
-      type: "image_generation_call", result: "/9j/",
-    } })).toMatchObject({ mimeType: "image/jpeg" });
-  });
-
   it.each([
-    ["png", "iVBORw0KGgo=", "image/png"],
-    ["jpeg", "/9j/", "image/jpeg"],
-    ["webp", "UklGRgAAAABXRUJQ", "image/webp"],
-  ])("preserves %s output MIME type", (format, result, mimeType) => {
-    expect(normalizeOpenAIEvent({
-      type: "response.output_item.done",
-      item: { type: "image_generation_call", result, output_format: format },
-    })).toMatchObject({ type: "image", mimeType });
+    ["iVBORw0KGgo=", "jpeg", "image/png"],
+    ["UklGRgAAAABXRUJQ", "png", "image/webp"],
+    ["/9j/", undefined, "image/jpeg"],
+    ["aGVsbG8=", "webp", "image/webp"],
+  ])("detects history image MIME from bytes before the format label: %s", (base64, format, mimeType) => {
+    expect(imageMimeType(base64, format)).toBe(mimeType);
   });
 
   it("preserves raw history and pins Responses controls", () => {
@@ -64,13 +33,11 @@ describe("OpenAI Codex backend protocol", () => {
       serviceTier: "priority",
       promptCacheKey: "thread-1",
       outputSchema: { schema: { type: "object", additionalProperties: false } },
-      imageGeneration: true,
     });
 
     expect(request).toEqual({
       model: "gpt-5.2-codex",
       input: history,
-      tools: [{ type: "image_generation" }],
       tool_choice: "auto",
       parallel_tool_calls: true,
       reasoning: { effort: "high", summary: "auto" },
@@ -122,7 +89,7 @@ describe("OpenAI Codex backend protocol", () => {
     });
   });
 
-  it("normalizes usage and generated images", () => {
+  it("normalizes usage", () => {
     expect(
       normalizeOpenAIEvent({
         type: "response.completed",
@@ -142,33 +109,5 @@ describe("OpenAI Codex backend protocol", () => {
       responseId: "r1",
       usage: { inputTokens: 4, cachedInputTokens: 2, outputTokens: 3, reasoningTokens: 1, totalTokens: 7 },
     });
-    expect(
-      normalizeOpenAIEvent({
-        type: "response.output_item.done",
-        item: { type: "image_generation_call", id: "img", result: "aGVsbG8=", revised_prompt: "better" },
-      }),
-    ).toEqual({ type: "image", id: "img", base64: "aGVsbG8=", mimeType: "image/png", revisedPrompt: "better", generation: { route: "codex-responses" } });
   });
-
-  it("preserves zero image-tool usage without treating it as missing", () => {
-    const usage = { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
-    expect(normalizeOpenAIEvent({ type: "response.completed", response: {
-      id: "r", tool_usage: { image_gen: usage },
-    } })).toEqual({
-      type: "completed", responseId: "r",
-      imageGeneration: { route: "codex-responses", usage },
-    });
-  });
-
-  it.each([undefined, null, {}, { input_tokens: "4", output_tokens: 1, total_tokens: 5 }, { input_tokens: -1, output_tokens: 1, total_tokens: 0 }])(
-    "ignores missing or malformed image-tool usage: %j", (usage) => {
-      expect(normalizeOpenAIEvent({ type: "response.completed", response: {
-        id: "r", tool_usage: { image_gen: usage },
-        tools: [{ type: "image_generation", model: "gpt-image-2-codex", size: "auto", quality: "auto" }],
-      } })).toEqual({
-        type: "completed", responseId: "r",
-        imageGeneration: { route: "codex-responses", model: "gpt-image-2-codex" },
-      });
-    },
-  );
 });

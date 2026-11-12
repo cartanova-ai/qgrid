@@ -28,6 +28,11 @@ import {
   type GrokMediaCost,
   grokImageCost,
   grokReportedCost,
+  grokSpeechCost,
+  liveCost,
+  openaiSpeechCost,
+  sttCost,
+  type VoiceCost,
 } from "../../utils/providers/common/model-cost";
 import {
   type MediaDispatcher,
@@ -78,18 +83,30 @@ import {
   generateOpenAIPKCE,
 } from "../../utils/providers/openai/openai-oauth";
 import {
+  OPENAI_LIVE_DEFAULT_VOICE,
+  OPENAI_LIVE_MODEL,
   OPENAI_REALTIME_DEFAULT_SPEECH_MODEL,
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
   OPENAI_REALTIME_DEFAULT_VOICE,
+  OPENAI_REALTIME_SAMPLE_RATE,
+  prepareRealtimeInput,
+  wrapPcmAsWav,
 } from "../../utils/providers/openai/openai-realtime-protocol";
-import { OpenAIVoiceInputError } from "../../utils/providers/openai/openai-voice-client";
+import {
+  type OpenAILiveDelegation,
+  type OpenAILiveSummary,
+  type OpenAILiveTurn,
+  OpenAIVoiceInputError,
+} from "../../utils/providers/openai/openai-voice-client";
+import { alignSpeech } from "../../utils/speech-aligner";
+import { wordsFromCharTimestamps } from "../../utils/speech-alignment";
 import {
   type FinishRunParams,
   MICRO_USD,
   RequestLogModel,
   type RequestLogStepFields,
 } from "../request-log/request-log.model";
-import { type RequestLogListParams } from "../request-log/request-log.types";
+import { type HistoryItems, type RequestLogListParams } from "../request-log/request-log.types";
 import { type TokenSubsetA } from "../sonamu.generated";
 
 /** Fields token refresh reads; dispatchers pass their pooled view of a token. */
@@ -108,6 +125,7 @@ import {
   RefreshFailedError,
 } from "./oauth";
 import { CODEX_IMAGE_GENERATION_MODEL } from "./qgrid-image-generation";
+import { imagePlaceholderForLog } from "./qgrid-response-format";
 import {
   afterQuery,
   beforeQuery,
@@ -128,6 +146,9 @@ import {
   type FinishRunInput,
   GenerateImagesInput,
   type GenerateImagesOutput,
+  LiveCallInput,
+  type LiveCallOutput,
+  type LiveHistoryItem,
   SpeakInput,
   type SpeakOutput,
   TranscribeInput,
@@ -372,8 +393,10 @@ function rejectImageGenerationStream(args: QueryInput): void {
 
 function rejectInvalidImageQuery(args: QueryInput): void {
   const standalone = args.model === `openai/${CODEX_IMAGE_GENERATION_MODEL}`;
+  // OpenAI chat models also run explicit image requests through standalone Images.
+  const openaiImage = args.imageGeneration === true && args.model?.startsWith("openai/") === true;
 
-  if (!standalone && args.imageGeneration !== "auto") return;
+  if (!standalone && !openaiImage && args.imageGeneration !== "auto") return;
 
   if (standalone && args.imageGeneration !== true) {
     throw new BadRequestException(
@@ -386,7 +409,7 @@ function rejectInvalidImageQuery(args: QueryInput): void {
   if (args.tools?.length || args.jsonSchema !== undefined) {
     throw new BadRequestException(
       SD("error.detail")(
-        "qgrid: automatic and standalone image generation do not support caller tools or structured output.",
+        "qgrid: OpenAI and automatic image generation do not support caller tools or structured output.",
       ),
     );
   }
@@ -396,9 +419,7 @@ function rejectInvalidImageQuery(args: QueryInput): void {
     args.imageGenerationOptions.outputFormat !== "png"
   ) {
     throw new BadRequestException(
-      SD("error.detail")(
-        "qgrid: automatic and standalone image generation only support PNG output.",
-      ),
+      SD("error.detail")("qgrid: OpenAI and automatic image generation only support PNG output."),
     );
   }
 }
@@ -506,13 +527,14 @@ const inflightAnthropicRefresh = new Map<number, Promise<string>>();
 
 const mediaLogger = getLogger(["qgrid", "media"]);
 
-type MediaKind = "image" | "video" | "stt" | "tts";
+type MediaKind = "image" | "video" | "stt" | "tts" | "live";
 
 const MEDIA_TOOL_NAMES: Record<MediaKind, string> = {
   image: "image_generation",
   video: "video_generation",
   stt: "transcription",
   tts: "speech",
+  live: "live_session",
 };
 
 function grokNotReady(): Error {
@@ -771,7 +793,16 @@ function imageTagForLog(b64: string, mimeType: string, alt: string | undefined):
   return `<img src="data:${mimeType};base64,${b64}" alt="${safeAlt}" />`;
 }
 
-type MediaLogStart = { kind: MediaKind; model: string; prompt: string; projectName?: string };
+type MediaLogStart = {
+  kind: MediaKind;
+  model: string;
+  prompt: string;
+  projectName?: string;
+  /** OpenAI speech style instructions or STT prompt, shown as the run's system prompt. */
+  systemPrompt?: string;
+  /** The earlier conversation a live session starts from. */
+  history?: HistoryItems;
+};
 
 // Creating the running row is a precondition of a logged provider call, as for query.
 async function startMediaRun(
@@ -782,9 +813,12 @@ async function startMediaRun(
 
   return RequestLogModel.createRun({
     user_prompt: start.prompt,
+    system_prompt: start.systemPrompt,
     requested_model_name: start.model,
     project_name: start.projectName,
     is_image_generation: start.kind === "image",
+    media_kind: start.kind,
+    history: start.history,
   });
 }
 
@@ -823,8 +857,23 @@ type MediaLogSuccess = {
   durationMs: number;
   response: string;
   steps: MediaLogSteps;
-  cost?: GrokMediaCost;
+  cost?: GrokMediaCost | VoiceCost;
+  /** Speech only: time to the first audio byte, measured from the same start as `durationMs`. */
+  ttftMs?: number;
 };
+
+// Voice rows embed browser-playable audio (TTS output in the response, STT input in the user
+// prompt) so the request-log detail page can play it, as image rows embed their images. Other
+// formats (raw PCM, mu-law, A-law) keep the byte-count placeholder.
+const LOG_PLAYABLE_AUDIO = /^audio\/(wav|x-wav|wave|mpeg|mp3|mp4|ogg|webm|flac)$/;
+
+function audioForLog(b64: string, mimeType: string, byteLength: number): string {
+  const base = mimeType.split(";")[0]!.trim().toLowerCase();
+
+  return LOG_PLAYABLE_AUDIO.test(base)
+    ? `<audio src="data:${base};base64,${b64}"></audio>`
+    : `[audio ${mimeType} ${byteLength} bytes]`;
+}
 
 function mediaToolSteps(
   kind: MediaKind,
@@ -856,7 +905,7 @@ type MediaCostFields = Pick<FinishRunParams, "cost_usd" | "cost_source"> &
 function mediaCostFields(
   kind: MediaKind,
   model: string,
-  cost: GrokMediaCost | undefined,
+  cost: GrokMediaCost | VoiceCost | undefined,
 ): MediaCostFields {
   if (kind === "image") {
     return {
@@ -885,6 +934,7 @@ function mediaFinishFields(success: Omit<MediaLogSuccess, "steps">): FinishRunPa
     cache_read_tokens: 0,
     cache_creation_tokens: 0,
     duration_ms: success.durationMs,
+    ...(success.ttftMs !== undefined && { ttft_ms: success.ttftMs }),
     ...mediaCostFields(success.kind, success.model, success.cost),
   };
 }
@@ -953,7 +1003,10 @@ async function dispatchMediaCall<T>(
   return result;
 }
 
-type MediaRunLog = Omit<MediaLogSuccess, "kind" | "model" | "durationMs">;
+/** `firstOutputAt` is the epoch-ms first audio byte; the endpoint turns it into `ttftMs`. */
+type MediaRunLog = Omit<MediaLogSuccess, "kind" | "model" | "durationMs" | "ttftMs"> & {
+  firstOutputAt?: number;
+};
 
 /**
  * A one-shot media endpoint: open the run, make the provider call, then log the result. `dispatch`
@@ -969,15 +1022,17 @@ async function runMediaEndpoint<T>(
   const requestLogId = await startMediaRun(start.logger, start);
   const startedAt = Date.now();
 
-  const { output, log } = await dispatchMediaCall(requestLogId, (signal) =>
-    dispatch(signal, requestLogId),
-  );
+  const {
+    output,
+    log: { firstOutputAt, ...log },
+  } = await dispatchMediaCall(requestLogId, (signal) => dispatch(signal, requestLogId));
 
   await finishMediaRun(requestLogId, {
     ...log,
     kind: start.kind,
     model: start.model,
     durationMs: Date.now() - startedAt,
+    ...(firstOutputAt !== undefined && { ttftMs: Math.max(0, firstOutputAt - startedAt) }),
   });
 
   return output;
@@ -1078,7 +1133,8 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<TranscribeOutpu
   const start = {
     kind: "stt",
     model: route,
-    prompt: `[audio ${input.mediaType} ${audio.byteLength} bytes]`,
+    prompt: audioForLog(input.audio, input.mediaType, audio.byteLength),
+    systemPrompt: input.prompt,
     projectName: input.projectName,
     logger: input.logger,
   } as const;
@@ -1106,10 +1162,25 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<TranscribeOutpu
     if (input.language) output.language = input.language;
 
     if (requestLogId !== undefined) output.requestLogId = requestLogId;
+    let alignMs: number | undefined;
+    let wordsError: string | undefined;
+
+    // Realtime transcription carries no timing: the in-process aligner places the transcript in the
+    // input audio. Best-effort like speech timing: without it the transcript returns with no words.
+    try {
+      const alignStart = performance.now();
+      const pcm = prepareRealtimeInput(audio, input.mediaType);
+      const timestamps = await alignSpeech(pcm, OPENAI_REALTIME_SAMPLE_RATE, text);
+      output.words = wordsFromCharTimestamps(timestamps);
+      alignMs = Math.round(performance.now() - alignStart);
+    } catch (error) {
+      wordsError = error instanceof Error ? error.message : String(error);
+    }
 
     const log: MediaRunLog = {
       tokenName: output.tokenName,
       response: output.text,
+      cost: sttCost(route, durationSec),
       steps: [
         {
           toolCallId: "transcription:0",
@@ -1124,7 +1195,15 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<TranscribeOutpu
             prompt: input.prompt,
             durationSec,
           },
-          result: JSON.stringify({ text, durationSec, callId }),
+          result: JSON.stringify({
+            text,
+            durationSec,
+            callId,
+            alignMs,
+            wordsError,
+            // Word timing of the input audio, as returned to the caller.
+            words: output.words,
+          }),
         },
       ],
     };
@@ -1155,6 +1234,12 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
     );
   }
 
+  if (input.speed !== undefined) {
+    throw new BadRequestException(
+      SD("qgrid.openaiVoiceInvalidRequest")("speed is available only on Grok speech"),
+    );
+  }
+
   const request = {
     text: input.text,
     model: id,
@@ -1167,13 +1252,14 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
     kind: "tts",
     model: route,
     prompt: input.text,
+    systemPrompt: input.instructions,
     projectName: input.projectName,
     logger: input.logger,
   } as const;
 
   return runMediaEndpoint(start, async (signal, requestLogId) => {
     const dispatched = await dispatcher.speak({ ...request, signal, ...selection });
-    const { audio, mediaType, transcript, usage } = dispatched.result;
+    const { audio, mediaType, transcript, usage, firstAudioAt } = dispatched.result;
 
     const output: SpeakOutput = {
       audio: Buffer.from(audio).toString("base64"),
@@ -1183,9 +1269,32 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
 
     if (requestLogId !== undefined) output.requestLogId = requestLogId;
 
+    // pcm output is always 24 kHz PCM16, so the log copy is wrapped as WAV to stay playable.
+    const wav = mediaType === "audio/wav" ? audio : wrapPcmAsWav(audio);
+    const logAudio = mediaType === "audio/wav" ? output.audio : Buffer.from(wav).toString("base64");
+    let alignMs: number | undefined;
+
+    if (input.withTimestamps) {
+      // Realtime speech carries no timing: the in-process aligner places the script in the audio.
+      try {
+        const alignStart = performance.now();
+        // 44-byte WAV header (wrapPcmAsWav), then PCM16 mono at the realtime sample rate.
+        const pcm = wav.subarray(44);
+        output.audioTimestamps = await alignSpeech(pcm, OPENAI_REALTIME_SAMPLE_RATE, input.text);
+        output.durationSec = pcm.byteLength / 2 / OPENAI_REALTIME_SAMPLE_RATE;
+        output.timestampsSource = "aligned";
+        alignMs = Math.round(performance.now() - alignStart);
+      } catch (error) {
+        // The speech itself succeeded; timing is best-effort and its failure is reported, not thrown.
+        output.timestampsError = error instanceof Error ? error.message : String(error);
+      }
+    }
+
     const log: MediaRunLog = {
       tokenName: output.tokenName,
-      response: `[audio ${mediaType} ${audio.byteLength} bytes]`,
+      response: audioForLog(logAudio, "audio/wav", audio.byteLength),
+      firstOutputAt: firstAudioAt,
+      cost: openaiSpeechCost(id, usage),
       steps: [
         {
           toolCallId: "speech:0",
@@ -1196,6 +1305,7 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
             voice: request.voice,
             format: request.format ?? "wav",
             instructions: input.instructions,
+            withTimestamps: input.withTimestamps,
             characters: input.text.length,
           },
           result: JSON.stringify({
@@ -1203,6 +1313,10 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
             audioBytes: audio.byteLength,
             transcript,
             usage,
+            alignMs,
+            timestampsError: output.timestampsError,
+            // Word timing for the request-log detail player.
+            words: output.audioTimestamps && wordsFromCharTimestamps(output.audioTimestamps),
           }),
         },
       ],
@@ -1210,6 +1324,188 @@ async function speakOpenAI(input: SpeakInput): Promise<SpeakOutput> {
 
     return { output, log };
   });
+}
+
+const OPENAI_LIVE_ROUTE = `openai/${OPENAI_LIVE_MODEL}`;
+
+/** Session time as m:ss. */
+function sessionClock(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/** The conversation as the run's response: each finished turn with its session time. */
+function liveTranscript(turns: readonly OpenAILiveTurn[]): string {
+  return turns
+    .map((turn) => `**${turn.role}** ${sessionClock(turn.startMs)}  \n${turn.transcript.trim()}`)
+    .join("\n\n");
+}
+
+/** Rewrites the running row's conversation after each turn, in order, so the log fills live. */
+function liveProgressRecorder(requestLogId: number): (turns: readonly OpenAILiveTurn[]) => void {
+  let pending = Promise.resolve();
+
+  return (turns) => {
+    const response = liveTranscript(turns);
+
+    pending = pending.then(async () => {
+      try {
+        await RequestLogModel.recordRunProgress(requestLogId, { response });
+      } catch (e) {
+        mediaLogger.warn(`live progress failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    });
+  };
+}
+
+const LIVE_DELEGATION_DEFAULTS = { model: "openai/gpt-6-luna", effort: "low" } as const;
+
+// The voice keeps talking while it waits; a stuck backend still has to end.
+const LIVE_DELEGATION_TIMEOUT_MS = 90_000;
+
+const LIVE_DELEGATION_SYSTEM =
+  "You work behind a real-time voice assistant. It hands you what it cannot answer on its own, and it says your reply aloud. Reply with exactly what it should say: short, natural spoken language in the language of the conversation, with no markdown, lists, links or citations.";
+
+type LiveDelegationOptions = { model: string; effort: string; webSearch: boolean };
+
+/**
+ * The backend sees the conversation so far, the seeded history first, as Codex's agent has it in
+ * its own thread.
+ */
+function delegationPrompt(
+  history: readonly LiveHistoryItem[],
+  turns: readonly OpenAILiveTurn[],
+  request: string,
+): string {
+  const conversation = [
+    ...history.map((item) => `${item.role}: ${item.text.trim()}`),
+    ...turns.map((turn) => `${turn.role}: ${turn.transcript.trim()}`),
+  ].join("\n");
+
+  return [
+    conversation && `Conversation so far:\n${conversation}`,
+    `Request from the voice assistant:\n${request}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * Answers the voice model's delegations with a qgrid query on the chosen model and, when the run
+ * is logged, records each as a `delegation` tool step beside the session step.
+ */
+function liveDelegationHandler(
+  options: LiveDelegationOptions,
+  instructions: string | undefined,
+  history: readonly LiveHistoryItem[],
+  turnsSoFar: () => readonly OpenAILiveTurn[],
+  log: { requestLogId: number; costs: { delegationUsd: number } } | undefined,
+): (delegation: OpenAILiveDelegation) => Promise<string> {
+  let callIndex = 0;
+
+  return async ({ itemId, text }) => {
+    const startedAt = Date.now();
+    let reply: string;
+    let outcome: Pick<RequestLogStepFields, "tool_result" | "error">;
+
+    try {
+      const result = await QgridDispatcher.query({
+        prompt: delegationPrompt(history, turnsSoFar(), text),
+        system: [
+          LIVE_DELEGATION_SYSTEM,
+          instructions && `The voice assistant's instructions:\n${instructions}`,
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+        model: options.model,
+        effort: options.effort,
+        webSearch: options.webSearch,
+        timeout: LIVE_DELEGATION_TIMEOUT_MS,
+      });
+
+      reply = result.text;
+
+      if (log) log.costs.delegationUsd += result.costUsd;
+
+      outcome = {
+        tool_result: JSON.stringify({
+          answer: result.text,
+          model: result.model,
+          tokenName: result.tokenName,
+          usage: result.usage,
+          costUsd: result.costUsd,
+        }),
+      };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      // The voice adapts this to the conversation instead of stalling on an unanswered request.
+      reply = `The backend could not answer (${message}). Tell the user briefly that you could not get it.`;
+      outcome = { error: message };
+    }
+
+    if (log) {
+      callIndex += 1;
+
+      const step: RequestLogStepFields = {
+        step_index: 0,
+        type: "tool_call",
+        tool_call_index: callIndex,
+        tool_call_id: `delegation:${itemId}`,
+        tool_name: "delegation",
+        tool_args: JSON.stringify({ request: text, ...options }),
+        tool_duration_ms: Date.now() - startedAt,
+        ...outcome,
+      };
+
+      void RequestLogModel.appendStep(log.requestLogId, step).catch((e: Error) =>
+        mediaLogger.error(`live delegation log failed: ${e.message}`),
+      );
+    }
+
+    return reply;
+  };
+}
+
+type LiveRun = {
+  requestLogId: number;
+  toolCallId: string;
+  tokenName: string;
+  startedAt: number;
+  costs: { delegationUsd: number };
+};
+
+// Replaces the session step's result with the summary and finishes the run when the session ends.
+// Best-effort, as for video: the session already happened, so a failure only loses the record.
+async function finishLiveRun(run: LiveRun, summary: OpenAILiveSummary): Promise<void> {
+  try {
+    await RequestLogModel.continueToolRun(run.requestLogId, [
+      { toolCallId: run.toolCallId, output: JSON.stringify(summary), isError: false },
+    ]);
+
+    // The session's audio time plus every delegation's backend call.
+    const audio = liveCost(OPENAI_LIVE_ROUTE, summary.audioDurationMs);
+    const costUsd = (audio?.costUsd ?? 0) + run.costs.delegationUsd;
+
+    const fields = mediaFinishFields({
+      kind: "live",
+      model: OPENAI_LIVE_ROUTE,
+      tokenName: run.tokenName,
+      durationMs: Date.now() - run.startedAt,
+      response: liveTranscript(summary.turns),
+      cost: audio || costUsd ? { costUsd, costSource: "pricing_table" } : undefined,
+    });
+
+    // A sideband that failed before any turn says nothing about the session; record why.
+    await RequestLogModel.finishRun(
+      run.requestLogId,
+      summary.error !== undefined && summary.turns.length === 0
+        ? { ...fields, status: "error", error_message: summary.error }
+        : fields,
+    );
+  } catch (e) {
+    mediaLogger.error(`live request log failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 class QgridFrameClass extends BaseFrameClass {
@@ -1994,7 +2290,8 @@ class QgridFrameClass extends BaseFrameClass {
           return {
             toolCallId: `image_generation:0:${index}`,
             args,
-            result: imageTagForLog(image.b64, image.mimeType, image.revisedPrompt),
+            // The run's response already holds this image.
+            result: imagePlaceholderForLog(image.mimeType, image.b64),
           };
         }),
       };
@@ -2173,7 +2470,7 @@ class QgridFrameClass extends BaseFrameClass {
     const start = {
       kind: "stt",
       model: route,
-      prompt: `[audio ${input.mediaType} ${audio.byteLength} bytes]`,
+      prompt: audioForLog(input.audio, input.mediaType, audio.byteLength),
       projectName: input.projectName,
       logger: input.logger,
     } as const;
@@ -2188,7 +2485,7 @@ class QgridFrameClass extends BaseFrameClass {
         ...selection,
       });
 
-      const { text, language, duration } = dispatched.result;
+      const { text, language, duration, words } = dispatched.result;
 
       const output: TranscribeOutput = { text, model: route, tokenName: dispatched.tokenName };
 
@@ -2198,9 +2495,12 @@ class QgridFrameClass extends BaseFrameClass {
 
       if (requestLogId !== undefined) output.requestLogId = requestLogId;
 
+      if (words) output.words = words.map((w) => ({ text: w.text, start: w.start, end: w.end }));
+
       const log: MediaRunLog = {
         tokenName: output.tokenName,
         response: output.text,
+        cost: sttCost(route, output.durationSec),
         steps: [
           {
             toolCallId: "transcription:0",
@@ -2216,6 +2516,8 @@ class QgridFrameClass extends BaseFrameClass {
               text: output.text,
               language: output.language,
               durationSec: output.durationSec,
+              // Word timing of the input audio, as returned to the caller.
+              words: output.words,
             }),
           },
         ],
@@ -2231,6 +2533,7 @@ class QgridFrameClass extends BaseFrameClass {
     const input = parseMediaInput(SpeakInput, params);
 
     if (voiceProvider(input.model) === "openai") return speakOpenAI(input);
+
     const voice = grokVoice();
     const selection = await resolveGrokTokenSelection(input.tokenName);
     const route = input.model ?? GROK_TTS_LOG_MODEL;
@@ -2240,6 +2543,8 @@ class QgridFrameClass extends BaseFrameClass {
       voice: input.voice ?? GROK_TTS_DEFAULT_VOICE,
       language: input.language ?? GROK_TTS_DEFAULT_LANGUAGE,
       format: input.format ?? GROK_TTS_DEFAULT_FORMAT,
+      with_timestamps: input.withTimestamps,
+      speed: input.speed,
     };
 
     const start = {
@@ -2262,9 +2567,20 @@ class QgridFrameClass extends BaseFrameClass {
 
       if (requestLogId !== undefined) output.requestLogId = requestLogId;
 
+      if (dispatched.result.audioTimestamps) {
+        output.audioTimestamps = dispatched.result.audioTimestamps;
+        output.timestampsSource = "provider";
+      }
+
+      if (dispatched.result.durationSec !== undefined) {
+        output.durationSec = dispatched.result.durationSec;
+      }
+
       const log: MediaRunLog = {
         tokenName: output.tokenName,
-        response: `[audio ${output.mimeType} ${audioBytes} bytes]`,
+        response: audioForLog(output.audio, output.mimeType, audioBytes),
+        firstOutputAt: dispatched.result.firstByteAt,
+        cost: grokSpeechCost(input.text.length),
         steps: [
           {
             toolCallId: "speech:0",
@@ -2274,15 +2590,127 @@ class QgridFrameClass extends BaseFrameClass {
               voice: request.voice,
               language: request.language,
               format: request.format,
+              withTimestamps: input.withTimestamps,
+              speed: input.speed,
               characters: input.text.length,
             },
-            result: JSON.stringify({ mimeType: output.mimeType, audioBytes }),
+            result: JSON.stringify({
+              mimeType: output.mimeType,
+              audioBytes,
+              durationSec: output.durationSec,
+              // Word timing for the request-log detail player.
+              words: output.audioTimestamps && wordsFromCharTimestamps(output.audioTimestamps),
+            }),
           },
         ],
       };
 
       return { output, log };
     });
+  }
+
+  // GPT-Live: exchanges the caller's WebRTC offer and returns the answer at once. The run stays
+  // running for the whole session (up to two hours), its conversation rewritten after each turn;
+  // a run left behind by a server restart is closed by the live stale sweep.
+  @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
+  async liveCall(params: LiveCallInput): Promise<LiveCallOutput> {
+    const input = parseMediaInput(LiveCallInput, params);
+    const dispatcher = openaiVoice();
+    const selection = await resolveMediaTokenSelection("openai", input.tokenName);
+    const voice = input.voice ?? OPENAI_LIVE_DEFAULT_VOICE;
+
+    const delegation: LiveDelegationOptions = {
+      model: input.delegation?.model ?? LIVE_DELEGATION_DEFAULTS.model,
+      effort: input.delegation?.effort ?? LIVE_DELEGATION_DEFAULTS.effort,
+      webSearch: input.delegation?.webSearch ?? false,
+    };
+
+    if (delegation.webSearch && delegation.model.startsWith("anthropic/")) {
+      throw new BadRequestException(
+        SD("qgrid.invalidInput")("delegation.webSearch is available on openai/ and grok/ models"),
+      );
+    }
+
+    const requestLogId = await startMediaRun(input.logger, {
+      kind: "live",
+      model: OPENAI_LIVE_ROUTE,
+      prompt: "",
+      systemPrompt: input.instructions,
+      projectName: input.projectName,
+      history: input.history?.map(({ role, text }) => ({ type: "message", role, content: text })),
+    });
+
+    const startedAt = Date.now();
+    const costs = { delegationUsd: 0 };
+    const progress = requestLogId === undefined ? undefined : liveProgressRecorder(requestLogId);
+    let turnsSoFar: readonly OpenAILiveTurn[] = [];
+
+    const started = await dispatchMediaCall(requestLogId, (signal) =>
+      dispatcher.startLive({
+        sdp: input.sdp,
+        voice,
+        instructions: input.instructions,
+        history: input.history,
+        onTurn: (turns) => {
+          turnsSoFar = turns;
+          progress?.(turns);
+        },
+        onDelegation: liveDelegationHandler(
+          delegation,
+          input.instructions,
+          input.history ?? [],
+          () => turnsSoFar,
+          requestLogId === undefined ? undefined : { requestLogId, costs },
+        ),
+        signal,
+        ...selection,
+      }),
+    );
+
+    const { sdp, callId, ended } = started.result;
+
+    if (requestLogId !== undefined) {
+      const toolCallId = `live_session:${callId}`;
+
+      const args = {
+        kind: "live",
+        model: OPENAI_LIVE_ROUTE,
+        voice,
+        instructions: input.instructions,
+        historyItems: input.history?.length ?? 0,
+        delegation,
+        transport: "webrtc",
+        callId,
+      };
+
+      // Not a pending step (that would fall to the 30-minute tool-wait cleanup): the result says
+      // the session is live until the summary replaces it.
+      const result = JSON.stringify({ status: "live", callId });
+
+      const [step] = mediaToolSteps("live", [{ toolCallId, args, result }], Date.now() - startedAt);
+
+      try {
+        await RequestLogModel.appendStep(requestLogId, step!);
+        await RequestLogModel.recordRunProgress(requestLogId, { token_name: started.tokenName });
+      } catch (e) {
+        mediaLogger.error(`live request log failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+
+      const run = { requestLogId, toolCallId, tokenName: started.tokenName, startedAt, costs };
+      void ended.then((summary) => finishLiveRun(run, summary));
+    }
+
+    const output: LiveCallOutput = {
+      sdp,
+      callId,
+      model: OPENAI_LIVE_ROUTE,
+      voice,
+      tokenName: started.tokenName,
+    };
+
+    if (requestLogId !== undefined) output.requestLogId = requestLogId;
+
+    return output;
   }
 
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })

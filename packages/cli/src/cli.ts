@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Command } from "commander";
 import { z } from "zod";
 
+import { installSpeechAligner, warnMissingSpeechAligner } from "./aligner";
 import { applyQgridDatabaseEnv } from "./database-env";
 import { pnpmGlobalBinDir, runSelfUpdate, SELF_UPDATE_CHECK_TIMEOUT_MS } from "./self-update";
 
@@ -95,7 +96,21 @@ program
   .option("--db <url>", "PostgreSQL connection URL (e.g. postgres://user:pw@host:port/dbname)")
   .option("-p, --port <port>", "server port (default: 44900)")
   .option("--skip-update", "skip qgrid self-update check")
+  .option(
+    "--install-aligner",
+    "download the speech aligner model and install onnxruntime-node, then exit",
+  )
   .action(async (opts) => {
+    if (opts.installAligner) {
+      try {
+        await installSpeechAligner();
+        process.exit(0);
+      } catch (e) {
+        console.error("Speech aligner install failed:", e instanceof Error ? e.message : e);
+        process.exit(1);
+      }
+    }
+
     const serverPort = normalizePort(opts.port ?? "44900");
 
     try {
@@ -136,6 +151,7 @@ program
     }
 
     warnMissingRuntimeCliDependencies();
+    warnMissingSpeechAligner();
 
     // --db가 최우선이며, Qgrid의 공개 DB 환경변수로 정규화한 뒤 Sonamu 내부 env로 복사한다.
     if (opts.db) {

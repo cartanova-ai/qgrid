@@ -357,8 +357,9 @@ Grok model accepts the same factory config as the other models: `serverUrl` (def
 | `qgrid(id)` | `grok/grok-4.7` (default catalog model), `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`, any other `grok/<id>` | `generateText`, `streamText` |
 | `qgrid.image(id)` | `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0` | `generateImage` |
 | `qgrid.video(id)` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` | `experimental_generateVideo` |
-| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI subscription: `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/gpt-transcribe`, `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`, `openai/whisper-1` | `transcribe` |
-| `qgrid.speech(id)` | `grok/grok-tts` (the id only labels the request log); OpenAI subscription: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1`, `openai/gpt-realtime-1.5` | `generateSpeech` |
+| `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI subscription: `openai/gpt-transcribe` (recommended), `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`; `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/whisper-1` until OpenAI shuts them down on 2027-02-26 | `transcribe` |
+| `qgrid.speech(id)` | `grok/grok-tts` (the id only labels the request log); OpenAI subscription: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1` | `generateSpeech` |
+| `qgrid.realtime(id)` (2.20.0+; browser: `createQgridRealtime` from `@cartanova/qgrid-ai-sdk/realtime`) | `openai/gpt-live-1` | `experimental_useRealtime` (experimental, WebRTC) |
 
 qgrid forwards a language-model id that is not in its catalog unchanged instead of rejecting it,
 as it does for OpenAI; the subscription backend decides. It may serve a different model, so check
@@ -404,12 +405,12 @@ Grok language models keep user image parts (https URLs or inline bytes) instead 
 | Image | `n` (up to 3 per call), `aspectRatio`, `xai.resolution` (`1k`/`1.5k`/`2k`), `xai.quality`, `xai.aspect_ratio` (used when `aspectRatio` is unset) | reference `images` become `referenceImages` (edit endpoint); `xai.output_format` becomes `outputFormat` and must be `png`, `jpeg`, or `webp` | `size`, `seed`, `mask`, `xai.sync_mode`, `xai.user` |
 | Video | `duration` (integer 1-15), `aspectRatio`, `xai.resolution` (`480p`/`720p`/`1080p`), `xai.mode: "reference-to-video"` (the only supported mode; needs `xai.referenceImageUrls`), `xai.pollIntervalMs`, `xai.pollTimeoutMs` | `resolution` `WxH` is mapped as in `@ai-sdk/xai` (`1280x720` to `720p`); prompt `image` becomes the start frame; `xai.referenceImageUrls` (up to 5, not 7) become `referenceImages`; `xai.lastFrame` (qgrid extension, `grok-imagine-video-1.5` only) | `fps`, `seed`, `xai.keyframes`, `xai.storageOptions`, `xai.referenceVoiceIds`, `xai.user`. `xai.mode` `edit-video`/`extend-video` and `xai.videoUrl` throw |
 | Transcription | `xai.language` | audio bytes become base64 and `mediaType` loses its parameters (`audio/webm;codecs=opus` to `audio/webm`) | every other `xai` key (`audioFormat`, `sampleRate`, `format`, `diarize`, `keyterm`, ...) |
-| Speech | `voice`, `language` | `outputFormat` becomes `format` (`mp3`, `wav`, `pcm`, `mulaw`, `alaw`; anything else falls back to `mp3` with a warning, as in `@ai-sdk/xai`) | `instructions`, `speed`, every `xai` key (`sampleRate`, `bitRate`, `withTimestamps`, ...) |
+| Speech | `voice`, `language`, `speed` (0.7-1.5, 2.18.0+), `xai.withTimestamps` | `outputFormat` becomes `format` (`mp3`, `wav`, `pcm`, `mulaw`, `alaw`; anything else falls back to `mp3` with a warning, as in `@ai-sdk/xai`) | `instructions`, every other `xai` key (`sampleRate`, `bitRate`, `replace`, ...) |
 
-**Request size.** The qgrid server accepts JSON bodies up to 10 MiB. Inline media travels as
+**Request size.** The qgrid server accepts JSON bodies up to 26 MiB. Inline media travels as
 base64, which grows by a third, so the server caps inline audio, each inline image, and all
-inline images of one request together (video: `image` + `lastFrame` + references) at 7 MiB
-decoded. The SDK rejects larger input before transport; a server 413 surfaces as the same size
+inline images of one request together (video: `image` + `lastFrame` + references) at 19 MiB
+decoded (2.19.0+; earlier servers and SDKs use 10 MiB and 7 MiB). The SDK rejects larger input before transport; a server 413 surfaces as the same size
 error. Compress the input, or pass an https image URL where the option accepts one.
 
 ### Grok images
@@ -477,7 +478,7 @@ import {
   generateSpeech,
   transcribe,
 } from "ai";
-import { qgrid } from "@cartanova/qgrid-ai-sdk";
+import { qgrid, type QgridGrokVoice } from "@cartanova/qgrid-ai-sdk";
 
 const transcript = await transcribe({
   model: qgrid.transcription("grok/grok-voice-transcribe-2.0"),
@@ -490,23 +491,26 @@ transcript.durationInSeconds;
 const speech = await generateSpeech({
   model: qgrid.speech("grok/grok-tts"),
   text: "Your build is ready.",
-  voice: "ara",
+  voice: "ara" satisfies QgridGrokVoice,
   language: "en",
   outputFormat: "mp3",
 });
 speech.audio.uint8Array;
 ```
 
-- `transcribe` detects the audio type from its bytes and falls back to `audio/wav`; the server rejects anything that is not `audio/*`. Transcripts carry no segments (`segments: []`).
-- Speech text is limited to 15,000 characters. Unset `voice`, `language` and `outputFormat` use the server defaults `ara`, `en` and `mp3`, the only combination verified live. Other voices, languages (including `@ai-sdk/xai`'s `auto`) and codecs are passed through but unverified. The server's audio MIME type is in `providerMetadata.qgrid.mediaType`; AI SDK's `speech.audio.mediaType` is sniffed from the bytes.
+- `transcribe` detects the audio type from its bytes and falls back to `audio/wav`; the server rejects anything that is not `audio/*`. Transcripts carry one segment per heard word (`segments: [{ text, startSecond, endSecond }]`): Grok times them itself (2.17.0+); for OpenAI the server force-aligns the transcript to the audio with its built-in aligner (server 2.19.0+), adding about 5% of the clip length to the request. OpenAI segments are empty when the server lacks the aligner or the clip is too long to align (about 4 minutes of dense speech).
+- Speech text is limited to 15,000 characters. Unset `voice`, `language` and `outputFormat` use the server defaults `ara`, `en` and `mp3`. All 28 voices the subscription token lists (9 female, 19 male, such as `ara`, `eve`, `rex`; exported as `QGRID_GROK_VOICES`, type `QgridGrokVoice`; every voice list also comes from `@cartanova/qgrid-ai-sdk/voices` (2.21.0+), an import-free entry for browser and React Native code) were generated live in English as mp3 on 2026-11-09; other languages (including `@ai-sdk/xai`'s `auto`) and codecs are passed through but unverified. Speech tags from xAI's list (`[pause]`, `[laugh]`, `<whisper>...</whisper>`, ...) were not read aloud in a 2026-11 check; ElevenLabs-style emotion tags such as `[deadpan]` are not in that list. `speed` is the speaking rate (1 is normal; the server rejects values outside 0.7-1.5). The server's audio MIME type is in `providerMetadata.qgrid.mediaType`; AI SDK's `speech.audio.mediaType` is sniffed from the bytes.
+- Word timing: `providerOptions: { xai: { withTimestamps: true } }` (2.16.0+, Grok) or `providerOptions: { qgrid: { withTimestamps: true } }` (2.17.0+, Grok or OpenAI) returns per-character timing in `providerMetadata.qgrid.audioTimestamps`: `graphChars` (input characters, spaces, punctuation and speech tags included) and the index-aligned `graphTimes` `[start, end]` seconds, plus `providerMetadata.qgrid.duration`. The shape matches what `@ai-sdk/xai` puts under `providerMetadata.xai`. `providerMetadata.qgrid.timestampsSource` is `"provider"` for Grok, which times its own audio, and `"aligned"` for OpenAI, whose audio the server force-aligns to the text with its built-in aligner (server 2.19.0+; earlier servers used a Grok STT pass). The aligner ships in the qgrid Docker image and `qgrid --install-aligner` installs it on an npm or pnpm install; a server without it returns `timestampsError`, as does speech longer than the aligner's limit (about 4 minutes of dense speech; the error states the limit for that script). If the timing step fails the audio is still returned, with `timestampsError` in the metadata and an AI SDK warning. Text normalization gives an expanded token's whole span to its first character. Grok's mp3 carries no gapless tag, so players keep the encoder delay; since server 2.19.0 qgrid adds those 46 ms to Grok timing so it matches what plays (raw `@ai-sdk/xai` values are 46 ms earlier).
 
 ### OpenAI transcription and speech (ChatGPT subscription)
 
 `openai/` voice ids run on OpenAI realtime sessions with the same ChatGPT subscription tokens qgrid uses for Codex: transcription through the Codex `/realtime/calls` flow, speech through a realtime conversational model that repeats the text verbatim (there is no `gpt-4o-mini-tts` or `tts-1` on subscription). Options follow `@ai-sdk/openai` under `providerOptions.openai`; `providerOptions.qgrid.tokenName` must carry the `openai/` prefix.
 
 ```typescript
+import { type QgridOpenAISpeechVoice } from "@cartanova/qgrid-ai-sdk";
+
 const transcript = await transcribe({
-  model: qgrid.transcription("openai/gpt-4o-mini-transcribe"),
+  model: qgrid.transcription("openai/gpt-transcribe"),
   audio: await readFile("meeting.wav"), // PCM16 WAV or raw PCM only
   providerOptions: { openai: { language: "en", prompt: "qgrid, Codex" } },
 });
@@ -514,7 +518,7 @@ const transcript = await transcribe({
 const speech = await generateSpeech({
   model: qgrid.speech("openai/gpt-realtime-2.1-mini"),
   text: "Your build is ready.",
-  voice: "marin",
+  voice: "marin" satisfies QgridOpenAISpeechVoice,
   outputFormat: "wav",
   providerOptions: { openai: { instructions: "Calm and brisk." } },
 });
@@ -522,12 +526,117 @@ const speech = await generateSpeech({
 
 | Model | Faithful (`@ai-sdk/openai` names) | Transformed | Unsupported (warning) |
 | --- | --- | --- | --- |
-| Transcription | `openai.language`, `openai.prompt` (not on `gpt-realtime-whisper`, which rejects it with HTTP 400; accepted but ignored upstream on `whisper-1`) | input must be PCM16 WAV (`audio/wav`) or raw PCM (`audio/pcm;rate=…;channels=…`); mp3/webm/ogg are rejected by the server with HTTP 400 until a decoder lands. `durationInSeconds` is computed from the audio sent; `language` echoes the request (the realtime session reports neither); `segments` is empty | `openai.temperature`, `openai.include`, `openai.timestampGranularities`, `openai.responseFormat`, `openai.chunkingStrategy`, `openai.streaming` |
-| Speech | `voice` (default `marin`; Codex v2 list `alloy ash ballad coral echo sage shimmer verse marin cedar`, others fail with HTTP 400), `instructions` / `openai.instructions` (style guidance appended to the verbatim-repeat prompt) | `outputFormat` `wav` (default, PCM16 24 kHz) or `pcm`; anything else falls back to `wav` with a warning, as `@ai-sdk/openai` falls back to `mp3` | `language`, `speed`, `openai.speed` |
+| Transcription | `openai.language` (sent as the list `languages` to `gpt-transcribe`), `openai.prompt` (not on `gpt-realtime-whisper`, which rejects it with HTTP 400; accepted but ignored upstream on `whisper-1`) | input must be PCM16 WAV (`audio/wav`) or raw PCM (`audio/pcm;rate=…;channels=…`); mp3/webm/ogg are rejected by the server with HTTP 400 until a decoder lands. `durationInSeconds` is computed from the audio sent; `language` echoes the request (the realtime session reports neither); `segments` carries aligned word timing (server 2.19.0+) | `openai.temperature`, `openai.include`, `openai.timestampGranularities`, `openai.responseFormat`, `openai.chunkingStrategy`, `openai.streaming` |
+| Speech | `voice` (default `marin`; Codex v2 list `alloy ash ballad coral echo sage shimmer verse marin cedar`, exported as `QGRID_OPENAI_SPEECH_VOICES`; others fail with HTTP 400), `instructions` / `openai.instructions` (style guidance appended to the verbatim-repeat prompt) | `outputFormat` `wav` (default, PCM16 24 kHz) or `pcm`; anything else falls back to `wav` with a warning, as `@ai-sdk/openai` falls back to `mp3` | `language`, `speed`, `openai.speed` |
 
-- Each transcription first runs on the Codex realtime call with a 25 s budget (the call is torn down about 30 s after creation); if that window closes before the transcript arrives, the server retries once on the direct realtime transcription socket (up to 60 s). The 7 MiB inline limit (~2.5 min of 24 kHz PCM) normally completes in a few seconds on the first path.
+- Each transcription first runs on the Codex realtime call with a 25 s budget (the call is torn down about 30 s after creation); if that window closes before the transcript arrives, the server retries once on the direct realtime transcription socket (up to 60 s). The 19 MiB inline limit holds about 6.9 min of 24 kHz mono WAV. A 6.7 min English clip finished on the first path in about 20 s; a 6.4 min clip that produced a longer transcript missed the window and finished on the retry after 52 s.
 - Speech is a conversational model reading text, not a TTS model. qgrid's prompt tells it to read only the text inside `<script>` tags and never answer it. Verbatim fidelity was verified on short English sentences and on question-form English character lines. The model's own transcript of what it said is logged with the request for comparison, but for mixed Korean/English text a matching transcript did not guarantee intelligible English audio.
-- Per-model behavior is recorded in the server repository's `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`. Known limits on 2026-10-17: `gpt-live-transcribe` and `gpt-realtime-whisper` returned roughly half of a 60 s clip (use them for short utterances); `gpt-realtime-whisper` rejects `openai.prompt` (the server answers HTTP 400 before any upstream call); `whisper-1` accepts but ignores `openai.prompt`. For speech, `gpt-realtime-2.1-mini` repeated every test text verbatim (13/13), `gpt-realtime-2.1` paraphrased once (12/13), and `gpt-realtime-1.5` often answered the text instead of repeating it (6/13). On 2026-11-06, with the current prompt, `gpt-realtime-2.1` and `gpt-realtime-2.1-mini` both read 12/12 question-form character lines verbatim (the earlier prompt let `gpt-realtime-2.1` answer 7/12); `gpt-realtime-1.5` was not re-run. Compare the logged transcript with your input when fidelity matters.
+- Use `openai/gpt-transcribe`. OpenAI shuts down `gpt-4o-mini-transcribe`, `gpt-4o-transcribe` and `whisper-1` on 2027-02-26. On a 2026-11-10 bench of synthetic speech, `gpt-transcribe` matched `gpt-4o-transcribe` on 108 English clips (the gap was number formatting such as "twenty-first" for "21st"), cut the character error rate on 18 Korean/English mixed clips from 14.5% to 4.4%, transcribed a 229 s clip that `gpt-4o-transcribe` failed, and returned nothing for silence or noise where `gpt-4o-transcribe` invented phrases. It sometimes corrects a learner's grammar ("we eat chicken" came back as "we ate chicken"), so do not grade grammar from the transcript alone.
+- Per-model behavior is recorded in the server repository's `docs/diagnosis/2026-10-17-openai-realtime-audio-probe.md`. Known limits on 2026-10-17: `gpt-live-transcribe` and `gpt-realtime-whisper` returned roughly half of a 60 s clip (use them for short utterances); `gpt-realtime-whisper` rejects `openai.prompt` (the server answers HTTP 400 before any upstream call); `whisper-1` accepts but ignores `openai.prompt`. For speech, `gpt-realtime-2.1-mini` repeated every test text verbatim (13/13), `gpt-realtime-2.1` paraphrased once (12/13); `gpt-realtime-1.5` often answered the text instead of repeating it (6/13) and was removed in 2.18.0. On 2026-11-06, with the current prompt, `gpt-realtime-2.1` and `gpt-realtime-2.1-mini` both read 12/12 question-form character lines verbatim (the earlier prompt let `gpt-realtime-2.1` answer 7/12). On 2026-11-09, judged by two independent STT models over 108 English clips (6 lines, voices `marin` `cedar` `ballad`, 3 takes each), `gpt-realtime-2.1` read 54/54 and `gpt-realtime-2.1-mini` 53/54: one take began with "Sure, let me read that out loud for you exactly as written." Both read every Korean/English mixed line in full (9/9 each). The model's own logged transcript does not show such a preamble, so when fidelity matters, check the audio with STT or `withTimestamps` (its alignment skips the extra words) instead of the transcript.
+
+### OpenAI live voice conversation (GPT-Live)
+
+Server 2.19.2+ runs `openai/gpt-live-1` conversations on a ChatGPT subscription token. GPT-Live listens and speaks at the same time, so it is a conversation, not speech generation.
+
+The audio never passes through qgrid. The browser's own WebRTC peer makes an SDP offer, your server sends it to `POST /api/qgrid/liveCall`, and the browser applies the SDP answer that comes back. Audio and events then flow between the browser and OpenAI. qgrid logs the conversation text and the session's audio time; it stores no audio.
+
+#### With AI SDK's experimental realtime runtime (SDK 2.20.0+)
+
+`qgrid.realtime("openai/gpt-live-1")` is an AI SDK `Experimental_RealtimeModelV4`. AI SDK's realtime session (`experimental_useRealtime` in `@ai-sdk/react`, `ai` 7.0.102+) then owns the microphone, playback, the WebRTC peer and the data channel; your server route only exchanges the SDP. The API is experimental in AI SDK and may change between `ai` releases.
+
+```tsx
+// Browser: import from the /realtime entry, which carries no Node-only code.
+import { createQgridRealtime } from "@cartanova/qgrid-ai-sdk/realtime";
+import { experimental_useRealtime } from "@ai-sdk/react";
+
+// Module scope: the hook starts a new session whenever it gets a new model object.
+const model = createQgridRealtime("openai/gpt-live-1");
+
+function LiveConversation() {
+  // No sessionConfig: the server route sets the voice and instructions.
+  const realtime = experimental_useRealtime({ model, api: { session: "/api/live" } });
+
+  return (
+    <>
+      <button onClick={() => realtime.connect()}>Start</button>
+      <button onClick={() => realtime.close()}>End</button>
+      <p>{realtime.status}: {realtime.session?.usage?.seconds ?? 0} s</p>
+      {realtime.session?.transcripts.map((part, i) => (
+        <span key={i}>{part.speaker === "user" ? "🧑 " : ""}{part.delta}</span>
+      ))}
+    </>
+  );
+}
+```
+
+```typescript
+// Your server route: the hook posts { sdp, sessionConfig } and expects { sdp, sessionId }.
+import { qgrid, type QgridLiveVoice, type QgridRealtimeProviderOptions } from "@cartanova/qgrid-ai-sdk";
+
+app.post("/api/live", async (req, res) => {
+  const answer = await qgrid.realtime("openai/gpt-live-1").doCreateWebRTCSession({
+    sdp: req.body.sdp,
+    // Set on the server; the browser's sessionConfig is not trusted.
+    sessionConfig: {
+      voice: "cove" satisfies QgridLiveVoice,
+      instructions: "You are a friendly English tutor.",
+      providerOptions: {
+        qgrid: { delegation: { model: "openai/gpt-6-luna", webSearch: true } } satisfies QgridRealtimeProviderOptions,
+      },
+    },
+  });
+  res.json(answer); // { sdp, sessionId, requestLogId }
+});
+```
+
+- `providerOptions.qgrid` (`QgridRealtimeProviderOptions`): `delegation`, `history`, `tokenName` and `logger`, the same fields as the HTTP `params` below. `sessionConfig.voice` and `sessionConfig.instructions` map to `voice` and `instructions`; other `sessionConfig` fields are not sent. Set them in the server call rather than in the hook: the hook starts a new session whenever it gets a new `sessionConfig` object, so an inline object would restart the session on every render. `serverUrl` and `projectName` come from `createQgridRealtime(id, config)` or `QGRID_URL` / `QGRID_PROJECT_NAME`.
+- qgrid answers the voice's delegations on the server, so each `delegation-created` event has `target: "provider"`: there is nothing for the app to send back. The session reports no `delegationMode`: AI SDK's runtime rejects `"provider"`, and `"client"` would mean the app must answer.
+- Supported commands: `close()` (sends `session.close` and waits for the final usage) and `sendEvent({ type: "context-append", content, delegationId })`, which adds text the voice can use (`delegationId: null` for the whole session). Microphone mute, session updates and the other commands throw `UnsupportedFunctionalityError`.
+- Events: `session.transcripts` holds the spoken text as `transcript-fragment` events (`speaker`, `delta`, `startMs`, `endMs`); fragments are pieces of a turn, not whole turns. `session.usage.seconds` is the session's audio time. The raw GPT-Live events are in each event's `raw`.
+
+#### Without AI SDK (HTTP)
+
+```typescript
+// Browser
+const pc = new RTCPeerConnection();
+const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+mic.getTracks().forEach((track) => pc.addTrack(track));
+pc.addEventListener("track", (event) => {
+  speaker.srcObject = new MediaStream([event.track]); // an <audio autoplay> element
+});
+
+const events = pc.createDataChannel("oai-events");
+events.addEventListener("message", (event) => console.log(JSON.parse(event.data)));
+
+const offer = await pc.createOffer();
+await pc.setLocalDescription(offer);
+const { sdp } = await fetch("/live", { method: "POST", body: offer.sdp }).then((r) => r.json());
+await pc.setRemoteDescription({ type: "answer", sdp });
+
+// To end: closing only the peer keeps the session, and its billed time, running for about 30 s.
+events.send(JSON.stringify({ type: "session.close" }));
+
+// Your server
+app.post("/live", async (req, res) => {
+  const response = await fetch(`${QGRID_URL}/api/qgrid/liveCall`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      params: { sdp: req.body, voice: "cove", instructions: "You are a friendly English tutor.", projectName: "my-app" },
+    }),
+  });
+  res.status(response.status).json(await response.json());
+});
+```
+
+- Delegation: GPT-Live hands what it cannot answer itself (lookups, reasoning) to the client and keeps talking until the answer arrives. qgrid answers it, as Codex answers with its own agent: it runs the request as a qgrid query on the session's delegation model, with the conversation so far, and the voice speaks the reply. Choose per session with `params.delegation`: `model` (any model qgrid serves, the list the dashboard chat offers: `QGRID_MODELS` in the server's `qgrid.types.ts`; default `openai/gpt-6-luna`; others are rejected with HTTP 400), `effort` (`low` default, `medium`, `high`) and `webSearch` (the provider's hosted web search, `openai/` and `grok/` only; off by default). A failed delegation is answered with a short failure note so the voice can say so instead of waiting. Each delegation is logged as a `delegation` tool step, and its backend cost is added to the run's cost.
+- History: `params.history` starts the session from an earlier conversation, `[{ role: "user" | "assistant" | "developer", text }]`, oldest first. It can be a past live session's turns or a text chat alike; the voice and its delegations treat it as what was already said. At most 128 items and 1,000,000 characters: past 128 items, or with any other role, OpenAI accepts the call but never starts the session, so the server answers HTTP 400 first. To carry a conversation across sessions (or reconnect after a dropped network), pass the previous session's turns.
+- Request `params`: `sdp` (the offer, required), `voice`, `instructions`, `history`, `delegation`, and the usual `tokenName` (`openai/` prefix), `projectName` and `logger`. `model` may be omitted or `openai/gpt-live-1`; any other value is rejected with HTTP 400.
+- Response: `sdp` (the answer), `callId`, `model`, `voice`, `tokenName` and `requestLogId`. The request log stays `running` for the whole session and its conversation, with each turn's session time, is rewritten after every finished turn, so it can be read while the session runs. When the session ends the run is finished with a cost estimate of $0.05 per minute of session audio (the API list price).
+- Voices (`QGRID_LIVE_VOICES`, type `QgridLiveVoice`, also from the `/realtime` entry): `cove` (default) `juniper maple spruce ember vale breeze arbor sol aube bubbie haetsal hanul himari leher miko neer porto rindo rio rivage selva sonna tinta viola`. The realtime speech voices (`marin` and others) do not apply; the server rejects them with HTTP 400, because OpenAI would accept the call and then never start the session.
+- Data channel events: `turn.created`, `turn.delta` and `turn.done` carry each turn's `role` and `transcript` as it is spoken; `session.usage.updated` and `session.closed` carry `usage.audio_duration_ms`. A session ends on its own two hours after it starts.
+- Call the endpoint from your server, not from the browser: qgrid has no caller authentication and sends no CORS headers.
+- The upstream ignores the requested model name, so the serving model cannot be confirmed; Codex itself sends `gpt-live-1-codex`, as qgrid does. Caller-defined tools are not exposed: the voice's delegations run on qgrid's chosen model only.
 
 ## Telemetry Logger
 

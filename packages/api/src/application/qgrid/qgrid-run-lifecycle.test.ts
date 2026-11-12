@@ -15,9 +15,11 @@ const {
   finishRunMock,
   createRunMock,
   expireStaleToolWaitingRunsMock,
+  expireStaleLiveRunsMock,
   continueToolRunMock,
   recordRunProgressMock,
 } = vi.hoisted(() => ({
+  expireStaleLiveRunsMock: vi.fn(),
   recordRunProgressMock: vi.fn(),
   appendStepMock: vi.fn(),
   aggregateStepUsageMock: vi.fn(),
@@ -34,6 +36,7 @@ vi.mock("../request-log/request-log.model", () => ({
     finishRun: finishRunMock,
     createRun: createRunMock,
     expireStaleToolWaitingRuns: expireStaleToolWaitingRunsMock,
+    expireStaleLiveRuns: expireStaleLiveRunsMock,
     continueToolRun: continueToolRunMock,
     recordRunProgress: recordRunProgressMock,
   },
@@ -102,6 +105,7 @@ describe("qgrid run lifecycle start", () => {
     vi.spyOn(Date, "now").mockReturnValue(lifecycleNow);
     createRunMock.mockReset().mockResolvedValue(10);
     expireStaleToolWaitingRunsMock.mockReset().mockResolvedValue([]);
+    expireStaleLiveRunsMock.mockReset().mockResolvedValue(0);
     continueToolRunMock.mockReset().mockResolvedValue(3);
     aggregateStepUsageMock.mockReset().mockResolvedValue({
       input_tokens: 0,
@@ -117,6 +121,27 @@ describe("qgrid run lifecycle start", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("stores history images as their length only", async () => {
+    const image = "data:image/png;base64,iVBORw0KGgo=";
+    const history = JSON.stringify([
+      { type: "message", role: "user", content: [{ type: "input_image", image_url: image }] },
+    ]);
+
+    await beforeQuery({ prompt: "edit it", history });
+
+    expect(createRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        history: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_image", image_url: `[data-url ${image.length} chars]` }],
+          },
+        ],
+      }),
+    );
   });
 
   it("creates a running parent with the full requested model before an initial query", async () => {
@@ -261,6 +286,15 @@ describe("qgrid run lifecycle start", () => {
       "tool-call run: no follow-up within 30 minutes",
     );
     expect(finishRunMock).not.toHaveBeenCalled();
+  });
+
+  it("closes live sessions only after their two-hour limit and the watcher's margin", async () => {
+    await beforeQuery({ prompt: "hi", model: "openai/gpt-5-codex" });
+
+    expect(expireStaleLiveRunsMock).toHaveBeenCalledWith(
+      new Date(lifecycleNow - (2 * 60 + 15) * 60 * 1000),
+      "live session: the server stopped before the session ended",
+    );
   });
 
   it("throttles stale cleanup while still creating every requested run", async () => {
@@ -519,7 +553,8 @@ describe("qgrid run lifecycle TTFT", () => {
             size: "1536x1024",
           },
         }),
-        tool_result: '<img src="data:image/png;base64,iVBORw0KGgoBAgM" alt="green triangle" />',
+        // The run's response carries the image itself.
+        tool_result: "[image image/png 11 bytes, shown in the response]",
       }),
     );
   });

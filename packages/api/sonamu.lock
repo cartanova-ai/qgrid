@@ -17,11 +17,11 @@
   },
   {
     "path": "api/src/application/agent/agent.frame.ts",
-    "checksum": "8099e86fc5210627c98900a889d63db54bcff999"
+    "checksum": "7d5bde482c77634045aaf28dcf4ebd6392fabb29"
   },
   {
     "path": "api/src/application/agent/agent.model.ts",
-    "checksum": "a36b06b40ef9c324135800e539b78da8ebdb6506"
+    "checksum": "2e569dd5a23f72c532c631ccbe4e25b8e3126e5c"
   },
   {
     "path": "api/src/application/agent/agent.types.ts",
@@ -37,11 +37,11 @@
   },
   {
     "path": "api/src/application/qgrid/qgrid.frame.ts",
-    "checksum": "1a6894221455b29f9819a07ce70b00db20974376"
+    "checksum": "ab664040cd5de153120cad16f14d4083dd478c2c"
   },
   {
     "path": "api/src/application/qgrid/qgrid.types.ts",
-    "checksum": "00578593c59964e65f2c0812fdea14e76f1e6374"
+    "checksum": "57cc19e2b04bacef2e1a43f4b85a6ffbb903fbbf"
   },
   {
     "path": "api/src/application/queries.generated.ts",
@@ -61,11 +61,11 @@
   },
   {
     "path": "api/src/application/request-log/request-log.entity.json",
-    "checksum": "d571910dad1b5fb90fb0395993850018c71500e2"
+    "checksum": "3ee8d74c204ae09703d64009f66d027e479a62f8"
   },
   {
     "path": "api/src/application/request-log/request-log.model.ts",
-    "checksum": "102542310d3c03041530346caf191a1e03635a35"
+    "checksum": "426c115d1c616bf860193f9c263941b87b05d77a"
   },
   {
     "path": "api/src/application/request-log/request-log.types.ts",
@@ -85,15 +85,15 @@
   },
   {
     "path": "api/src/application/sonamu.generated.http",
-    "checksum": "68caa3ee9a380df34a0733e45533c901e34faad0"
+    "checksum": "041d5ff48b604a48b61fd3a29e410b5a71956f19"
   },
   {
     "path": "api/src/application/sonamu.generated.sso.ts",
-    "checksum": "6242695225351ec753d6b958b64c391c1c0b2983"
+    "checksum": "d69d2897a166985346c2631f6adb733197eb98ce"
   },
   {
     "path": "api/src/application/sonamu.generated.ts",
-    "checksum": "d17c0fe670ba605b3bcc2ac0d78ec9960ec3090e"
+    "checksum": "c0a0487762f989584c1988b7b88ba902b118395c"
   },
   {
     "path": "api/src/application/token/token.entity.json",
@@ -117,7 +117,7 @@
   },
   {
     "path": "api/src/i18n/sd.generated.ts",
-    "checksum": "ad8c48bbae1aa425d79163a0e1e6fabb87260639"
+    "checksum": "743d0e918a9be69e3dadf7f7172492c1becf69e0"
   },
   {
     "path": "api/src/sonamu.config.ts",
@@ -133,7 +133,7 @@
   },
   {
     "path": "web/src/i18n/sd.generated.ts",
-    "checksum": "b355a6e37c4288db093c90486146279967915bfa"
+    "checksum": "cd713cb46c76da5e32b275efce683e1f45a5b35a"
   },
   {
     "path": "web/src/services/agent-session/agent-session.types.ts",
@@ -153,7 +153,7 @@
   },
   {
     "path": "web/src/services/qgrid/qgrid.types.ts",
-    "checksum": "d5351285bcfb9eb124c6823db524f26a2578e5ac"
+    "checksum": "25a7cf710464e8e91970391a582bfeb00e2553eb"
   },
   {
     "path": "web/src/services/request-log-step/request-log-step.types.ts",
@@ -165,7 +165,7 @@
   },
   {
     "path": "web/src/services/services.generated.ts",
-    "checksum": "1d1543b74e0ca47460d12c9b94220f5fcf55dcfc"
+    "checksum": "6f8170abd75a8678e65c2dcfbcdbac26e9da5e27"
   },
   {
     "path": "web/src/services/setting/setting.types.ts",
@@ -173,7 +173,7 @@
   },
   {
     "path": "web/src/services/sonamu.generated.ts",
-    "checksum": "ee04919334cbdcf6ba40fdf0c839c167e64f1f47"
+    "checksum": "26f46465563394b9770e8adc0f4034d9928734d4"
   },
   {
     "path": "web/src/services/token/token.types.ts",

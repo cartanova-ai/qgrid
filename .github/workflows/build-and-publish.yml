@@ -175,6 +175,11 @@ jobs:
         shell: bash
         run: |
           docker run --rm --entrypoint claude "$QGRID_RELEASE_IMAGE" --version
+          docker run --rm --entrypoint node "$QGRID_RELEASE_IMAGE" --input-type=module -e '
+            const { alignSpeech } = await import("./dist/utils/speech-aligner.js");
+            const timing = await alignSpeech(new Uint8Array(48000), 24000, "hi");
+            if (timing.graphChars.join("") !== "hi") process.exit(1);
+            console.log("speech aligner ok");'
           docker exec "$POSTGRES_CONTAINER" createdb -U postgres qgrid_docker_smoke
           docker run -d --name qgrid-image-smoke --network host \
             -e QGRID_DB_HOST=127.0.0.1 -e QGRID_DB_PORT=5432 \
