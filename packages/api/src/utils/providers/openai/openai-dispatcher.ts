@@ -185,6 +185,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
       { preferredTokenId, requirePreferredToken },
       signal,
       (credentials) => createOpenAIDecision(credentials, decision, signal, this.pool.fetchImpl),
+      { refreshQuota: false },
     );
   }
 }

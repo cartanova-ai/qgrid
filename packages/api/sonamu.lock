@@ -9,11 +9,11 @@
   },
   {
     "path": "api/src/application/qgrid/qgrid.frame.ts",
-    "checksum": "bbdb83dbca5ee4fed0b636cbb14414e340a9da62"
+    "checksum": "6aff116015343019a282d83cfb77f96f43482470"
   },
   {
     "path": "api/src/application/qgrid/qgrid.types.ts",
-    "checksum": "a3c0bc18b8b91a5aa8e935b9ac0f6a6569f36d7a"
+    "checksum": "d1e20712db06907423e69afb044d9f782be6fe00"
   },
   {
     "path": "api/src/application/queries.generated.ts",
@@ -81,11 +81,11 @@
   },
   {
     "path": "api/src/i18n/en.ts",
-    "checksum": "d7091999881a77afe2e97a625cd7073e80eed137"
+    "checksum": "f5e95c43fde596ca0a8ac4a9aef6ea94416f7ce5"
   },
   {
     "path": "api/src/i18n/ko.ts",
-    "checksum": "0889d1bb3574fc811837e76c0cc1e30b67dec097"
+    "checksum": "3f01d37bdf77aa728b6fb52068d73e29e23ec580"
   },
   {
     "path": "api/src/i18n/sd.generated.ts",
@@ -97,11 +97,11 @@
   },
   {
     "path": "web/src/i18n/en.ts",
-    "checksum": "fe6a13099013346a0a3a4862cc8d413721278c1a"
+    "checksum": "af95112ddad33c769aeaafdc9081e4bb3e5915fe"
   },
   {
     "path": "web/src/i18n/ko.ts",
-    "checksum": "b2fd099642292b89db889197ad00023e6ae6559f"
+    "checksum": "e33f7ba3ca0296104500ff7bac650ae068c9c717"
   },
   {
     "path": "web/src/i18n/sd.generated.ts",
@@ -113,7 +113,7 @@
   },
   {
     "path": "web/src/services/qgrid/qgrid.types.ts",
-    "checksum": "cad0f43513106440184c6edb967cf9da26d81666"
+    "checksum": "a23a04b98cf0468d128c45b2ab30e4f4b7ed91af"
   },
   {
     "path": "web/src/services/request-log-step/request-log-step.types.ts",

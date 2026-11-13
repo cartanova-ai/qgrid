@@ -28,6 +28,7 @@ import {
   GrokRateLimitedError,
   GrokZdrVideoUnavailableError,
 } from "../../utils/providers/grok";
+import { OpenAIProtocolError } from "../../utils/providers/openai/openai-backend-protocol";
 import { ImageGenerationError } from "../../utils/providers/openai/openai-responses-runtime";
 import type {
   GenerateRequest,
@@ -2452,6 +2453,36 @@ describe("QgridFrame Grok media and voice (U11)", () => {
 
       expect(out.answers.dept).toEqual({ type: "refusal" });
       expect(requestLogFinishRunMock).toHaveBeenCalledWith(77, expect.objectContaining({ status: "error", error_message: "Decision refused: dept" }));
+    });
+
+    it("answers OpenAI's verdict on the request as 400 or 429 and leaves other upstream failures alone", async () => {
+      const failWith = (status: number, retryAfterMs?: number) => {
+        const decide = vi.fn().mockRejectedValue(new OpenAIProtocolError("upstream said no", "code", status, retryAfterMs));
+        Object.assign(QgridDispatcher, { openaiDispatcher: { decide } });
+      };
+
+      failWith(400);
+      await expect(call()).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining("upstream said no") });
+      // The run still closes as an error.
+      expect(requestLogFinishRunMock).toHaveBeenCalledWith(77, expect.objectContaining({ status: "error" }));
+      failWith(429, 7_000);
+      await expect(call()).rejects.toMatchObject({ statusCode: 429 });
+      failWith(403);
+      await expect(call()).rejects.toBeInstanceOf(OpenAIProtocolError);
+      failWith(500);
+      await expect(call()).rejects.toBeInstanceOf(OpenAIProtocolError);
+    });
+
+    it("rejects a malformed or oversized inline image with 400 before logging or dispatch", async () => {
+      const decide = decideWith([]);
+      const image = (url: string) => call({ state: [{ type: "image", url }] });
+
+      await expect(image("data:image/png;base64,AAAA\nAAAA")).rejects.toMatchObject({ statusCode: 400 });
+      await expect(image("data:image/png;base64,AAA")).rejects.toMatchObject({ statusCode: 400 });
+      await expect(image("data:application/pdf;base64,AAAA")).rejects.toMatchObject({ statusCode: 400 });
+      await expect(image("ftp://example.com/a.png")).rejects.toMatchObject({ statusCode: 400 });
+      expect(requestLogCreateRunMock).not.toHaveBeenCalled();
+      expect(decide).not.toHaveBeenCalled();
     });
 
     it("rejects a request outside OpenAI limits with 400 before logging or dispatch", async () => {

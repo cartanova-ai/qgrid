@@ -100,6 +100,64 @@ describe("createOpenAIDecision", () => {
   });
 });
 
+describe("createOpenAIDecision response handling", () => {
+  it("accepts a null usage on a served response", async () => {
+    const fetcher = vi.fn(async () => Response.json({ ...answer, usage: null }));
+    const result = await createOpenAIDecision(credentials, request, undefined, fetcher);
+
+    expect(result.answers).toHaveLength(1);
+    expect(fromOpenAIDecisionResult({ category: { type: "choice", criteria: { fruit: null, vehicle: null } } }, result).usage).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+    });
+  });
+
+  it("rejects a refusal that names no question as an invalid response", async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({ ...answer, answers: [{ type: "refusal", name: null }] }),
+    );
+
+    await expect(createOpenAIDecision(credentials, request, undefined, fetcher)).rejects.toThrow(
+      "Invalid OpenAI Decisions response",
+    );
+  });
+
+  it("reports a cancel while reading the body as the cancel, not a malformed response", async () => {
+    const controller = new AbortController();
+    const reason = new Error("caller went away");
+
+    const fetcher = vi.fn(async () => {
+      const body = new ReadableStream<Uint8Array>({
+        pull() {
+          controller.abort(reason);
+          throw reason;
+        },
+      });
+
+      return new Response(body, { status: 200 });
+    });
+
+    await expect(
+      createOpenAIDecision(credentials, request, controller.signal, fetcher),
+    ).rejects.toBe(reason);
+  });
+
+  it("carries Retry-After from a 429 for the caller-facing error", async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json(
+        { error: { message: "Rate limit reached", code: "rate_limit_exceeded" } },
+        { status: 429, headers: { "retry-after": "7" } },
+      ),
+    );
+
+    await expect(
+      createOpenAIDecision(credentials, request, undefined, fetcher),
+    ).rejects.toMatchObject({ status: 429, retryAfterMs: 7_000 });
+  });
+});
+
 describe("qgrid neutral shape <-> OpenAI wire", () => {
   it("maps state parts, question IDs, and criteria as @ai-sdk/openai does", () => {
     const wire = toOpenAIDecisionRequest({

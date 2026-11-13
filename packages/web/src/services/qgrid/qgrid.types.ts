@@ -970,6 +970,31 @@ export type HealthResponse = z.infer<typeof HealthResponse>;
 
 export const OPENAI_DECISION_MODEL = "gpt-6-luna" as const;
 
+const DECISION_IMAGE_DATA_URL = /^data:image\/(?:png|jpeg|webp|gif);base64,([A-Za-z0-9+/]*={0,2})$/;
+
+function decisionInlineImageBytes(url: string): number {
+  const base64 = DECISION_IMAGE_DATA_URL.exec(url)?.[1];
+
+  return base64 === undefined ? 0 : base64DecodedBytes(base64);
+}
+
+// An http(s) URL (fetched by OpenAI, never by qgrid) or a well-formed base64 PNG/JPEG/WebP/GIF data
+// URL within MEDIA_MAX_INLINE_BYTES. Strict base64 also keeps `maskDataUrls` matching it in logs.
+const DecisionImageRef = z.string().superRefine((value, ctx) => {
+  if (/^https?:\/\//.test(value)) return;
+
+  const base64 = DECISION_IMAGE_DATA_URL.exec(value)?.[1];
+
+  if (base64 === undefined || base64.length === 0 || base64.length % 4 !== 0) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Expected an HTTP(S) image URL or a base64 PNG/JPEG/WebP/GIF data URL",
+    });
+  } else if (base64DecodedBytes(base64) > MEDIA_MAX_INLINE_BYTES) {
+    ctx.addIssue({ code: "custom", message: `image data URL exceeds ${MEDIA_MAX_INLINE_LABEL}` });
+  }
+});
+
 const decisionInputPart = z.discriminatedUnion("type", [
   z.object({ type: z.literal("input_text"), text: z.string() }),
   z.object({
@@ -978,12 +1003,7 @@ const decisionInputPart = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("input_image"),
-    image_url: z
-      .string()
-      .regex(
-        /^(https?:\/\/|data:image\/(png|jpeg|webp|gif);base64,)/,
-        "Expected an HTTP(S) image URL or a base64 PNG/JPEG/WebP/GIF data URL",
-      ),
+    image_url: DecisionImageRef,
     detail: z.enum(["low", "high", "auto", "original"]).optional(),
   }),
 ]);
@@ -1043,7 +1063,8 @@ export type OpenAIDecisionRequest = z.infer<typeof OpenAIDecisionRequest>;
 const probability = z.number().min(0).max(1);
 
 export const OpenAIDecisionAnswer = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("refusal"), name: z.string().nullable() }),
+  // qgrid names every question, so a refusal always names the question it declines.
+  z.object({ type: z.literal("refusal"), name: z.string() }),
   z.object({ type: z.literal("predicate"), name: z.string(), probability }),
   z.object({
     type: z.literal("choice"),
@@ -1078,7 +1099,8 @@ export const OpenAIDecisionUsage = z.object({
 export const OpenAIDecisionResult = z.object({
   model: z.string(),
   answers: z.array(OpenAIDecisionAnswer),
-  usage: OpenAIDecisionUsage.optional(),
+  // A missing or null usage must not fail a call that was already served.
+  usage: OpenAIDecisionUsage.nullish(),
 });
 
 export type OpenAIDecisionResult = z.infer<typeof OpenAIDecisionResult>;
@@ -1096,15 +1118,7 @@ export const DecisionStatePart = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text"), text: z.string() }),
   z.object({ type: z.literal("json"), value: z.json() }),
   // HTTP(S) URL or base64 data URL; the SDK converts AI SDK file parts to this.
-  z.object({
-    type: z.literal("image"),
-    url: z
-      .string()
-      .regex(
-        /^(https?:\/\/|data:image\/(png|jpeg|webp|gif);base64,)/,
-        "Expected an HTTP(S) image URL or a base64 PNG/JPEG/WebP/GIF data URL",
-      ),
-  }),
+  z.object({ type: z.literal("image"), url: DecisionImageRef }),
 ]);
 
 export const DecisionQuestion = z.discriminatedUnion("type", [
@@ -1131,7 +1145,17 @@ export type DecisionQuestion = z.infer<typeof DecisionQuestion>;
 
 export const DecideInput = z.object({
   model: DecisionModelId,
-  state: z.array(DecisionStatePart).min(1),
+  state: z
+    .array(DecisionStatePart)
+    .min(1)
+    .refine(
+      (parts) =>
+        parts.reduce(
+          (total, part) => total + (part.type === "image" ? decisionInlineImageBytes(part.url) : 0),
+          0,
+        ) <= MEDIA_MAX_INLINE_BYTES,
+      INLINE_IMAGES_TOTAL_MESSAGE,
+    ),
   /** Keyed by question ID; answers come back under the same IDs. */
   questions: z
     .record(z.string().min(1), DecisionQuestion)

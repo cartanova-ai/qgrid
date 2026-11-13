@@ -65,6 +65,7 @@ export default {
   "qgrid.grokNoWorkers": (detail: string) => `사용 가능한 Grok 토큰이 없습니다: ${detail}`,
   "qgrid.grokRateLimited": (retryAfterSec: number) =>
     `모든 Grok 토큰이 요청 한도에 걸렸습니다. ${retryAfterSec}초 후 다시 시도해주세요`,
+  "qgrid.openaiRateLimited": (detail: string) => `OpenAI 요청 한도에 걸렸습니다: ${detail}`,
   "qgrid.grokOnDemandExcluded": (tokens: string) =>
     `xAI에서 on-demand 과금이 켜져 있어 모든 Grok 토큰이 제외되었습니다: ${tokens}. on-demand 과금을 끄거나 다른 계정을 추가해주세요`,
   "qgrid.grokZdrVideoUnavailable": (tokens: string) =>

@@ -69,6 +69,7 @@ export default {
   "qgrid.grokNoWorkers": (detail: string) => `No Grok token is available: ${detail}`,
   "qgrid.grokRateLimited": (retryAfterSec: number) =>
     `All Grok tokens are rate limited. Retry after ${retryAfterSec} seconds`,
+  "qgrid.openaiRateLimited": (detail: string) => `OpenAI rate limit reached: ${detail}`,
   "qgrid.grokOnDemandExcluded": (tokens: string) =>
     `All Grok tokens are excluded because on-demand billing is enabled at xAI: ${tokens}. Turn off on-demand billing, or add another account`,
   "qgrid.grokZdrVideoUnavailable": (tokens: string) =>

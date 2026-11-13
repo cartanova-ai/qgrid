@@ -226,6 +226,24 @@ describe("OpenAIDispatcher direct runtime", () => {
     expect(refreshMock).toHaveBeenCalledExactlyOnceWith(1);
   });
 
+  it("keeps the cached quota lookup across Decisions calls on a token with a threshold", async () => {
+    let quotaLookups = 0;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/v1/decisions")) {
+        return Response.json({ model: "gpt-6-luna", answers: [{ type: "predicate", name: "q", probability: 0.8 }] });
+      }
+      quotaLookups++;
+      return new Response(JSON.stringify({ rate_limits: { primary_window: { used_percent: 10 } } }));
+    });
+    const d = new OpenAIDispatcher(config(), { fetch: fetchMock as typeof fetch });
+    await d.onTokenAdded(1, "one", credentials, 80);
+    const decide = () => d.decide({ model: "gpt-6-luna", input: "text", questions: [{ type: "predicate", name: "q", instructions: "Is it true?" }] });
+    await decide();
+    await decide();
+    await decide();
+    expect(quotaLookups).toBe(1);
+  });
+
   it("does not loop when quota still returns 401 after refresh", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response("", { status: 401 })));
     refreshMock.mockResolvedValue({ accessToken: "new-access", chatgptAccountId: "acct" });

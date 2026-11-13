@@ -71,6 +71,7 @@ import {
   GROK_TTS_DEFAULT_LANGUAGE,
   GROK_TTS_DEFAULT_VOICE,
 } from "../../utils/providers/grok/grok-voice-client";
+import { OpenAIProtocolError } from "../../utils/providers/openai/openai-backend-protocol";
 import {
   OPENAI_CALLBACK_PORTS,
   openAICallbackRedirectUri,
@@ -607,11 +608,8 @@ class TooManyRequestsException extends SoException {
   }
 }
 
-/**
- * Every Grok token is cooling down. A 429 rather than a 503: the server error handler pins 503's
- * Retry-After to its startup interval, while this delay comes from the upstream cooldown.
- */
-function grokRateLimited(error: GrokRateLimitedError): TooManyRequestsException {
+/** Sets `Retry-After` on the HTTP reply when its headers are still open. */
+function setRetryAfter(retryAfterSec: number): void {
   let reply: FastifyReply | undefined;
 
   try {
@@ -623,9 +621,38 @@ function grokRateLimited(error: GrokRateLimitedError): TooManyRequestsException 
   }
 
   // An SSE stream has already sent its headers; the error event then carries the delay alone.
-  if (reply && !reply.raw.headersSent) reply.header("Retry-After", String(error.retryAfterSec));
+  if (reply && !reply.raw.headersSent) reply.header("Retry-After", String(retryAfterSec));
+}
+
+/**
+ * Every Grok token is cooling down. A 429 rather than a 503: the server error handler pins 503's
+ * Retry-After to its startup interval, while this delay comes from the upstream cooldown.
+ */
+function grokRateLimited(error: GrokRateLimitedError): TooManyRequestsException {
+  setRetryAfter(error.retryAfterSec);
 
   return new TooManyRequestsException(SD("qgrid.grokRateLimited")(error.retryAfterSec));
+}
+
+const DECISION_CALLER_FAULT_STATUSES = new Set([400, 413, 415, 422]);
+
+/**
+ * OpenAI's verdict on a Decisions request qgrid could not pre-validate (an unreachable image URL,
+ * rejected content) answers 400, and its rate limit 429 with the upstream delay. Credential
+ * (401/403) and server failures stay upstream failures.
+ */
+function decisionCallerError(cause: Error): Error {
+  if (!(cause instanceof OpenAIProtocolError) || cause.status === undefined) return cause;
+
+  if (cause.status === 429) {
+    if (cause.retryAfterMs !== undefined) setRetryAfter(Math.ceil(cause.retryAfterMs / 1000));
+
+    return new TooManyRequestsException(SD("qgrid.openaiRateLimited")(cause.message));
+  }
+
+  return DECISION_CALLER_FAULT_STATUSES.has(cause.status)
+    ? new BadRequestException(SD("qgrid.invalidInput")(cause.message))
+    : cause;
 }
 
 /**
@@ -2631,9 +2658,6 @@ class QgridFrameClass extends BaseFrameClass {
     });
   }
 
-  // GPT-Live: exchanges the caller's WebRTC offer and returns the answer at once. The run stays
-  // running for the whole session (up to two hours), its conversation rewritten after each turn;
-  // a run left behind by a server restart is closed by the live stale sweep.
   /**
    * Decisions in the provider-neutral AI SDK shape; the OpenAI layer converts both ways. A refused
    * question still returns 200 with a refusal answer, and the run closes as error because AI SDK
@@ -2669,7 +2693,12 @@ class QgridFrameClass extends BaseFrameClass {
     } as const;
 
     return runMediaEndpoint(start, async (signal, requestLogId) => {
-      const dispatched = await dispatcher.decide({ ...request, signal, ...selection });
+      const dispatched = await dispatcher
+        .decide({ ...request, signal, ...selection })
+        .catch((error: Error) => {
+          throw decisionCallerError(error);
+        });
+
       const { answers, usage } = fromOpenAIDecisionResult(input.questions, dispatched.result);
 
       const output: DecideOutput = {
@@ -2718,6 +2747,9 @@ class QgridFrameClass extends BaseFrameClass {
     });
   }
 
+  // GPT-Live: exchanges the caller's WebRTC offer and returns the answer at once. The run stays
+  // running for the whole session (up to two hours), its conversation rewritten after each turn;
+  // a run left behind by a server restart is closed by the live stale sweep.
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async liveCall(params: LiveCallInput): Promise<LiveCallOutput> {
     const input = parseMediaInput(LiveCallInput, params);

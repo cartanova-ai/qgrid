@@ -26,6 +26,13 @@ const errorBody = z.object({
   error: z.object({ message: z.string(), code: z.string().nullish() }),
 });
 
+/** `Retry-After` in seconds (the form OpenAI sends); an HTTP date or junk yields undefined. */
+function retryAfterMs(header: string | null): number | undefined {
+  const seconds = header === null ? Number.NaN : Number(header);
+
+  return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds * 1000) : undefined;
+}
+
 /** One native Decisions call. Token selection and 401 refresh belong to `OpenAITokenPool.runWithToken`. */
 export async function createOpenAIDecision(
   credentials: OpenAIDirectCredentials,
@@ -35,6 +42,7 @@ export async function createOpenAIDecision(
 ): Promise<OpenAIDecisionResult> {
   const request = OpenAIDecisionRequest.parse(input);
   const timeout = AbortSignal.timeout(DECISIONS_TIMEOUT_MS);
+  const active = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
   const response = await fetcher(OPENAI_DECISIONS_URL, {
     method: "POST",
@@ -45,10 +53,15 @@ export async function createOpenAIDecision(
     },
     body: JSON.stringify(request),
     redirect: "error",
-    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    signal: active,
   });
 
-  const data: unknown = await response.json().catch(() => undefined);
+  // An unreadable body is a malformed response, but a timeout or cancel while reading is not.
+  const data: unknown = await response.json().catch(() => {
+    active.throwIfAborted();
+
+    return undefined;
+  });
 
   if (!response.ok) {
     const error = errorBody.safeParse(data);
@@ -59,6 +72,7 @@ export async function createOpenAIDecision(
         : `OpenAI Decisions returned HTTP ${response.status}`,
       (error.success ? error.data.error.code : undefined) ?? "decisions_http_error",
       response.status,
+      retryAfterMs(response.headers.get("retry-after")),
     );
   }
 

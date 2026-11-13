@@ -98,6 +98,9 @@ export class OpenAITokenPool {
     selection: MediaTokenSelection,
     signal: AbortSignal | undefined,
     call: (credentials: OpenAIDirectCredentials) => Promise<T>,
+    // Voice sessions re-read quota after each call. Decisions runs at high frequency, so it keeps
+    // the cached lookup (60 s TTL) like Responses does.
+    options: { refreshQuota: boolean } = { refreshQuota: true },
   ): Promise<MediaDispatchResult<T>> {
     const active = signal ?? new AbortController().signal;
 
@@ -117,7 +120,8 @@ export class OpenAITokenPool {
     for (let attempt = 0; ; attempt++) {
       try {
         const result = await call(credentials);
-        this.invalidateRateLimitsCache(tokenId);
+
+        if (options.refreshQuota) this.invalidateRateLimitsCache(tokenId);
 
         return { result, tokenId, tokenName: metadata.name };
       } catch (error) {
