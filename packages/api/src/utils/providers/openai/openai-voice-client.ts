@@ -1014,10 +1014,5 @@ export function isSidebandTeardownError(error: Error): boolean {
   );
 }
 
-/** Used by the dispatcher's single 401 → refresh → retry step. */
-export function isUnauthorizedRealtimeError(error: Error): boolean {
-  return error instanceof OpenAIProtocolError && error.status === 401;
-}
-
 /** Event schema export for tests that replay captured server traffic. */
 export { realtimeServerEvent };

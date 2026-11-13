@@ -6,7 +6,8 @@ import {
   type GenerateStreamCallbacks,
 } from "../../utils/providers/common/provider-dispatcher";
 import { systemHash } from "./conv-routing";
-import { ImageGenerationError, OpenAIDispatcher } from "../../utils/providers/openai/openai-dispatcher";
+import { OpenAIDispatcher } from "../../utils/providers/openai/openai-dispatcher";
+import { ImageGenerationError } from "../../utils/providers/openai/openai-responses-runtime";
 import { normalizeOpenAIEvent } from "../../utils/providers/openai/openai-backend-protocol";
 import { buildStrictOutputSchema, completedDriverFromImageFailure, QgridDispatcherClass } from "./qgrid.dispatcher";
 import { QueryInput, type QueryOutput } from "./qgrid.types";

@@ -28,10 +28,8 @@ import {
 } from "../../utils/providers/common/schema-validation";
 import { strictify } from "../../utils/providers/common/strictifier";
 import { type GrokTokenStateSnapshot } from "../../utils/providers/grok/grok-dispatcher";
-import {
-  ImageGenerationError,
-  type OpenAIDispatcher,
-} from "../../utils/providers/openai/openai-dispatcher";
+import { type OpenAIDispatcher } from "../../utils/providers/openai/openai-dispatcher";
+import { ImageGenerationError } from "../../utils/providers/openai/openai-responses-runtime";
 import { type TokenSubsetA } from "../sonamu.generated";
 import { type TokenCredentials } from "../token/token.types";
 import { decideConvRouting, issueConvContext } from "./conv-routing";

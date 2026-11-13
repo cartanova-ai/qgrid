@@ -28,7 +28,7 @@ import {
   GrokRateLimitedError,
   GrokZdrVideoUnavailableError,
 } from "../../utils/providers/grok";
-import { ImageGenerationError } from "../../utils/providers/openai/openai-dispatcher";
+import { ImageGenerationError } from "../../utils/providers/openai/openai-responses-runtime";
 import type {
   GenerateRequest,
   GenerateResult,

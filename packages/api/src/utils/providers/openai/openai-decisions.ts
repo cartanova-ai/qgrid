@@ -26,7 +26,7 @@ const errorBody = z.object({
   error: z.object({ message: z.string(), code: z.string().nullish() }),
 });
 
-/** One native Decisions call. Token selection and 401 refresh belong to the dispatcher. */
+/** One native Decisions call. Token selection and 401 refresh belong to `OpenAITokenPool.runWithToken`. */
 export async function createOpenAIDecision(
   credentials: OpenAIDirectCredentials,
   input: OpenAIDecisionRequest,

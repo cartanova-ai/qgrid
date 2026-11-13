@@ -11,7 +11,8 @@ import {
   type OpenAINormalizedEvent,
   type OpenAIResponsesOptions,
 } from "./openai-backend-protocol";
-import { ImageGenerationError, OpenAIDispatcher } from "./openai-dispatcher";
+import { OpenAIDispatcher } from "./openai-dispatcher";
+import { ImageGenerationError } from "./openai-responses-runtime";
 import { buildStandaloneImageRequest } from "./openai-image-generation";
 import { type OpenAITransportKind } from "./openai-transport-config";
 
@@ -40,8 +41,14 @@ function dispatcher(
     options: OpenAIResponsesOptions,
     signal?: AbortSignal,
   ) => AsyncIterable<OpenAINormalizedEvent>,
+  onClientCreated?: () => void,
 ) {
-  return new OpenAIDispatcher(config(), { clientFactory: () => ({ responses: run }) });
+  return new OpenAIDispatcher(config(), {
+    clientFactory: () => {
+      onClientCreated?.();
+      return { responses: run };
+    },
+  });
 }
 
 async function* events(...values: OpenAINormalizedEvent[]) {
@@ -296,13 +303,16 @@ describe("OpenAIDispatcher direct runtime", () => {
     const fetchMock = vi.fn()
       .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
       .mockResolvedValueOnce(quota(65));
-    const d = new OpenAIDispatcher(config(), { fetch: fetchMock });
+    const d = new OpenAIDispatcher(config(), {
+      fetch: fetchMock,
+      clientFactory: () => ({ responses: () => events({ type: "completed", responseId: "r" }) }),
+    });
     await d.onTokenAdded(1, "one", credentials, 100);
-    const selection = d.selectToken(1, true, new AbortController().signal);
+    const pinned = d.generate(request({ preferredTokenId: 1, requirePreferredToken: true }));
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await d.onTokenUpdated(1, "one", { ...credentials, accessToken: "refreshed" }, 100);
     finishOld(quota(65));
-    await expect(selection).resolves.toMatchObject({ tokenId: 1 });
+    await expect(pinned).resolves.toMatchObject({ tokenName: "one" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -519,6 +529,7 @@ describe("OpenAIDispatcher direct runtime", () => {
       background: transparent ? "transparent" : "opaque",
       usage: { input_tokens: 20, input_tokens_details: { text_tokens: 20, image_tokens: 0 }, output_tokens: 100, total_tokens: 120 },
     };
+    const clientCreated = vi.fn();
     const d = dispatcher((options, signal) => {
       calls.push(options); signals.push(signal);
       if (calls.length === 1) return events(
@@ -528,7 +539,7 @@ describe("OpenAIDispatcher direct runtime", () => {
         { type: "completed", responseId: "driver", model: "actual-driver", usage: { inputTokens: 10, cachedInputTokens: 2, outputTokens: 3, reasoningTokens: 1, totalTokens: 13 } },
       );
       return events({ type: "image", base64: "png", mimeType: "image/png", generation }, { type: "completed", responseId: "image", model: "gpt-image-2", usage: { inputTokens: 999, outputTokens: 999, cachedInputTokens: 0, reasoningTokens: 0, totalTokens: 1998 } });
-    });
+    }, clientCreated);
     await d.onTokenAdded(1, "one", credentials);
     const history = [{ type: "message", role: "user", content: [{ type: "input_image", image_url: "https://example.com/ref.png" }] }];
     const result = await d.generate(request({ imageGeneration: "auto", systemPrompt: "system", coldHistory: history, imageGenerationOptions: { quality: "high", size: "1024x1536" } }));
@@ -544,7 +555,8 @@ describe("OpenAIDispatcher direct runtime", () => {
     expect(calls[1]!.outputSchema).toBeUndefined();
     expect(signals[0]).toBe(signals[1]);
     expect(result).toMatchObject({ model: "actual-driver", usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13, cachedInputTokens: 2, reasoningOutputTokens: 1 }, images: [{ generation }] });
-    expect(d.clients.size).toBe(1);
+    // The image stage reuses the driver's client.
+    expect(clientCreated).toHaveBeenCalledOnce();
   });
 
   it("edits with only the selected recent images in chronological order despite longer image history", async () => {
@@ -875,6 +887,38 @@ describe("OpenAIDispatcher direct runtime", () => {
     release();
     await active;
     await expect(d.generate(request())).resolves.toMatchObject({ tokenName: "new" });
+  });
+
+  it("closes a token's client when the token is removed", async () => {
+    const close = vi.fn();
+    const d = new OpenAIDispatcher(config(), {
+      clientFactory: () => ({ responses: () => events({ type: "completed", responseId: "r" }), close }),
+    });
+    await d.onTokenAdded(1, "one", credentials);
+    await d.generate(request());
+    await d.onTokenRemoved(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    await expect(d.generate(request())).rejects.toThrow("NO_OPENAI_WORKERS");
+  });
+
+  it("replaces a token's client after its credentials are refreshed outside Responses", async () => {
+    const close = vi.fn();
+    const factory = vi.fn(() => ({ responses: () => events({ type: "completed", responseId: "r" }), close }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ rate_limits: { primary_window: { used_percent: 20 } } })));
+    refreshMock.mockResolvedValue({ accessToken: "new-access", chatgptAccountId: "acct" });
+    const d = new OpenAIDispatcher(config(), { fetch: fetchMock, clientFactory: factory });
+    await d.onTokenAdded(1, "one", credentials);
+    await d.generate(request());
+    // The quota lookup hits 401 and refreshes: the client built from the old token must go.
+    await d.getRateLimitsByTokenId(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    await d.generate(request());
+    expect(factory).toHaveBeenLastCalledWith(
+      expect.objectContaining({ credentials: { accessToken: "new-access", accountId: "acct" } }),
+      1,
+    );
   });
 
   it("retires a replaced client only after its in-flight requests finish", async () => {

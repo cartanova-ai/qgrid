@@ -224,6 +224,11 @@ export class OpenAIProtocolError extends Error {
   }
 }
 
+/** A rejected access token: the token pool refreshes the credentials and retries once. */
+export function isOpenAIUnauthorizedError(error: Error): boolean {
+  return error instanceof OpenAIProtocolError && error.status === 401;
+}
+
 const tokenCount = z.coerce.number().catch(0);
 
 function jsonObjectOrEmpty(value: JsonValue | undefined): JsonObject {

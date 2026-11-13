@@ -26,7 +26,7 @@ Use this reference before changing token storage, OAuth flows, token activation,
 - OpenAI direct OAuth/refresh/quota: `packages/api/src/utils/providers/openai/openai-oauth.ts`, `openai-refresh.ts`, `openai-quota.ts`.
 - Anthropic quota: `packages/api/src/utils/providers/anthropic/anthropic-quota.ts`.
 - Grok OAuth/refresh/quota: `packages/api/src/utils/providers/grok/grok-oauth.ts`, `grok-refresh.ts`, `grok-quota.ts`.
-- Provider token event handlers: `openai-dispatcher.ts`, `anthropic-dispatcher.ts`, `grok-dispatcher.ts`.
+- Provider token event handlers: `openai-token-pool.ts` (behind `openai-dispatcher.ts`), `anthropic-dispatcher.ts`, `grok-dispatcher.ts`.
 
 ## Token Table Contract
 
