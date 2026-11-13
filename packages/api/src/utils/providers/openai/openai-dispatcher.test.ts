@@ -197,6 +197,27 @@ describe("OpenAIDispatcher direct runtime", () => {
     }), 1);
   });
 
+  it("runs Decisions on a selected token and retries once with refreshed credentials after 401", async () => {
+    const decisions: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (!url.endsWith("/v1/decisions")) return new Response("{}");
+      decisions.push(new Headers(init?.headers).get("Authorization") ?? "");
+      if (decisions.length === 1) return Response.json({ error: { message: "expired" } }, { status: 401 });
+      return Response.json({ model: "gpt-6-luna", answers: [{ type: "predicate", name: "q", probability: 0.8 }] });
+    });
+    refreshMock.mockResolvedValue({ accessToken: "new-access", chatgptAccountId: "acct" });
+    const d = new OpenAIDispatcher(config(), { fetch: fetchMock as typeof fetch });
+    await d.onTokenAdded(1, "one", credentials);
+    const dispatched = await d.decide({
+      model: "gpt-6-luna",
+      input: "text",
+      questions: [{ type: "predicate", name: "q", instructions: "Is it true?" }],
+    });
+    expect(dispatched).toMatchObject({ tokenId: 1, tokenName: "one", result: { answers: [{ probability: 0.8 }] } });
+    expect(decisions).toEqual(["Bearer access", "Bearer new-access"]);
+    expect(refreshMock).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
   it("does not loop when quota still returns 401 after refresh", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response("", { status: 401 })));
     refreshMock.mockResolvedValue({ accessToken: "new-access", chatgptAccountId: "acct" });

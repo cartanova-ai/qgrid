@@ -965,6 +965,224 @@ export const HealthResponse = z.object({
 
 export type HealthResponse = z.infer<typeof HealthResponse>;
 
+// ─── Decisions (OpenAI native /v1/decisions wire format) ───
+// Limits follow https://developers.openai.com/api/reference/resources/decisions/methods/create (2026-11-13).
+
+export const OPENAI_DECISION_MODEL = "gpt-6-luna" as const;
+
+const decisionInputPart = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("input_text"), text: z.string() }),
+  z.object({
+    type: z.literal("input_json"),
+    data: z.union([z.record(z.string(), z.json()), z.array(z.record(z.string(), z.json())).min(1)]),
+  }),
+  z.object({
+    type: z.literal("input_image"),
+    image_url: z
+      .string()
+      .regex(
+        /^(https?:\/\/|data:image\/(png|jpeg|webp|gif);base64,)/,
+        "Expected an HTTP(S) image URL or a base64 PNG/JPEG/WebP/GIF data URL",
+      ),
+    detail: z.enum(["low", "high", "auto", "original"]).optional(),
+  }),
+]);
+
+// OpenAI rejects a question without instructions (live 2026-11-13: "Missing required parameter:
+// 'questions[0].instructions'"), even though @ai-sdk/openai sends it omitted. Boolean criteria
+// alone still work because they become the instructions.
+const decisionQuestionBase = {
+  name: z.string().min(1),
+  instructions: z.string().min(1, "OpenAI Decisions requires instructions for this question"),
+};
+
+export const OpenAIDecisionQuestion = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("predicate"), ...decisionQuestionBase }),
+  z.object({
+    type: z.literal("choice"),
+    ...decisionQuestionBase,
+    choices: z
+      .array(z.object({ value: z.string(), description: z.string().optional() }))
+      .min(2)
+      .max(255),
+  }),
+  z.object({
+    type: z.literal("score"),
+    ...decisionQuestionBase,
+    levels: z
+      .array(z.object({ label: z.string(), description: z.string().optional() }))
+      .min(2)
+      .max(10),
+  }),
+]);
+
+export type OpenAIDecisionQuestion = z.infer<typeof OpenAIDecisionQuestion>;
+
+export const OpenAIDecisionRequest = z.object({
+  model: z.literal(OPENAI_DECISION_MODEL),
+  input: z.union([
+    z.string().min(1),
+    z
+      .array(z.object({ role: z.literal("user"), content: z.array(decisionInputPart).min(1) }))
+      .min(1),
+  ]),
+  questions: z
+    .array(OpenAIDecisionQuestion)
+    .min(1)
+    .max(400)
+    .refine(
+      (questions) => new Set(questions.map((q) => q.name)).size === questions.length,
+      "Decision question names must be unique",
+    ),
+  prompt_cache_key: z.string().max(64).optional(),
+  safety_identifier: z.string().max(128).optional(),
+});
+
+export type OpenAIDecisionRequest = z.infer<typeof OpenAIDecisionRequest>;
+
+const probability = z.number().min(0).max(1);
+
+export const OpenAIDecisionAnswer = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("refusal"), name: z.string().nullable() }),
+  z.object({ type: z.literal("predicate"), name: z.string(), probability }),
+  z.object({
+    type: z.literal("choice"),
+    name: z.string(),
+    choice: z.string(),
+    probabilities: z.array(z.object({ value: z.string(), probability })),
+    confidence: probability.nullish(),
+  }),
+  z.object({
+    type: z.literal("score"),
+    name: z.string(),
+    score: z.number(),
+    probabilities: z.array(z.object({ value: z.number().int().nonnegative(), probability })),
+    confidence: probability.nullish(),
+  }),
+]);
+
+export type OpenAIDecisionAnswer = z.infer<typeof OpenAIDecisionAnswer>;
+
+const tokenCount = z.number().int().nonnegative();
+
+/** `cached_tokens` and `cache_write_tokens` are already included in `input_tokens`. */
+export const OpenAIDecisionUsage = z.object({
+  input_tokens: tokenCount,
+  input_tokens_details: z
+    .object({ cached_tokens: tokenCount.optional(), cache_write_tokens: tokenCount.optional() })
+    .nullish(),
+  output_tokens: tokenCount,
+  total_tokens: tokenCount.optional(),
+});
+
+export const OpenAIDecisionResult = z.object({
+  model: z.string(),
+  answers: z.array(OpenAIDecisionAnswer),
+  usage: OpenAIDecisionUsage.optional(),
+});
+
+export type OpenAIDecisionResult = z.infer<typeof OpenAIDecisionResult>;
+
+// ─── Decisions (qgrid /decide, provider-neutral) ───
+// The AI SDK DecisionModelV4 call and result in JSON form. Provider layers convert to and from
+// their wire format (OpenAI: openai-decisions.ts).
+
+export const DecisionModelId = z.enum([`openai/${OPENAI_DECISION_MODEL}`]);
+
+/** Instructions and criteria descriptions: text, or JSON the provider serializes. */
+const DecisionContent = z.json();
+
+export const DecisionStatePart = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("text"), text: z.string() }),
+  z.object({ type: z.literal("json"), value: z.json() }),
+  // HTTP(S) URL or base64 data URL; the SDK converts AI SDK file parts to this.
+  z.object({
+    type: z.literal("image"),
+    url: z
+      .string()
+      .regex(
+        /^(https?:\/\/|data:image\/(png|jpeg|webp|gif);base64,)/,
+        "Expected an HTTP(S) image URL or a base64 PNG/JPEG/WebP/GIF data URL",
+      ),
+  }),
+]);
+
+export const DecisionQuestion = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("choice"),
+    instructions: DecisionContent.nullish(),
+    criteria: z.record(z.string(), DecisionContent.nullable()),
+  }),
+  z.object({
+    type: z.literal("score"),
+    instructions: DecisionContent.nullish(),
+    criteria: z.array(DecisionContent.nullable()).min(1),
+  }),
+  z.object({
+    type: z.literal("boolean"),
+    instructions: DecisionContent.nullish(),
+    criteria: z
+      .object({ true: DecisionContent.nullish(), false: DecisionContent.nullish() })
+      .nullish(),
+  }),
+]);
+
+export type DecisionQuestion = z.infer<typeof DecisionQuestion>;
+
+export const DecideInput = z.object({
+  model: DecisionModelId,
+  state: z.array(DecisionStatePart).min(1),
+  /** Keyed by question ID; answers come back under the same IDs. */
+  questions: z
+    .record(z.string().min(1), DecisionQuestion)
+    .refine((questions) => Object.keys(questions).length > 0, "questions must not be empty"),
+  // OpenAI only: prompt cache routing key and end-user identifier.
+  promptCacheKey: z.string().max(64).optional(),
+  safetyIdentifier: z.string().max(128).optional(),
+  ...MediaCallOptions,
+});
+
+export type DecideInput = z.infer<typeof DecideInput>;
+
+const decisionProbabilities = z.record(z.string(), probability);
+
+export const DecisionAnswer = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("choice"),
+    choice: z.string(),
+    probabilities: decisionProbabilities.optional(),
+    confidence: probability.optional(),
+  }),
+  z.object({
+    type: z.literal("score"),
+    score: z.number(),
+    /** Keyed by zero-based level index as a string. */
+    probabilities: decisionProbabilities.optional(),
+    confidence: probability.optional(),
+  }),
+  z.object({ type: z.literal("boolean"), probability }),
+  z.object({ type: z.literal("refusal") }),
+]);
+
+export type DecisionAnswer = z.infer<typeof DecisionAnswer>;
+
+export const DecideOutput = z.object({
+  model: DecisionModelId,
+  answers: z.record(z.string(), DecisionAnswer),
+  usage: z.object({
+    inputTokens: tokenCount,
+    outputTokens: tokenCount,
+    /** Included in inputTokens. */
+    cachedInputTokens: tokenCount,
+    /** Included in inputTokens. */
+    cacheWriteTokens: tokenCount,
+  }),
+  tokenName: z.string(),
+  requestLogId: z.number().optional(),
+});
+
+export type DecideOutput = z.infer<typeof DecideOutput>;
+
 // ─── Errors ───
 
 export class QuotaError extends Error {

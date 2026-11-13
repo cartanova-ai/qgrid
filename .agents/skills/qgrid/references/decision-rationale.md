@@ -150,6 +150,12 @@ Sources: `docs/plans/2026-10-17-openai-realtime-audio-plan.md`, `docs/diagnosis/
 - qgrid answers GPT-Live delegations itself (user decision 2026-11-10): unanswered, the voice only stalls, OpenAI-run `responses` delegation fails on subscription, and Codex does the same with its own agent. The model, effort and web search are per-session choices because some conversations need tools and some do not; the default `openai/gpt-6-luna` at low effort (user's pick) keeps the spoken wait short. Any qgrid model works because the request goes through the ordinary query routing. Caller-defined tools were left out: the caller's only live channel is its peer to OpenAI.
 - The live session ends from the caller's data channel (`session.close`), not a qgrid close endpoint: it reaches OpenAI in under a second and covers external apps too. A dropped peer is left to OpenAI, which ends the session about 30 s later.
 
+## OpenAI Decisions
+
+- Decisions is OpenAI-only (2026-11-13). Anthropic and xAI document no decision endpoint, and neither exposes token logprobs on current models (xAI ignores them on `grok-4.20`+). AI SDK emulates Anthropic with prompted estimates and no distributions; qgrid does not add that emulation, so a qgrid probability is always a native one.
+- The qgrid `/decide` API is provider-neutral (the AI SDK decision call in JSON), and the OpenAI provider layer converts both ways (user decision 2026-11-13). An OpenAI-shaped API was rejected because it would expose one provider's wire format at the API boundary and break deployed SDKs when a second provider (Google, Perplexity) arrives; this matches `transcribe`, which routes `openai/` and `grok/` by model prefix.
+- Missing instructions are a 400, not a synthesized default sentence: a default would change the judgment silently, and OpenAI itself rejects the omission.
+
 ## Grok (xAI Subscription) Runtime
 
 Sources:

@@ -733,6 +733,37 @@ Content-Type: application/json
 
 ###
 
+POST {{baseUrl}}/api/qgrid/decide
+Content-Type: application/json
+
+{
+  "params": {
+    "model": "openai/gpt-6-luna",
+    "state": [
+      {
+        "type": "text",
+        "text": "TEXT"
+      }
+    ],
+    "questions": {
+      "QUESTIONS": {
+        "type": "choice",
+        "instructions": null,
+        "criteria": {
+          "CRITERIA": null
+        }
+      }
+    },
+    "promptCacheKey": "PROMPTCACHEKEY",
+    "safetyIdentifier": "SAFETYIDENTIFIER",
+    "tokenName": "TOKENNAME",
+    "projectName": "PROJECTNAME",
+    "logger": false
+  }
+}
+
+###
+
 POST {{baseUrl}}/api/qgrid/liveCall
 Content-Type: application/json
 

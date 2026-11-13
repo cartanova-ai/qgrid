@@ -1,7 +1,11 @@
 import { getLogger } from "@logtape/logtape";
 import { z } from "zod";
 
-import { QuotaThresholdExceededError } from "../../../application/qgrid/qgrid.types";
+import {
+  type OpenAIDecisionRequest,
+  type OpenAIDecisionResult,
+  QuotaThresholdExceededError,
+} from "../../../application/qgrid/qgrid.types";
 import { TokenModel } from "../../../application/token/token.model";
 import { type OpenAICredentials } from "../../../application/token/token.types";
 import { isOpenAICredentials } from "../common/credentials";
@@ -23,6 +27,7 @@ import {
   type OpenAIResponseItem,
   type OpenAIResponsesOptions,
 } from "./openai-backend-protocol";
+import { createOpenAIDecision } from "./openai-decisions";
 import {
   OpenAIDirectClient,
   type OpenAIDirectClientOptions,
@@ -350,7 +355,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
   ): Promise<OpenAIVoiceDispatchResult<OpenAITranscription>> {
     const { preferredTokenId, requirePreferredToken, ...voiceRequest } = request;
 
-    return this.runVoice(
+    return this.runWithToken(
       { preferredTokenId, requirePreferredToken },
       request.signal,
       (credentials) => this.voiceClient.transcribe(credentials, voiceRequest),
@@ -362,7 +367,7 @@ export class OpenAIDispatcher implements ProviderDispatcher {
   ): Promise<OpenAIVoiceDispatchResult<OpenAISpeechResult>> {
     const { preferredTokenId, requirePreferredToken, ...voiceRequest } = request;
 
-    return this.runVoice(
+    return this.runWithToken(
       { preferredTokenId, requirePreferredToken },
       request.signal,
       (credentials) => this.voiceClient.speak(credentials, voiceRequest),
@@ -374,19 +379,31 @@ export class OpenAIDispatcher implements ProviderDispatcher {
   ): Promise<OpenAIVoiceDispatchResult<OpenAILiveCall>> {
     const { preferredTokenId, requirePreferredToken, ...liveRequest } = request;
 
-    return this.runVoice(
+    return this.runWithToken(
       { preferredTokenId, requirePreferredToken },
       request.signal,
       (credentials) => this.voiceClient.createLiveCall(credentials, liveRequest),
     );
   }
 
+  // ---- Native Decisions ----------------------------------------------------
+
+  async decide(
+    request: OpenAIDecisionRequest & OpenAIVoiceSelection & { signal?: AbortSignal },
+  ): Promise<OpenAIVoiceDispatchResult<OpenAIDecisionResult>> {
+    const { preferredTokenId, requirePreferredToken, signal, ...decision } = request;
+
+    return this.runWithToken({ preferredTokenId, requirePreferredToken }, signal, (credentials) =>
+      createOpenAIDecision(credentials, decision, signal, this.fetchImpl),
+    );
+  }
+
   /**
-   * Selects a token, runs the realtime call, and on one 401 refreshes that token's credentials and
-   * retries once (as the Responses transports do). Any other failure propagates: a realtime
-   * session that failed may already have consumed audio tokens.
+   * Selects a token, runs one non-Responses call (realtime voice, Decisions), and on one 401
+   * refreshes that token's credentials and retries once (as the Responses transports do). Any
+   * other failure propagates: a failed call may already have consumed tokens.
    */
-  async runVoice<T>(
+  async runWithToken<T>(
     selection: OpenAIVoiceSelection,
     signal: AbortSignal | undefined,
     call: (credentials: OpenAIDirectCredentials) => Promise<T>,

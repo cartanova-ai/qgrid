@@ -638,6 +638,43 @@ app.post("/live", async (req, res) => {
 - Call the endpoint from your server, not from the browser: qgrid has no caller authentication and sends no CORS headers.
 - The upstream ignores the requested model name, so the serving model cannot be confirmed; Codex itself sends `gpt-live-1-codex`, as qgrid does. Caller-defined tools are not exposed: the voice's delegations run on qgrid's chosen model only.
 
+## Decisions (OpenAI, experimental)
+
+Server and SDK 2.22.0+ run AI SDK's `experimental_decide` on OpenAI Decisions (`gpt-6-luna`) with a ChatGPT subscription token. Decisions returns probabilities instead of text: a choice with its distribution, a score over ordered levels, or the probability that a statement is true. It does not generate text, so output tokens are not charged.
+
+```typescript
+import { experimental_decide as decide } from "ai";
+import { qgrid } from "@cartanova/qgrid-ai-sdk";
+
+const result = await decide({
+  model: qgrid.decision("openai/gpt-6-luna"),
+  state: "I was charged twice for my order. Please refund it!",
+  questions: {
+    department: {
+      type: "choice",
+      instructions: "Which team should handle this?",
+      criteria: { billing: "Payments and refunds", shipping: "Delivery", other: "Anything else" },
+    },
+    urgency: { type: "score", instructions: "How urgent is this?", criteria: ["Low", "Medium", "High"] },
+    refund: { type: "boolean", instructions: "The customer asks for money back." },
+  },
+  providerOptions: { openai: { promptCacheKey: "support-routing-v1" } },
+});
+
+result.answers.department.choice; // "billing"
+result.answers.department.probabilities; // { billing: 1, shipping: 0, other: 0 }
+result.providerMetadata?.qgrid?.requestLogId;
+```
+
+- Question types: `choice`, `score`, `boolean`. `box` is not supported. State parts: text, JSON, and PNG/JPEG/WebP/GIF images as bytes or an http(s) URL.
+- OpenAI requires `instructions` on `choice` and `score` questions; without them the server answers HTTP 400 naming the question ID. A `boolean` question may use `criteria` alone.
+- OpenAI limits: 1-400 questions, 2-255 choices, 2-10 score levels.
+- `providerOptions.openai` honors `promptCacheKey` and `safetyIdentifier` (`QgridOpenAIDecisionProviderOptions`). `maxOutputTokens`, `reasoning`, and other OpenAI keys produce an `unsupported` warning. `providerOptions.qgrid` takes `tokenName` and `logger`.
+- `providerMetadata.qgrid` holds `tokenName`, `requestLogId`, per-question `confidence`, `cachedInputTokens`, and `cacheWriteTokens`.
+- A refused question makes AI SDK throw `Experimental_DecisionRefusalError`; the request log closes as an error.
+- OpenAI rounds probabilities and scores to two decimals; the model declares that rounding, so AI SDK accepts distributions that sum to 0.99.
+- Requires `ai@^7.0.148` and `@ai-sdk/provider@^4.0.31`. AI SDK marks decisions experimental and may change them in patch releases. Whether a call counts against the subscription quota has not been measured.
+
 ## Telemetry Logger
 
 With qgrid server and SDK 2.10.0+, read the parent request-log ID from `result.finalStep.providerMetadata?.qgrid?.requestLogId` after `generateText`. For `streamText`, consume the stream first, then read `(await result.finalStep).providerMetadata?.qgrid?.requestLogId`. Raw API query responses and stream `done` events expose the same ID as top-level `requestLogId`. The field is omitted with `logger: false` or an older server. Tool-run steps share the parent ID; it is not continuation state. This metadata applies to the qgrid provider, not external providers using the telemetry logger below.
@@ -858,7 +895,7 @@ Keep new tests focused on observable contracts or concrete regressions. Preserve
 ## Requirements
 
 - Node.js >= 22
-- AI SDK 7 (`ai@^7.0.0`)
+- AI SDK 7 (`ai@^7.0.148`, `@ai-sdk/provider@^4.0.31`)
 - A running qgrid server
 
 ### Upgrading to AI SDK 7

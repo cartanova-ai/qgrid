@@ -2397,6 +2397,74 @@ describe("QgridFrame Grok media and voice (U11)", () => {
     });
   });
 
+  describe("OpenAI Decisions", () => {
+    const questions = {
+      dept: { type: "choice" as const, instructions: "Which team?", criteria: { billing: "Payments", other: null } },
+      angry: { type: "boolean" as const, instructions: "The customer is upset." },
+    };
+    const usage = { input_tokens: 2_000, input_tokens_details: { cached_tokens: 1_000, cache_write_tokens: 0 }, output_tokens: 0 };
+    const decideWith = (answers: object[]) => {
+      const decide = vi.fn().mockResolvedValue({ result: { model: "gpt-6-luna", answers, usage }, tokenName: "openai/a" });
+      Object.assign(QgridDispatcher, { openaiDispatcher: { decide } });
+      return decide;
+    };
+    const call = (overrides: object = {}) =>
+      QgridFrame.decide({ model: "openai/gpt-6-luna", state: [{ type: "text", text: "charged twice" }], questions, ...overrides });
+
+    it("converts to the OpenAI wire request and returns neutral answers with token usage and cost", async () => {
+      const decide = decideWith([
+        { type: "choice", name: "dept", choice: "billing", probabilities: [{ value: "billing", probability: 0.9 }, { value: "other", probability: 0.1 }], confidence: 0.85 },
+        { type: "predicate", name: "angry", probability: 0.8 },
+      ]);
+
+      const out = await call({ promptCacheKey: "k" });
+
+      expect(decide).toHaveBeenCalledWith(expect.objectContaining({
+        model: "gpt-6-luna",
+        input: [{ role: "user", content: [{ type: "input_text", text: "charged twice" }] }],
+        questions: [
+          { type: "choice", name: "dept", instructions: "Which team?", choices: [{ value: "billing", description: "Payments" }, { value: "other" }] },
+          { type: "predicate", name: "angry", instructions: "The customer is upset." },
+        ],
+        prompt_cache_key: "k",
+      }));
+      expect(out).toEqual({
+        model: "openai/gpt-6-luna",
+        answers: {
+          dept: { type: "choice", choice: "billing", probabilities: { billing: 0.9, other: 0.1 }, confidence: 0.85 },
+          angry: { type: "boolean", probability: 0.8 },
+        },
+        usage: { inputTokens: 2_000, outputTokens: 0, cachedInputTokens: 1_000, cacheWriteTokens: 0 },
+        tokenName: "openai/a",
+        requestLogId: 77,
+      });
+      expect(requestLogCreateRunMock).toHaveBeenCalledWith(expect.objectContaining({ media_kind: "decision", user_prompt: "charged twice", system_prompt: JSON.stringify(questions) }));
+      // 1,000 uncached at $0.10/M + 1,000 cached at $0.01/M = $0.00011; output is free.
+      expect(requestLogFinishRunMock).toHaveBeenCalledWith(77, expect.objectContaining({
+        status: "succeeded", input_tokens: 2_000, cache_read_tokens: 1_000, output_tokens: 0, cost_usd: 110, response: JSON.stringify(out.answers),
+      }));
+    });
+
+    it("returns a refusal answer but closes the run as error", async () => {
+      decideWith([{ type: "refusal", name: "dept" }, { type: "predicate", name: "angry", probability: 0.8 }]);
+
+      const out = await call();
+
+      expect(out.answers.dept).toEqual({ type: "refusal" });
+      expect(requestLogFinishRunMock).toHaveBeenCalledWith(77, expect.objectContaining({ status: "error", error_message: "Decision refused: dept" }));
+    });
+
+    it("rejects a request outside OpenAI limits with 400 before logging or dispatch", async () => {
+      const decide = decideWith([]);
+
+      await expect(call({ questions: { dept: { type: "choice", instructions: "Team?", criteria: { only: null } } } })).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining("questions.dept.choices") });
+      // OpenAI requires instructions; the error names the caller's question ID, not an array index.
+      await expect(call({ questions: { ...questions, tone: { type: "score", criteria: ["low", "high"] } } })).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining("questions.tone.instructions") });
+      expect(requestLogCreateRunMock).not.toHaveBeenCalled();
+      expect(decide).not.toHaveBeenCalled();
+    });
+  });
+
   describe("GPT-Live call", () => {
     type Summary = { turns: object[]; audioDurationMs?: number; endReason: string; error?: string };
     let endSession: (summary: Summary) => void;

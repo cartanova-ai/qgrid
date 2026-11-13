@@ -15,6 +15,7 @@ import {
 } from "@ai-sdk/provider";
 import { z } from "zod";
 
+import { createQgridDecision } from "./decision-model";
 import { createEnvelopeStreamParser } from "./envelope-stream-parser";
 import { mapXaiProviderOptions, type QgridGrokEffort } from "./grok-options";
 import {
@@ -1068,6 +1069,8 @@ qgrid.speech = createQgridSpeech;
 
 qgrid.realtime = createQgridRealtime;
 
+qgrid.decision = createQgridDecision;
+
 export {
   createQgridRealtime,
   type QgridLiveRealtimeModel,
@@ -1101,6 +1104,8 @@ export {
 
 export { type QgridOpenAISpeechProviderOptions } from "./speech-model";
 
+export { type QgridOpenAIDecisionProviderOptions } from "./decision-model";
+
 export {
   QGRID_GROK_VOICES,
   QGRID_LIVE_VOICES,
@@ -1123,6 +1128,7 @@ export type {
   QgridAnthropicModel,
   QgridAnthropicProviderConfig,
   QgridAnthropicProviderOptions,
+  QgridDecisionModel,
   QgridGrokModel,
   QgridGrokSpeechModel,
   QgridGrokTranscriptionModel,

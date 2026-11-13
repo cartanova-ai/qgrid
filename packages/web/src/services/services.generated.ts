@@ -38,6 +38,8 @@ import {
   TranscribeOutput,
   SpeakInput,
   SpeakOutput,
+  DecideInput,
+  DecideOutput,
   LiveCallInput,
   LiveCallOutput,
   UsageResponse,
@@ -1213,6 +1215,19 @@ export namespace QgridService {
   export const useSpeakMutation = () =>
     useMutation({
       mutationFn: (params: { params: SpeakInput }) => QgridService.speak(params.params),
+    });
+
+  export async function decide(params: DecideInput): Promise<DecideOutput> {
+    return fetch({
+      method: "POST",
+      url: `/api/qgrid/decide`,
+      data: { params },
+    });
+  }
+
+  export const useDecideMutation = () =>
+    useMutation({
+      mutationFn: (params: { params: DecideInput }) => QgridService.decide(params.params),
     });
 
   export async function liveCall(params: LiveCallInput): Promise<LiveCallOutput> {

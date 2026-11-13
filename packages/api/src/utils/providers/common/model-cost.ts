@@ -501,6 +501,26 @@ export function openaiSpeechCost(
   );
 }
 
+/**
+ * Native Decisions on gpt-6-luna: Luna's input and cached-input rates; output is not charged
+ * (https://developers.openai.com/api/docs/guides/decisions, 2026-11-13). Cache writes use Luna's
+ * table rate, which the Decisions pages do not confirm.
+ */
+export function openaiDecisionCost(usage: {
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteTokens: number;
+}): VoiceCost {
+  return priced(
+    calculateCostUsd("gpt-6-luna", {
+      inputTokens: usage.inputTokens,
+      outputTokens: 0,
+      cachedInputTokens: usage.cachedInputTokens,
+      cacheCreationInputTokens: usage.cacheWriteTokens,
+    }),
+  );
+}
+
 /** Transcription by audio length; unknown models or a missing duration stay unpriced. */
 export function sttCost(route: string, durationSec: number | undefined): VoiceCost | undefined {
   const perMinute = STT_USD_PER_MINUTE.get(route);

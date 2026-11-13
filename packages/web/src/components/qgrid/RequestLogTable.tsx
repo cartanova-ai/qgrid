@@ -421,6 +421,10 @@ export function RequestLogTable({ search, onSearchChange }: RequestLogTableProps
                         <span className="rounded bg-blue-100 px-1.5 py-0.5 font-mono text-[10px] text-blue-700">
                           voice/{row.media_kind}
                         </span>
+                      ) : row.media_kind === "decision" ? (
+                        <span className="rounded bg-blue-100 px-1.5 py-0.5 font-mono text-[10px] text-blue-700">
+                          decision
+                        </span>
                       ) : row.media_kind === "video" ? (
                         <span className="rounded bg-sand-100 px-1.5 py-0.5 font-mono text-[10px] text-sand-700">
                           video

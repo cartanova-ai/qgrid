@@ -59,6 +59,9 @@ export type QgridOpenAITranscriptionModel =
 
 export type QgridTranscriptionModel = QgridGrokTranscriptionModel | QgridOpenAITranscriptionModel;
 
+/** Native decision model ids for `experimental_decide` (OpenAI Decisions on a subscription token). */
+export type QgridDecisionModel = "openai/gpt-6-luna";
+
 /**
  * Grok text-to-speech model id. Placeholder: the live probe verified the `/tts` endpoint with the
  * subscription JWT, but no TTS model id was observed (`/speech-models` returned 404).

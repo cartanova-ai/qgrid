@@ -56,7 +56,7 @@ type StoredHistoryMessage = z.infer<typeof StoredHistoryMessage>;
 // JSON string value.
 const DATA_URL_STRING = /"data:[^",;\\]*;base64,[A-Za-z0-9+/=]*"/g;
 
-function maskDataUrls(rawHistory: string): string {
+export function maskDataUrls(rawHistory: string): string {
   return rawHistory.replace(DATA_URL_STRING, (match) => `"[data-url ${match.length - 2} chars]"`);
 }
 

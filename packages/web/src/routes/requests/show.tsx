@@ -1371,7 +1371,9 @@ function RequestDetail({ id }: { id: number }) {
               ? "Prompt"
               : data.media_kind === "live"
                 ? "Instructions"
-                : "System"
+                : data.media_kind === "decision"
+                  ? "Questions"
+                  : "System"
         }
       >
         <div className="relative">

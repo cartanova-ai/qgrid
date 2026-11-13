@@ -29,6 +29,7 @@ import {
   grokReportedCost,
   grokSpeechCost,
   liveCost,
+  openaiDecisionCost,
   openaiSpeechCost,
   sttCost,
   type VoiceCost,
@@ -75,6 +76,11 @@ import {
   openAICallbackRedirectUri,
   startOpenAICallbackRelay,
 } from "../../utils/providers/openai/openai-callback-relay";
+import {
+  decisionIssues,
+  fromOpenAIDecisionResult,
+  toOpenAIDecisionRequest,
+} from "../../utils/providers/openai/openai-decisions";
 import { type OpenAIDispatcher } from "../../utils/providers/openai/openai-dispatcher";
 import {
   buildOpenAIAuthUrl,
@@ -130,6 +136,7 @@ import {
   beforeQuery,
   finishRunAborted,
   finishRunWithError,
+  maskDataUrls,
   runProgressRecorder,
 } from "./qgrid-run-lifecycle";
 import {
@@ -142,12 +149,15 @@ import {
   type QueryInput,
   type AppendStepInput,
   type CreateRunInput,
+  DecideInput,
+  type DecideOutput,
   type FinishRunInput,
   GenerateImagesInput,
   type GenerateImagesOutput,
   LiveCallInput,
   type LiveCallOutput,
   type LiveHistoryItem,
+  OpenAIDecisionRequest,
   SpeakInput,
   type SpeakOutput,
   TranscribeInput,
@@ -526,7 +536,7 @@ const inflightAnthropicRefresh = new Map<number, Promise<string>>();
 
 const mediaLogger = getLogger(["qgrid", "media"]);
 
-type MediaKind = "image" | "video" | "stt" | "tts" | "live";
+type MediaKind = "image" | "video" | "stt" | "tts" | "live" | "decision";
 
 const MEDIA_TOOL_NAMES: Record<MediaKind, string> = {
   image: "image_generation",
@@ -534,6 +544,7 @@ const MEDIA_TOOL_NAMES: Record<MediaKind, string> = {
   stt: "transcription",
   tts: "speech",
   live: "live_session",
+  decision: "decision",
 };
 
 function grokNotReady(): Error {
@@ -859,6 +870,13 @@ type MediaLogSuccess = {
   cost?: GrokMediaCost | VoiceCost;
   /** Speech only: time to the first audio byte, measured from the same start as `durationMs`. */
   ttftMs?: number;
+  /** Token-billed media (Decisions); other media keep zero token counts. */
+  usage?: Pick<
+    FinishRunParams,
+    "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_creation_tokens"
+  >;
+  /** A provider call that returned but failed for the caller (a Decisions refusal). */
+  errorMessage?: string;
 };
 
 // Voice rows embed browser-playable audio (TTS output in the response, STT input in the user
@@ -932,9 +950,14 @@ function mediaFinishFields(success: Omit<MediaLogSuccess, "steps">): FinishRunPa
     output_tokens: 0,
     cache_read_tokens: 0,
     cache_creation_tokens: 0,
+    ...success.usage,
     duration_ms: success.durationMs,
     ...(success.ttftMs !== undefined && { ttft_ms: success.ttftMs }),
     ...mediaCostFields(success.kind, success.model, success.cost),
+    ...(success.errorMessage !== undefined && {
+      status: "error",
+      error_message: success.errorMessage,
+    }),
   };
 }
 
@@ -2611,6 +2634,90 @@ class QgridFrameClass extends BaseFrameClass {
   // GPT-Live: exchanges the caller's WebRTC offer and returns the answer at once. The run stays
   // running for the whole session (up to two hours), its conversation rewritten after each turn;
   // a run left behind by a server restart is closed by the live stale sweep.
+  /**
+   * Decisions in the provider-neutral AI SDK shape; the OpenAI layer converts both ways. A refused
+   * question still returns 200 with a refusal answer, and the run closes as error because AI SDK
+   * fails the whole call.
+   */
+  @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
+  async decide(params: DecideInput): Promise<DecideOutput> {
+    const input = parseMediaInput(DecideInput, params);
+    // Provider limits (e.g. at least two choices) surface as 400 before any log or token use.
+    const wire = OpenAIDecisionRequest.safeParse(toOpenAIDecisionRequest(input));
+
+    if (!wire.success) {
+      throw new BadRequestException(
+        SD("qgrid.invalidInput")(decisionIssues(wire.error, Object.keys(input.questions))),
+      );
+    }
+
+    const request = wire.data;
+    const dispatcher = openaiVoice();
+    const selection = await resolveMediaTokenSelection("openai", input.tokenName);
+    const [onlyPart] = input.state;
+
+    const start = {
+      kind: "decision",
+      model: input.model,
+      prompt:
+        input.state.length === 1 && onlyPart?.type === "text"
+          ? onlyPart.text
+          : maskDataUrls(JSON.stringify(input.state)),
+      systemPrompt: JSON.stringify(input.questions),
+      projectName: input.projectName,
+      logger: input.logger,
+    } as const;
+
+    return runMediaEndpoint(start, async (signal, requestLogId) => {
+      const dispatched = await dispatcher.decide({ ...request, signal, ...selection });
+      const { answers, usage } = fromOpenAIDecisionResult(input.questions, dispatched.result);
+
+      const output: DecideOutput = {
+        model: input.model,
+        answers,
+        usage,
+        tokenName: dispatched.tokenName,
+      };
+
+      if (requestLogId !== undefined) output.requestLogId = requestLogId;
+
+      const answersJson = JSON.stringify(answers);
+
+      const refused = Object.entries(answers).flatMap(([id, answer]) =>
+        answer.type === "refusal" ? [id] : [],
+      );
+
+      const log: MediaRunLog = {
+        tokenName: dispatched.tokenName,
+        response: answersJson,
+        cost: openaiDecisionCost(usage),
+        usage: {
+          input_tokens: usage.inputTokens,
+          output_tokens: usage.outputTokens,
+          cache_read_tokens: usage.cachedInputTokens,
+          cache_creation_tokens: usage.cacheWriteTokens,
+        },
+        steps: [
+          {
+            toolCallId: "decision:0",
+            // The questions exactly as OpenAI received them; the run's system prompt keeps ours.
+            args: {
+              kind: "decision",
+              model: input.model,
+              upstreamQuestions: JSON.stringify(request.questions),
+              promptCacheKey: input.promptCacheKey,
+            },
+            result: answersJson,
+          },
+        ],
+      };
+
+      if (refused.length > 0) log.errorMessage = `Decision refused: ${refused.join(", ")}`;
+
+      return { output, log };
+    });
+  }
+
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async liveCall(params: LiveCallInput): Promise<LiveCallOutput> {
     const input = parseMediaInput(LiveCallInput, params);

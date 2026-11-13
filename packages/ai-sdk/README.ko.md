@@ -626,6 +626,43 @@ app.post("/live", async (req, res) => {
 - 엔드포인트는 브라우저가 아니라 앱 서버에서 부르세요. qgrid에는 호출자 인증이 없고 CORS 헤더도 보내지 않습니다.
 - 업스트림이 요청한 모델 이름을 무시해서 실제 모델은 확인할 수 없습니다. Codex도 qgrid도 `gpt-live-1-codex`를 보냅니다. 호출자가 정의한 도구는 열지 않았습니다. 음성의 위임은 qgrid가 고른 모델로만 처리합니다.
 
+## Decisions (OpenAI, 실험 기능)
+
+서버와 SDK 2.22.0부터 AI SDK의 `experimental_decide`를 ChatGPT 구독 토큰으로 OpenAI Decisions(`gpt-6-luna`)에서 실행합니다. Decisions는 글 대신 확률을 돌려줍니다. 선택지 중 하나와 그 분포, 순서 있는 등급의 점수, 또는 문장이 참일 확률입니다. 텍스트를 생성하지 않으므로 출력 토큰은 과금되지 않습니다.
+
+```typescript
+import { experimental_decide as decide } from "ai";
+import { qgrid } from "@cartanova/qgrid-ai-sdk";
+
+const result = await decide({
+  model: qgrid.decision("openai/gpt-6-luna"),
+  state: "주문 금액이 두 번 결제됐어요. 환불해 주세요!",
+  questions: {
+    department: {
+      type: "choice",
+      instructions: "어느 부서가 처리해야 하나요?",
+      criteria: { billing: "결제와 환불", shipping: "배송", other: "기타" },
+    },
+    urgency: { type: "score", instructions: "얼마나 급한가요?", criteria: ["낮음", "보통", "높음"] },
+    refund: { type: "boolean", instructions: "고객이 환불을 요청한다." },
+  },
+  providerOptions: { openai: { promptCacheKey: "support-routing-v1" } },
+});
+
+result.answers.department.choice; // "billing"
+result.answers.department.probabilities; // { billing: 1, shipping: 0, other: 0 }
+result.providerMetadata?.qgrid?.requestLogId;
+```
+
+- 질문 타입은 `choice`, `score`, `boolean`입니다. `box`는 지원하지 않습니다. state에는 텍스트, JSON, PNG/JPEG/WebP/GIF 이미지(바이트 또는 http(s) URL)를 넣을 수 있습니다.
+- OpenAI는 `choice`와 `score` 질문에 `instructions`를 요구합니다. 없으면 서버가 질문 ID를 담아 HTTP 400으로 응답합니다. `boolean` 질문은 `criteria`만으로도 됩니다.
+- OpenAI 한도: 질문 1~400개, 선택지 2~255개, 점수 등급 2~10개.
+- `providerOptions.openai`는 `promptCacheKey`와 `safetyIdentifier`를 받습니다(`QgridOpenAIDecisionProviderOptions`). `maxOutputTokens`, `reasoning`, 그 밖의 OpenAI 키는 `unsupported` 경고를 남깁니다. `providerOptions.qgrid`는 `tokenName`과 `logger`를 받습니다.
+- `providerMetadata.qgrid`에는 `tokenName`, `requestLogId`, 질문별 `confidence`, `cachedInputTokens`, `cacheWriteTokens`가 담깁니다.
+- 질문 하나라도 거부되면 AI SDK가 `Experimental_DecisionRefusalError`를 던지고, 요청 로그는 에러로 닫힙니다.
+- OpenAI는 확률과 점수를 소수 둘째 자리로 반올림합니다. 모델이 이 반올림을 선언하므로 AI SDK는 합이 0.99인 분포도 받아들입니다.
+- `ai@^7.0.148`과 `@ai-sdk/provider@^4.0.31`이 필요합니다. AI SDK에서 decisions는 실험 기능이라 패치 릴리스에서도 바뀔 수 있습니다. 호출이 구독 쿼터에서 차감되는지는 측정하지 않았습니다.
+
 ## Telemetry Logger
 
 서버와 AI SDK 2.10.0부터 qgrid provider의 `generateText` 결과에서는 `result.finalStep.providerMetadata?.qgrid?.requestLogId`로 요청 로그 ID를 확인할 수 있습니다. `streamText`는 스트림 소비 후 `(await result.finalStep).providerMetadata?.qgrid?.requestLogId`로 확인합니다. 직접 API를 호출하면 `query` 응답과 스트림 `done` 이벤트의 최상위 `requestLogId`에 같은 값이 담깁니다. `logger: false` 또는 구버전 서버에서는 이 필드가 없으며, 툴 호출 후속 단계는 같은 요청 로그 ID를 공유합니다. 이 ID는 후속 요청 연결 상태가 아니며, 아래 telemetry logger를 쓰는 외부 provider에는 이 metadata가 추가되지 않습니다.
@@ -842,7 +879,7 @@ QGRID_REAL_PROVIDER_ACCEPTANCE=1 QGRID_URL=http://localhost:44900 QGRID_MODEL=op
 ## 요구사항
 
 - Node.js >= 22
-- AI SDK 7 (`ai@^7.0.0`)
+- AI SDK 7 (`ai@^7.0.148`, `@ai-sdk/provider@^4.0.31`)
 - 실행 중인 qgrid 서버
 
 ### AI SDK 7로 업그레이드
