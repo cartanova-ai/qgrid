@@ -226,7 +226,9 @@ OpenAI row changes:
 - active INSERT: `onTokenAdded` spawns workers.
 - active UPDATE: `onTokenUpdated`, then `onTokenActivated`.
 - inactive row: `onTokenDeactivated`.
-- reconcile uses `replaceTokens`, which removes absent tokens, updates existing tokens, adds new tokens, and activates rows present in active DB set.
+- reconcile uses `replaceTokens`, which removes absent tokens, updates existing tokens, adds new tokens, and activates rows present in active DB set (it sets `active: true` itself; before 2.22.0 it went through `onTokenUpdated`, which keeps the pool's previous `active`, so a missed re-activation NOTIFY left the token out until restart).
+- `setToken` returns early when name, credentials, threshold, weight, and active are all unchanged. Before 2.22.0 every reconcile bumped every token's generation, which closed and rebuilt each Responses client (and its WebSocket) and cleared the quota cache and over-threshold state every 10 minutes.
+- startup loads through `TokenModel.findActiveByProvider("A", "openai")`. Before 2.22.0 it used `findMany("A")`, whose default page is 24 rows across every provider, so later OpenAI tokens were missing until the first reconcile.
 
 Anthropic row changes:
 

@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import { getLogger } from "@logtape/logtape";
 
 import { QuotaThresholdExceededError } from "../../../application/qgrid/qgrid.types";
@@ -64,11 +66,10 @@ export class OpenAITokenPool {
 
   /** Loads the active OpenAI tokens from the database. */
   async load(): Promise<void> {
-    const { rows } = await TokenModel.findMany("A");
+    // Not `findMany`: its default page holds 24 rows across every provider.
+    const rows = await TokenModel.findActiveByProvider("A", "openai");
 
     for (const row of rows) {
-      if (row.provider !== "openai") continue;
-
       if (!isOpenAICredentials(row.credentials)) {
         logger.warn(`skipping token ${row.name}: credentials are not OpenAI OAuth credentials`);
         continue;
@@ -186,8 +187,11 @@ export class OpenAITokenPool {
 
     for (const id of this.tokenMetadata.keys()) if (!ids.has(id)) await this.onTokenRemoved(id);
 
-    for (const row of rows)
-      await this.onTokenUpdated(row.id, row.name, row.credentials, row.quotaThreshold, row.weight);
+    // Rows are the active tokens: unlike `onTokenUpdated`, this re-activates a token whose
+    // re-activation NOTIFY was missed.
+    for (const row of rows) {
+      this.setToken(row.id, row.name, row.credentials, row.quotaThreshold, row.weight, true);
+    }
   }
 
   // 선호 토큰이 quota를 통과하면 다른 토큰 조회와 weighted 상태 변경을 생략한다.
@@ -268,6 +272,19 @@ export class OpenAITokenPool {
     active: boolean,
   ): void {
     const old = this.tokenMetadata.get(id);
+
+    // The periodic reconcile re-sends every token. An unchanged one keeps its generation, so its
+    // Responses client, quota cache, and over-threshold state survive.
+    if (
+      old &&
+      old.name === name &&
+      old.weight === weight &&
+      old.active === active &&
+      (old.quotaThreshold ?? null) === (quotaThreshold ?? null) &&
+      isDeepStrictEqual(old.credentials, credentials)
+    ) {
+      return;
+    }
 
     if (old) {
       Object.assign(old, {

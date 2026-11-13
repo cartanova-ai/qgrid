@@ -4,6 +4,7 @@ const { refreshMock } = vi.hoisted(() => ({ refreshMock: vi.fn() }));
 vi.mock("./openai-refresh", () => ({ handleChatgptAuthTokensRefresh: refreshMock }));
 
 import { QueryInput, QuotaThresholdExceededError } from "../../../application/qgrid/qgrid.types";
+import { TokenModel } from "../../../application/token/token.model";
 import { type GenerateRequest } from "../common/provider-dispatcher";
 import {
   buildOpenAIResponsesRequest,
@@ -889,6 +890,18 @@ describe("OpenAIDispatcher direct runtime", () => {
     await expect(d.generate(request())).resolves.toMatchObject({ tokenName: "new" });
   });
 
+  it("loads every active OpenAI token at start, not one page of all tokens", async () => {
+    const rows = Array.from({ length: 30 }, (_, i) => ({
+      id: i + 1, name: `t${i + 1}`, provider: "openai", credentials, quota_threshold: null, weight: 1, active: true,
+    }));
+    const find = vi.spyOn(TokenModel, "findActiveByProvider").mockResolvedValue(rows as never);
+    const d = dispatcher(() => events({ type: "completed", responseId: "r" }));
+    await d.start();
+    expect(find).toHaveBeenCalledWith("A", "openai");
+    expect(d.countActiveTokens()).toBe(30);
+    find.mockRestore();
+  });
+
   it("closes a token's client when the token is removed", async () => {
     const close = vi.fn();
     const d = new OpenAIDispatcher(config(), {
@@ -919,6 +932,36 @@ describe("OpenAIDispatcher direct runtime", () => {
       expect.objectContaining({ credentials: { accessToken: "new-access", accountId: "acct" } }),
       1,
     );
+  });
+
+  it("keeps clients across a reconcile that changes nothing, and replaces them when a token changes", async () => {
+    const close = vi.fn();
+    const factory = vi.fn(() => ({ responses: () => events({ type: "completed", responseId: "r" }), close }));
+    const d = new OpenAIDispatcher(config(), { clientFactory: factory });
+    const row = { id: 1, name: "one", credentials, quotaThreshold: null, weight: 1 };
+    await d.onTokenAdded(1, "one", credentials);
+    await d.generate(request());
+    await d.replaceTokens([{ ...row, credentials: { ...credentials } }]);
+    await d.generate(request());
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+    await d.replaceTokens([{ ...row, credentials: { ...credentials, accessToken: "rotated" } }]);
+    await d.generate(request());
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-activates a deactivated token when a reconcile lists it as active", async () => {
+    const d = dispatcher(() => events({ type: "completed", responseId: "r" }));
+    await d.onTokenAdded(1, "one", credentials);
+    d.onTokenDeactivated(1);
+    await expect(d.generate(request())).rejects.toThrow("NO_OPENAI_WORKERS");
+    // An update alone keeps the token inactive; the reconcile's active list restores it.
+    await d.onTokenUpdated(1, "one", credentials);
+    expect(d.countActiveTokens()).toBe(0);
+    await d.replaceTokens([{ id: 1, name: "one", credentials, quotaThreshold: null, weight: 1 }]);
+    expect(d.countActiveTokens()).toBe(1);
+    await expect(d.generate(request())).resolves.toMatchObject({ tokenName: "one" });
   });
 
   it("retires a replaced client only after its in-flight requests finish", async () => {
