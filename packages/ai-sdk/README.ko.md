@@ -4,7 +4,7 @@
 
 [qgrid](https://github.com/cartanova-ai/Qgrid)용 AI SDK 7 custom provider입니다. AI SDK 7이 받는 `LanguageModelV3` / `ImageModelV3` 명세를 구현합니다.
 
-**기존 AI SDK 코드 변경 없이, `model` 한 줄만 바꾸면 구독 토큰 풀링(토큰 N개 × concurrent permit) + request log 대시보드를 사용할 수 있습니다.**
+**기존 AI SDK 코드 변경 없이, `model` 한 줄만 바꾸면 토큰 N개에 걸친 구독 토큰 풀링 + request log 대시보드를 사용할 수 있습니다.**
 
 ```diff
  import { generateText } from "ai";
@@ -34,7 +34,7 @@
 pnpm add @cartanova/qgrid-ai-sdk
 ```
 
-Peer dependencies: `ai@^7.0.0`, `@ai-sdk/provider@^4.0.0`
+Peer dependencies: `ai@^7.0.148`, `@ai-sdk/provider@^4.0.31`
 
 ## 빠른 시작
 
@@ -350,6 +350,7 @@ qgrid는 `grok/*` 모델을 qgrid 대시보드에 등록한 xAI 구독 토큰(�
 | `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI 구독: `openai/gpt-transcribe`(권장), `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`; `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/whisper-1`은 OpenAI가 종료하는 2027-02-26까지 | `transcribe` |
 | `qgrid.speech(id)` | `grok/grok-tts`(ID는 request log 라벨로만 쓰임); OpenAI 구독: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1` | `generateSpeech` |
 | `qgrid.realtime(id)`(2.20.0+; 브라우저: `@cartanova/qgrid-ai-sdk/realtime`의 `createQgridRealtime`) | `openai/gpt-live-1` | `experimental_useRealtime`(실험적, WebRTC) |
+| `qgrid.decision(id)`(2.22.0+) | `openai/gpt-6-luna` | `experimental_decide` (실험 기능) |
 
 qgrid는 카탈로그에 없는 language model ID를 거부하지 않고 그대로 전달합니다(OpenAI와 같음). 판단은
 subscription backend가 하며 다른 모델로 응답할 수 있으므로, 실제로 실행된 모델은 request log의 응답 모델(또는
@@ -654,7 +655,7 @@ result.answers.department.probabilities; // { billing: 1, shipping: 0, other: 0 
 result.providerMetadata?.qgrid?.requestLogId;
 ```
 
-- 질문 타입은 `choice`, `score`, `boolean`입니다. `box`는 지원하지 않습니다. state에는 텍스트, JSON, PNG/JPEG/WebP/GIF 이미지(바이트 또는 http(s) URL)를 넣을 수 있습니다.
+- 질문 타입은 `choice`, `score`, `boolean`입니다. `box`는 지원하지 않습니다. state에는 텍스트, JSON, PNG/JPEG/WebP/GIF 이미지를 넣을 수 있습니다. `experimental_decide`는 URL 파일 파트를 호출 프로세스에서 내려받고, 이미지는 qgrid에 인라인으로 전송됩니다. 그래서 URL로 넘겨도 19 MiB 인라인 미디어 한도가 적용됩니다.
 - OpenAI는 `choice`와 `score` 질문에 `instructions`를 요구합니다. 없으면 서버가 질문 ID를 담아 HTTP 400으로 응답합니다. `boolean` 질문은 `criteria`만으로도 됩니다.
 - OpenAI 한도: 질문 1~400개, 선택지 2~255개, 점수 등급 2~10개.
 - `providerOptions.openai`는 `promptCacheKey`와 `safetyIdentifier`를 받습니다(`QgridOpenAIDecisionProviderOptions`). `maxOutputTokens`, `reasoning`, 그 밖의 OpenAI 키는 `unsupported` 경고를 남깁니다. `providerOptions.qgrid`는 `tokenName`과 `logger`를 받습니다.
@@ -769,7 +770,7 @@ type QgridSupportedModel =
   | "anthropic/claude-haiku-5-5"
 ```
 
-`openai/gpt-5.4`, `openai/gpt-5.4-mini`, `openai/gpt-5.2`, `openai/gpt-5.3-codex`는 하위 호환을 위해 타입에 남아 있지만, qgrid가 사용하는 ChatGPT 구독 Codex 경로에서는 더 이상 제공되지 않습니다. `gpt-5.4`와 `gpt-5.4-mini`는 2026-08-31에 retire되었고(대체: `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`), `gpt-5.2`와 `gpt-5.3-codex`는 그보다 먼저 해당 경로에서 제거되었습니다. 이 id로 요청하면 백엔드에서 실패합니다.
+`openai/gpt-5.4`, `openai/gpt-5.4-mini`, `openai/gpt-5.2`, `openai/gpt-5.3-codex`는 하위 호환을 위해 타입에 남아 있지만, qgrid가 사용하는 ChatGPT 구독 Codex 경로에서는 더 이상 제공되지 않습니다. `gpt-5.4`와 `gpt-5.4-mini`는 2026-08-31에 retire되었고(대체: `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`), `gpt-5.2`와 `gpt-5.3-codex`는 그보다 먼저 해당 경로에서 제거되었습니다. 이 id로 요청하면 백엔드에서 실패합니다. 서버의 서비스 목록(대시보드 모델 선택)에는 다음 id도 없습니다: `openai/gpt-5.5`(2026-10-14 Codex/ChatGPT 경로 은퇴 예정이었음), `openai/gpt-5.3-codex-spark`(ChatGPT 계정에서 거부됨, 2026-09-29 확인), `anthropic/claude-opus-4`와 `anthropic/claude-sonnet-4`(2026-06-15 retire), `anthropic/claude-opus-4-1`(2026-08-05 retire, Claude Code가 Opus 5.5로 대체 서빙), `anthropic/claude-sonnet-4-5`(deprecated, 2026-11-30 retire 예정), `anthropic/claude-sonnet-4-7`(Anthropic 카탈로그에 없음). Grok 텍스트 id(`grok/grok-4.7`, `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`)는 별도 타입 `QgridGrokModel`입니다. [Grok 사용](#grok-사용)을 참고하세요.
 
 ### GPT-6 사양
 
@@ -809,7 +810,7 @@ Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/
 
 Claude Code는 Fable의 safety refusal을 다른 Opus 모델로 자동 재시도할 수 있습니다. 현재 CLI는 refusal 카테고리에 따라 Opus 5 또는 Opus 4.8을 고릅니다. 이 경우 AI SDK 응답의 `response.modelId`와 `providerMetadata.qgrid.model`은 실제 serving 모델인 Opus를 가리킵니다. `providerMetadata.qgrid.requestedModel`은 Fable로 유지되고, `providerMetadata.qgrid.modelFallbacks`에 refusal fallback 이력이 담깁니다. 같은 metadata에서 `costSource`와 5분/1시간 cache-write 토큰 분해도 확인할 수 있습니다.
 
-`openai/gpt-5.3-codex-spark`는 아직 token 단가가 확정·공개되지 않은 research preview입니다. 따라서 qgrid는 generic fallback 추정치를 보고하며, 이를 공식 단가로 취급하지 않습니다.
+`openai/gpt-5.3-codex-spark`는 token 단가가 공개되지 않았고, 구독 경로가 ChatGPT 계정에서 거부합니다(2026-09-29 확인). 요청이 서빙되는 경우에도 qgrid는 공식 단가가 아닌 generic fallback 추정치를 보고합니다.
 
 ## 설정
 

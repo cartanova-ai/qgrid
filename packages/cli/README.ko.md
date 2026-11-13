@@ -2,7 +2,7 @@
 
 [English](./README.md) · **한국어**
 
-Qgrid 서버를 한 줄로 실행. OpenAI/Anthropic 구독 크레딧을 HTTP API + 대시보드로 제공하는 LLM 프록시.
+Qgrid 서버를 한 줄로 실행. OpenAI, Anthropic, xAI(Grok) 구독 크레딧을 HTTP API + 대시보드로 제공하는 LLM 프록시.
 
 ## 설치
 
@@ -141,9 +141,10 @@ CLI는 Sonamu 기반 서버를 내장 번들로 포함. 실행 시:
 1. DB 연결 확인
 2. 서버 시작 (API + 대시보드 웹 UI)
 3. DB의 등록된 토큰 로드. 이후 토큰 등록/변경은 PostgreSQL LISTEN/NOTIFY로 실행 중인 서버에 실시간 반영
-4. **OpenAI 토큰**: `https://chatgpt.com/backend-api/codex/responses`를 HTTPS로 직접 호출하고 SSE를 해석합니다. 토큰 단위 concurrent permit에 smooth weighted routing을 적용하며, 50개 queue는 최대 60초 대기합니다. 전체 history를 재전송하고 `sessionKey`에서 파생한 불투명 prompt-cache affinity를 사용하며, `AbortSignal`로 queue와 실행 중 요청을 취소합니다
-5. **Anthropic 토큰**: 요청마다 격리된 claude 프로세스를 fresh spawn (`stream-json` 입출력). 토큰은 least-used 우선으로 선택. OAuth 토큰 자동 refresh
-6. 토큰별 quota threshold(기본 80%)를 넘은 토큰은 라우팅에서 제외 (사용률 조회 실패 시에는 fail-open으로 통과)
+4. **OpenAI 토큰**: `https://chatgpt.com/backend-api/codex/responses`를 직접 호출합니다(기본 WebSocket, `QGRID_OPENAI_TRANSPORT=https`면 HTTPS/SSE). 로컬 동시성 제한이나 대기열은 없고, 사용 가능한 토큰 중에서 smooth weighted routing으로 고릅니다. 전체 history를 재전송하고 `sessionKey`에서 파생한 불투명 prompt-cache affinity를 사용하며, `AbortSignal`로 실행 중 요청을 취소합니다. 실시간 음성, GPT-Live, Decisions도 같은 토큰을 씁니다
+5. **Anthropic 토큰**: 요청마다 격리된 claude 프로세스를 fresh spawn (`stream-json` 입출력). 토큰은 smooth weighted routing으로 선택. OAuth 토큰 자동 refresh
+6. **Grok 토큰**: 텍스트, 이미지, 비디오, 음성을 xAI 구독 엔드포인트로 직접 호출. smooth weighted routing을 쓰고, 토큰당 동시 요청 상한(`QGRID_GROK_MAX_INFLIGHT_PER_TOKEN`)을 선택적으로 둘 수 있음
+7. 토큰별 quota threshold(기본 80%)를 넘은 토큰은 라우팅에서 제외 (사용률 조회 실패 시에는 fail-open으로 통과)
 
 Qgrid 앱 자체는 Docker에 의존하지 않지만 PostgreSQL은 필요함. 로컬 PostgreSQL이 없으면 Docker로 PostgreSQL을 띄우는 구성이 가장 간단함.
 

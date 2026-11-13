@@ -2,9 +2,9 @@
 
 [English](./README.md) · **한국어**
 
-**LLM 구독 토큰을 API처럼 사용.** OpenAI/Anthropic 구독 크레딧을 HTTP API로 노출하는 LLM 프록시 서버.
+**LLM 구독 토큰을 API처럼 사용.** OpenAI, Anthropic, xAI(Grok) 구독 크레딧을 HTTP API로 노출하는 LLM 프록시 서버.
 
-종량제 API 키 없이 **구독 정액제**로 GPT-5.5, Claude Opus 등을 호출. N개 계정의 쿼터를 풀링하여 병렬 분산.
+종량제 API 키 없이 **구독 정액제**로 GPT-6, Claude Opus, Grok 등을 호출. N개 계정의 쿼터를 풀링하여 병렬 분산.
 
 ---
 
@@ -12,10 +12,11 @@
 
 기존 구독 토큰 프록시(claude-proxy 등)는 CLI를 한 번 호출하고 텍스트를 반환하는 **single-turn 텍스트 프록시**입니다. 구독 토큰은 공식 API가 아니라 CLI/앱을 통해서만 사용 가능하고, 단순 CLI 호출로는 tool-call, structured output, multi-turn agent loop 같은 API 기능을 쓸 수 없기 때문입니다.
 
-Qgrid는 두 구독 기반 런타임 위에 AI SDK `LanguageModelV3` custom provider를 구현하여 이 문제를 해결합니다:
+Qgrid는 세 구독 기반 런타임 위에 AI SDK `LanguageModelV3` custom provider를 구현하여 이 문제를 해결합니다:
 
 - **OpenAI** — `https://chatgpt.com/backend-api/codex/responses`에 HTTPS로 직접 요청하고 SSE 응답을 해석합니다. Qgrid는 Codex CLI identity header를 보내고 매 turn 전체 대화 history를 재전송합니다. `sessionKey`에서 파생한 불투명 key로 provider thread를 보관하지 않고 prompt-cache affinity를 유지합니다.
 - **Anthropic** — Claude Code `stream-json` 모드. 요청마다 격리된 프로세스를 fresh spawn하고 전체 대화 히스토리를 재주입하므로, persistent session 없이도 multi-turn이 동작합니다.
+- **Grok (xAI)** — xAI 구독 OAuth 토큰 하나로 직접 요청합니다. 텍스트는 Grok chat proxy(`cli-chat-proxy.grok.com`), 이미지·비디오·음성 인식·음성 합성은 `api.x.ai`를 씁니다. 대화 히스토리는 Qgrid가 직접 재전송합니다.
 
 덕분에:
 
@@ -29,7 +30,7 @@ Qgrid는 두 구독 기반 런타임 위에 AI SDK `LanguageModelV3` custom prov
 
 ## 왜 Qgrid?
 
-- **API 키 비용 0원** — 이미 결제 중인 OpenAI/Anthropic 구독 토큰을 그대로 활용. 별도 종량제 API 키 불필요.
+- **API 키 비용 0원** — 이미 결제 중인 OpenAI, Anthropic, xAI 구독 토큰을 그대로 활용. 별도 종량제 API 키 불필요.
 - **Tool Calling + Agent Loop** — 구독 토큰으로 tool-call, multi-step agent loop 가능. 단순 텍스트 프록시가 아님.
 - **AI SDK 호환** — 기존 코드에서 `model` 한 줄만 교체. `generateText`, `streamText`, structured output, tool-call 전부 동작.
   ```ts
@@ -38,7 +39,9 @@ Qgrid는 두 구독 기반 런타임 위에 AI SDK `LanguageModelV3` custom prov
 - **N개 구독 풀링** — 팀원 구독 계정을 모아서 병렬 처리. smooth weighted routing으로 요청을 토큰에 분산. 토큰별 quota threshold로 사용률 초과 토큰은 라우팅에서 자동 제외.
 - **Request Log 대시보드** — 매 요청의 토큰 사용량, 비용, 캐시 적중, TTFT, tool-call 내역, reasoning을 웹 UI에서 실시간 확인.
 - **이미지 생성** — AI SDK `generateImage`와 `qgrid.image()`로 구독 기반 이미지 생성·편집을 직접 호출합니다. 대시보드 채팅은 이미지 도구를 기본 제공하며 일반·투명 이미지 모두 같은 Images 엔드포인트를 사용합니다.
-- **OpenAI + Anthropic** — 양쪽 구독 토큰 모두 등록 가능. OAuth 원클릭 로그인.
+- **비디오와 음성** — `experimental_generateVideo`로 Grok 비디오 생성, `transcribe`와 `generateSpeech`로 Grok·OpenAI 음성 인식과 합성, WebRTC 기반 GPT-Live 음성 대화.
+- **Decisions** — AI SDK `experimental_decide`를 OpenAI Decisions(`gpt-6-luna`)로 실행합니다. 텍스트를 생성하지 않고 선택, 점수, 참·거짓 확률을 돌려줍니다.
+- **OpenAI + Anthropic + Grok** — 세 provider의 구독 토큰을 모두 등록 가능. OAuth 원클릭 로그인.
 
 ---
 
@@ -112,6 +115,8 @@ pnpm add @cartanova/qgrid-ai-sdk
 
 - **OpenAI** — `https://chatgpt.com/backend-api/codex/responses`를 직접 호출합니다. 기본값인 `QGRID_OPENAI_TRANSPORT=websocket`은 같은 URL의 scheme을 `wss`로 바꾸고 동일한 prompt-cache affinity의 순차 요청에서 연결을 재사용합니다. Cache affinity가 없는 요청은 요청마다 연결 하나를 사용합니다. `QGRID_OPENAI_TRANSPORT=https`도 사용할 수 있지만 prompt-cache connection affinity는 유지하지 않습니다. Ambiguous request는 재전송하지 않습니다. Handshake가 401로 거부됐음이 확정된 경우에만 credential을 갱신하고 한 번 다시 연결합니다. 잘못된 selector 값은 dispatcher 설정 시 즉시 실패합니다.
 - **Anthropic** — 요청마다 격리된 Claude Code 프로세스를 fresh spawn (`stream-json` 입출력, 토큰별 config 격리). 대화 히스토리는 매 턴 재주입. OAuth 토큰 자동 refresh.
+- **Grok** — xAI 구독 엔드포인트를 직접 호출하고 smooth weighted routing으로 토큰에 분산합니다. `QGRID_GROK_MAX_INFLIGHT_PER_TOKEN`으로 토큰당 동시 요청 수를 제한할 수 있습니다.
+- **그 밖의 OpenAI API** — 실시간 음성, GPT-Live, Decisions는 Responses 경로와 같은 OpenAI 토큰 풀(선택, quota 게이트, OAuth refresh)을 씁니다. Decisions는 공개 `api.openai.com/v1/decisions` 엔드포인트를 구독 토큰으로 호출합니다.
 - **Quota threshold** — 토큰별 사용률 임계값(기본 80%). 임계값을 넘은 토큰은 rolling window가 회복될 때까지 라우팅에서 제외.
 - **Request Log** — 매 요청의 generate step, tool-call step, reasoning, 토큰 사용량, 캐시 지표, TTFT, 비용을 DB에 기록. 대시보드에서 확인.
 
@@ -226,6 +231,35 @@ const { image } = await generateImage({
 
 PNG/JPEG/WebP 참조 이미지는 최대 5개를 지원합니다. 큰 인라인 사진은 압축하거나 리사이즈해서 전달하세요. 과도하게 큰 입력은 거부합니다. `generateText`에는 이미지 생성 옵션이 없고 일반 이미지 인식도 지원하지 않습니다. 대시보드 `qgrid_chat`의 별도 자동 이미지 생성 경로는 유지됩니다.
 
+### Decisions
+
+```typescript
+import { experimental_decide as decide } from "ai";
+
+// 텍스트 대신 확률을 돌려주며 출력 토큰은 과금되지 않습니다
+const { answers } = await decide({
+  model: qgrid.decision("openai/gpt-6-luna"),
+  state: "주문 금액이 두 번 결제됐어요. 환불해 주세요!",
+  questions: {
+    department: {
+      type: "choice",
+      instructions: "어느 부서가 처리해야 하나요?",
+      criteria: { billing: "결제와 환불", other: "기타" },
+    },
+    refund: { type: "boolean", instructions: "고객이 환불을 요청한다." },
+  },
+});
+
+answers.department.choice; // "billing"
+answers.refund.probability; // 0.99
+```
+
+AI SDK에서 `experimental_decide`는 실험 기능입니다. 질문 타입, 한도, 옵션은 [SDK Decisions 절](packages/ai-sdk/README.ko.md#decisions-openai-실험-기능)을 참고하세요.
+
+### Grok, 비디오, 음성
+
+`grok/*` 텍스트 모델, Grok 이미지와 비디오, Grok·OpenAI 음성 인식과 합성, GPT-Live 대화는 `qgrid.image()`, `qgrid.video()`, `qgrid.transcription()`, `qgrid.speech()`, `qgrid.realtime()`과 해당 AI SDK 함수로 사용합니다. SDK README의 [Grok 사용](packages/ai-sdk/README.ko.md#grok-사용)을 참고하세요.
+
 ---
 
 ## CLI
@@ -281,10 +315,22 @@ QGRID_PROJECT_NAME=my-service   # request log 프로젝트 라벨
 
 | Provider | 모델 |
 |---|---|
-| OpenAI | `openai/gpt-6-astra`, `openai/gpt-6.1-sol`, `openai/gpt-6.1-terra`, `openai/gpt-6-sol`, `openai/gpt-6-luna`, `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`, `openai/gpt-5.5`, `openai/gpt-5.3-codex-spark` |
-| Anthropic | `anthropic/claude-fable-5-1`, `anthropic/claude-fable-5`, `anthropic/claude-opus-5-5`, `anthropic/claude-opus-5`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-sonnet-5`, `anthropic/claude-haiku-5-5`, `anthropic/claude-opus-4-8`, `anthropic/claude-opus-4-7`, `anthropic/claude-opus-4-6`, `anthropic/claude-opus-4-5`, `anthropic/claude-opus-4-1`, `anthropic/claude-opus-4`, `anthropic/claude-sonnet-4-7`, `anthropic/claude-sonnet-4-6`, `anthropic/claude-sonnet-4-5`, `anthropic/claude-sonnet-4`, `anthropic/claude-haiku-4-5` |
+| OpenAI | `openai/gpt-6-astra`, `openai/gpt-6.1-sol`, `openai/gpt-6.1-terra`, `openai/gpt-6-sol`, `openai/gpt-6-luna`, `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna` |
+| Anthropic | `anthropic/claude-fable-5-1`, `anthropic/claude-fable-5`, `anthropic/claude-opus-5-5`, `anthropic/claude-opus-5`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-sonnet-5`, `anthropic/claude-haiku-5-5`, `anthropic/claude-opus-4-8`, `anthropic/claude-opus-4-7`, `anthropic/claude-opus-4-6`, `anthropic/claude-opus-4-5`, `anthropic/claude-sonnet-4-6`, `anthropic/claude-haiku-4-5` |
+| Grok | `grok/grok-4.7`, `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5` (그 밖의 `grok/<id>`는 그대로 전달) |
 
-> `openai/gpt-5.4`, `openai/gpt-5.4-mini`, `openai/gpt-5.2`, `openai/gpt-5.3-codex`는 하위 호환을 위해 SDK 타입에는 남아 있지만, qgrid가 사용하는 ChatGPT 구독 Codex 경로에서는 더 이상 제공되지 않습니다. `gpt-5.4`와 `gpt-5.4-mini`는 2026-08-31에 retire되었으며 `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`로 대체하세요.
+> 표는 서버가 실제로 서비스하는 텍스트 모델입니다. SDK 타입에는 구독 경로에서 더 이상 제공되지 않는 id도 남아 있습니다: `openai/gpt-5.5`(2026-10-14 Codex/ChatGPT 경로 은퇴 예정이었음, `openai/gpt-6.1-sol` 또는 `openai/gpt-6-luna` 사용), `openai/gpt-5.4`와 `openai/gpt-5.4-mini`(2026-08-31 retire, `openai/gpt-5.6-terra`와 `openai/gpt-5.6-luna` 사용), `openai/gpt-5.2`, `openai/gpt-5.3-codex`, `openai/gpt-5.3-codex-spark`(ChatGPT 계정에서 거부됨, 2026-09-29 확인), `anthropic/claude-opus-4`와 `anthropic/claude-sonnet-4`(2026-06-15 retire), `anthropic/claude-opus-4-1`(2026-08-05 retire, Claude Code가 Opus 5.5로 대체 서빙), `anthropic/claude-sonnet-4-5`(deprecated, 2026-11-30 retire 예정), `anthropic/claude-sonnet-4-7`(Anthropic 카탈로그에 없음).
+
+다른 모델 종류는 전용 factory를 씁니다:
+
+| 용도 | Factory | 모델 |
+|---|---|---|
+| 이미지 | `qgrid.image()` | `openai/gpt-image-2`, `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0` |
+| 비디오 | `qgrid.video()` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` |
+| 음성 인식 | `qgrid.transcription()` | `grok/grok-voice-transcribe-2.0`, `openai/gpt-transcribe`(권장), 그 밖의 OpenAI id는 SDK README 참고 |
+| 음성 합성 | `qgrid.speech()` | `grok/grok-tts`, `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1` |
+| 실시간 음성 대화 | `qgrid.realtime()` | `openai/gpt-live-1` |
+| Decisions | `qgrid.decision()` | `openai/gpt-6-luna` |
 
 > `claude-fable-5-1`, `claude-fable-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5-5`, `claude-sonnet-5`, `claude-haiku-5-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-opus-4-8`은 자동으로 1M 토큰 컨텍스트로 실행됩니다. thinking을 생략하면 Fable 5.1/5, Opus 5.5/5, Sonnet 5.5, Haiku 5.5의 기본 adaptive thinking을 유지하며 `effort`로 깊이를 조절합니다. `providerOptions.qgrid.thinking: false`는 effort를 무시하고 지원 모델에서 답변 전 thinking을 끕니다. 불가·미검증 모델은 오류를 반환하며 서버와 SDK를 함께 업데이트해야 합니다. Haiku 5.5와 Sonnet 5.5의 off는 Claude Code 2.1.295 이상이 필요하며 Sonnet은 도구 사이 thinking이 남을 수 있습니다. [지원 모델과 실행 경로 제한](packages/ai-sdk/README.ko.md#provider-options)을 참고하세요. Fable 5.1은 Fable 5와 같은 1M tokens당 $10/$50 단가지만 cache read는 $1 대신 $0.25로 과금됩니다. Opus 5.5(2026-09-22 출시)는 1M tokens당 $4/$20이며 cache read는 $0.20(0.05x)입니다. Opus 5는 $5/$25 그대로입니다. Sonnet 5.5(2026-09-28 출시)는 Sonnet 5와 같은 $2/$10이며 cache read는 2026-10-07에 절반으로 인하돼 $0.10(0.05x)입니다. Haiku 5.5(2026-10-07 출시)는 프롬프트 길이별 단가로, 100K 토큰 이하 프롬프트는 1M tokens당 $0.10/$0.50에 cache read $0.01이고, 100K를 넘으면 요청 전체에 5배 단가($0.50/$2.50, cache read $0.05)가 적용됩니다.
 
@@ -298,7 +344,7 @@ QGRID_PROJECT_NAME=my-service   # request log 프로젝트 라벨
 | `openai/gpt-6-sol` | 272K | 128K | $2 / $0.20 / $2.50 / $10 |
 | `openai/gpt-6-luna` | 272K | 128K | $0.10 / $0.01 / $0.125 / $0.50 |
 
-2026-09-23에 조회한 Codex 카탈로그는 Astra, Sol, Luna 모두 272K context window를 제공합니다. Astra와 Sol은 `ultra`까지, Luna는 `max`까지 reasoning effort를 지원합니다. 백엔드 기본값은 세 모델 모두 `medium`이며, qgrid SDK의 기본값은 기존대로 `low`이니 다른 깊이가 필요하면 effort를 명시하세요. [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)의 공개 API 문서는 별도로 1.05M context, 최대 입력 922K, 최대 출력 128K와 `max`까지의 effort를 명시하며 `ultra`는 포함하지 않습니다. 이 공개 API 한도를 구독 경로의 한도로 간주하지 않습니다. Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/docs/pricing)를 사용합니다. Cache write는 uncached input 단가의 1.25x이며, 입력이 272K tokens를 넘으면 요청 전체에 input/cache 2x, output 1.5x 단가가 적용됩니다. GPT-6 Sol과 Luna(2026-09-22 출시)는 GPT-5.6 Sol/Luna의 절반 단가이며, 기존 모델 단가는 2026-09-23에 재확인했고 변동이 없습니다. [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)(2026-09-29 출시)은 GPT-6 Sol과 단가가 같고 cached input만 $0.10입니다. 2026-09-30에 조회한 Codex 카탈로그는 272K context window, `ultra`까지의 effort, 백엔드 기본값 `low`를 명시하며, 같은 날 qgrid 요청 형태로 라이브 생성에 성공했습니다. [GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra)(2026-10-26 출시)는 GPT-6.1 Sol의 정확히 절반 단가($1 / $0.05 / $1.25 / $5)이며 272K 할증 배율은 같습니다. 2026-10-27에 조회한 Codex 카탈로그는 500K context window, `ultra`까지의 effort, 백엔드 기본값 `low`를 명시하며, 같은 날 qgrid 경로로 라이브 생성, structured output, thinking off에 성공했습니다. 같은 카탈로그에서 GPT-6.1 Sol의 context window도 500K로 바뀌었습니다. `openai/gpt-5.5`는 2026-10-14에 Codex/ChatGPT 경로에서 은퇴하므로 `openai/gpt-6.1-sol` 또는 `openai/gpt-6-luna`로 옮기세요.
+2026-09-23에 조회한 Codex 카탈로그는 Astra, Sol, Luna 모두 272K context window를 제공합니다. Astra와 Sol은 `ultra`까지, Luna는 `max`까지 reasoning effort를 지원합니다. 백엔드 기본값은 세 모델 모두 `medium`이며, qgrid SDK의 기본값은 기존대로 `low`이니 다른 깊이가 필요하면 effort를 명시하세요. [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)의 공개 API 문서는 별도로 1.05M context, 최대 입력 922K, 최대 출력 128K와 `max`까지의 effort를 명시하며 `ultra`는 포함하지 않습니다. 이 공개 API 한도를 구독 경로의 한도로 간주하지 않습니다. Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/docs/pricing)를 사용합니다. Cache write는 uncached input 단가의 1.25x이며, 입력이 272K tokens를 넘으면 요청 전체에 input/cache 2x, output 1.5x 단가가 적용됩니다. GPT-6 Sol과 Luna(2026-09-22 출시)는 GPT-5.6 Sol/Luna의 절반 단가이며, 기존 모델 단가는 2026-09-23에 재확인했고 변동이 없습니다. [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)(2026-09-29 출시)은 GPT-6 Sol과 단가가 같고 cached input만 $0.10입니다. 2026-09-30에 조회한 Codex 카탈로그는 272K context window, `ultra`까지의 effort, 백엔드 기본값 `low`를 명시하며, 같은 날 qgrid 요청 형태로 라이브 생성에 성공했습니다. [GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra)(2026-10-26 출시)는 GPT-6.1 Sol의 정확히 절반 단가($1 / $0.05 / $1.25 / $5)이며 272K 할증 배율은 같습니다. 2026-10-27에 조회한 Codex 카탈로그는 500K context window, `ultra`까지의 effort, 백엔드 기본값 `low`를 명시하며, 같은 날 qgrid 경로로 라이브 생성, structured output, thinking off에 성공했습니다. 같은 카탈로그에서 GPT-6.1 Sol의 context window도 500K로 바뀌었습니다. `openai/gpt-5.5`는 2026-10-14에 Codex/ChatGPT 경로에서 은퇴할 예정이었고 qgrid 서비스 목록에서 빠졌습니다. `openai/gpt-6.1-sol` 또는 `openai/gpt-6-luna`를 쓰세요.
 
 ### GPT-5.6 사양
 
@@ -327,6 +373,9 @@ Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/
 | `QGRID_DB_USER` | PostgreSQL 사용자 (CLI) | `postgres` |
 | `QGRID_DB_PASSWORD` | PostgreSQL 비밀번호 (CLI) | `postgres` |
 | `QGRID_DB_NAME` | 데이터베이스 이름 (CLI) | `qgrid` |
+| `QGRID_OPENAI_TRANSPORT` | OpenAI Responses transport: `websocket` 또는 `https` | `websocket` |
+| `QGRID_GROK_MAX_INFLIGHT_PER_TOKEN` | Grok 토큰당 동시 요청 수 상한. 미설정 시 제한 없음 | — |
+| `QGRID_ALIGNER_MODEL` | 음성 정렬기 모델 경로 (CLI README 참고) | `~/.cache/qgrid/models/mms-300m-fa-int8.onnx` |
 | `SLACK_BOT_TOKEN` | 토큰 만료 알림용 Slack bot token. 미설정 시 알림 비활성 | — |
 | `SLACK_CHANNEL_ID` | 알림을 받을 Slack 채널 | — |
 | `SLACK_EXPIRY_REMINDER_INTERVAL_MINUTES` | 세션 만료 알림을 다시 보내는 주기(분). 미설정·0이면 끔 | — |
@@ -363,6 +412,7 @@ packages/
 
 - **OpenAI 모델**: private Codex Responses backend를 직접 사용합니다. 이 경로는 `temperature`, `maxOutputTokens` 등 sampling 파라미터를 지원하지 않습니다.
 - **Anthropic 모델**: Claude Code 기반. OAuth 로그인 필요. tool calling과 object structured output을 지원하지만, 요청마다 fresh process로 실행되므로 OpenAI 방식의 `sessionKey` cache affinity는 적용되지 않습니다.
+- **Grok 모델**: xAI 구독 기반. 옵션은 `providerOptions.xai` 아래에서 `@ai-sdk/xai` 이름을 따르고, 토큰 이름에는 `grok/` 접두사가 붙습니다.
 - **Anthropic structured output**: codex(constrained decoding)와 달리 Claude Code의 `--json-schema`는 `StructuredOutput` 도구로 생성을 유도하고 사후 검증하므로, 복잡한 schema는 간헐적으로 검증에 실패할 수 있습니다. qgrid는 stream 지연을 제한하기 위해 structured streaming만 1회 시도로 고정하고, non-stream `generate`는 Claude Code의 기본 retry 예산을 유지합니다. 검증 실패는 깨진 JSON 대신 명시적 에러로 반환합니다.
 - **위치 기반 tuple**: OpenAI는 지원되는 positive schema 위치에서 tuple의 위치별 제약을 정규화해 강제합니다. negative, conditional 등 안전하게 정규화할 수 없는 위치의 tuple은 의미가 바뀌는 변환 대신 HTTP 400으로 거부합니다. definition은 전역 정규화되므로 해당 위치에서 참조하는 경우도 같은 이유로 거부합니다. Anthropic 위치 기반 tuple schema도 Claude Code가 위치 의미를 보존할 수 없어 HTTP 400으로 거부됩니다. tuple node는 `type: "array"`를 명시하며 nullable tuple은 `anyOf`로 표현합니다.
 - **Schema reference**: structured schema에서는 문서 root 또는 `$defs`/`definitions` entry root만 연속으로 가리키는 로컬 root-relative JSON Pointer `$ref`를 허용합니다. property, tuple 내부, conditional, literal 값을 가리키는 ref는 정규화 중 target이 이동하거나 다시 작성될 수 있어 HTTP 400으로 거부합니다. resource ID, anchor, 외부 ref, dynamic ref, recursive ref도 허용하지 않습니다.

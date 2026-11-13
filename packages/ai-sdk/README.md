@@ -4,7 +4,7 @@
 
 AI SDK 7 custom provider for [qgrid](https://github.com/cartanova-ai/Qgrid), implementing the `LanguageModelV3` / `ImageModelV3` specification that AI SDK 7 accepts.
 
-**Without changing your existing AI SDK code, swap a single `model` line to get subscription-token pooling (N tokens × concurrent permits) + the request log dashboard.**
+**Without changing your existing AI SDK code, swap a single `model` line to get subscription-token pooling across N tokens + the request log dashboard.**
 
 ```diff
  import { generateText } from "ai";
@@ -34,7 +34,7 @@ If you already use another provider (google, openai, ...) directly, add **a sing
 pnpm add @cartanova/qgrid-ai-sdk
 ```
 
-Peer dependencies: `ai@^7.0.0`, `@ai-sdk/provider@^4.0.0`
+Peer dependencies: `ai@^7.0.148`, `@ai-sdk/provider@^4.0.31`
 
 ## Quick start
 
@@ -360,6 +360,7 @@ Grok model accepts the same factory config as the other models: `serverUrl` (def
 | `qgrid.transcription(id)` | `grok/grok-voice-transcribe-2.0`; OpenAI subscription: `openai/gpt-transcribe` (recommended), `openai/gpt-live-transcribe`, `openai/gpt-realtime-whisper`; `openai/gpt-4o-mini-transcribe`, `openai/gpt-4o-transcribe`, `openai/whisper-1` until OpenAI shuts them down on 2027-02-26 | `transcribe` |
 | `qgrid.speech(id)` | `grok/grok-tts` (the id only labels the request log); OpenAI subscription: `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1` | `generateSpeech` |
 | `qgrid.realtime(id)` (2.20.0+; browser: `createQgridRealtime` from `@cartanova/qgrid-ai-sdk/realtime`) | `openai/gpt-live-1` | `experimental_useRealtime` (experimental, WebRTC) |
+| `qgrid.decision(id)` (2.22.0+) | `openai/gpt-6-luna` | `experimental_decide` (experimental) |
 
 qgrid forwards a language-model id that is not in its catalog unchanged instead of rejecting it,
 as it does for OpenAI; the subscription backend decides. It may serve a different model, so check
@@ -666,7 +667,7 @@ result.answers.department.probabilities; // { billing: 1, shipping: 0, other: 0 
 result.providerMetadata?.qgrid?.requestLogId;
 ```
 
-- Question types: `choice`, `score`, `boolean`. `box` is not supported. State parts: text, JSON, and PNG/JPEG/WebP/GIF images as bytes or an http(s) URL.
+- Question types: `choice`, `score`, `boolean`. `box` is not supported. State parts: text, JSON, and PNG/JPEG/WebP/GIF images. `experimental_decide` downloads a URL file part in your process and the image goes to qgrid inline, so the 19 MiB inline media limit applies to URLs too.
 - OpenAI requires `instructions` on `choice` and `score` questions; without them the server answers HTTP 400 naming the question ID. A `boolean` question may use `criteria` alone.
 - OpenAI limits: 1-400 questions, 2-255 choices, 2-10 score levels.
 - `providerOptions.openai` honors `promptCacheKey` and `safetyIdentifier` (`QgridOpenAIDecisionProviderOptions`). `maxOutputTokens`, `reasoning`, and other OpenAI keys produce an `unsupported` warning. `providerOptions.qgrid` takes `tokenName` and `logger`.
@@ -782,7 +783,7 @@ type QgridSupportedModel =
   | "anthropic/claude-haiku-5-5"
 ```
 
-`openai/gpt-5.4`, `openai/gpt-5.4-mini`, `openai/gpt-5.2`, and `openai/gpt-5.3-codex` remain in the type for backward compatibility, but the ChatGPT-subscription Codex route that qgrid uses no longer serves them. `gpt-5.4` and `gpt-5.4-mini` retired on 2026-08-31 (replacements: `openai/gpt-5.6-terra` and `openai/gpt-5.6-luna`); `gpt-5.2` and `gpt-5.3-codex` were removed from that route earlier. Requests for these ids fail at the backend.
+`openai/gpt-5.4`, `openai/gpt-5.4-mini`, `openai/gpt-5.2`, and `openai/gpt-5.3-codex` remain in the type for backward compatibility, but the ChatGPT-subscription Codex route that qgrid uses no longer serves them. `gpt-5.4` and `gpt-5.4-mini` retired on 2026-08-31 (replacements: `openai/gpt-5.6-terra` and `openai/gpt-5.6-luna`); `gpt-5.2` and `gpt-5.3-codex` were removed from that route earlier. Requests for these ids fail at the backend. The server's served list (the dashboard model picker) also omits `openai/gpt-5.5` (scheduled to retire from the Codex/ChatGPT route on 2026-10-14), `openai/gpt-5.3-codex-spark` (rejected for ChatGPT accounts, checked 2026-09-29), `anthropic/claude-opus-4` and `anthropic/claude-sonnet-4` (retired 2026-06-15), `anthropic/claude-opus-4-1` (retired 2026-08-05; Claude Code serves Opus 5.5 instead), `anthropic/claude-sonnet-4-5` (deprecated, retirement scheduled for 2026-11-30), and `anthropic/claude-sonnet-4-7` (not in Anthropic's catalog). Grok text ids (`grok/grok-4.7`, `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5`) are a separate type, `QgridGrokModel`; see [Using Grok](#using-grok).
 
 ### GPT-6 specifications
 
@@ -822,7 +823,7 @@ Qgrid uses [Standard API pricing](https://developers.openai.com/api/docs/pricing
 
 Claude Code may automatically retry a Fable safety refusal on another Opus model; the current CLI picks Opus 5 or Opus 4.8 by refusal category. In that case, the AI SDK response's `response.modelId` and `providerMetadata.qgrid.model` identify Opus as the actual serving model. `providerMetadata.qgrid.requestedModel` remains Fable, and `providerMetadata.qgrid.modelFallbacks` contains the refusal fallback history. The metadata also exposes `costSource` and the 5m/1h cache-write token split.
 
-`openai/gpt-5.3-codex-spark` remains a research preview without final published per-token rates. qgrid therefore reports its generic fallback estimate rather than presenting that estimate as official pricing.
+`openai/gpt-5.3-codex-spark` has no published per-token rates and the subscription route rejects it for ChatGPT accounts (checked 2026-09-29). If a request is ever served, qgrid reports its generic fallback estimate rather than official pricing.
 
 ## Configuration
 

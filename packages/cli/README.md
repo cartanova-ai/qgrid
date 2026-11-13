@@ -2,7 +2,7 @@
 
 **English** · [한국어](./README.ko.md)
 
-Run the Qgrid server in one line. An LLM proxy that exposes OpenAI/Anthropic subscription credits as an HTTP API + dashboard.
+Run the Qgrid server in one line. An LLM proxy that exposes OpenAI, Anthropic, and xAI (Grok) subscription credits as an HTTP API + dashboard.
 
 ## Install
 
@@ -145,9 +145,10 @@ The CLI ships the Sonamu-based server as a built-in bundle. On launch:
 1. Verify the DB connection
 2. Start the server (API + dashboard web UI)
 3. Load registered tokens from the DB. Later token additions/changes propagate to the running server in real time via PostgreSQL LISTEN/NOTIFY
-4. **OpenAI tokens**: call `https://chatgpt.com/backend-api/codex/responses` directly over HTTPS and decode SSE. Token-level concurrent permits use smooth weighted routing; a 50-item queue waits at most 60 seconds. Full history is replayed with opaque `sessionKey`-derived prompt-cache affinity, and `AbortSignal` cancels queued or active work
-5. **Anthropic tokens**: spawn a fresh, isolated claude process per request (`stream-json` in/out). Tokens are selected least-used-first. OAuth tokens are refreshed automatically
-6. Tokens over their quota threshold (default 80%) are excluded from routing (usage-lookup failures fail open)
+4. **OpenAI tokens**: call `https://chatgpt.com/backend-api/codex/responses` directly (WebSocket by default, HTTPS/SSE with `QGRID_OPENAI_TRANSPORT=https`). Requests are not capped or queued locally; smooth weighted routing picks among eligible tokens. Full history is replayed with opaque `sessionKey`-derived prompt-cache affinity, and `AbortSignal` cancels active work. Realtime voice, GPT-Live, and Decisions use the same tokens
+5. **Anthropic tokens**: spawn a fresh, isolated claude process per request (`stream-json` in/out). Tokens are selected by smooth weighted routing. OAuth tokens are refreshed automatically
+6. **Grok tokens**: call the xAI subscription endpoints directly for text, images, video, and voice, with smooth weighted routing and an optional per-token in-flight cap (`QGRID_GROK_MAX_INFLIGHT_PER_TOKEN`)
+7. Tokens over their quota threshold (default 80%) are excluded from routing (usage-lookup failures fail open)
 
 The Qgrid app itself does not depend on Docker, but PostgreSQL is required. If you don't run PostgreSQL locally, running it in Docker is the simplest setup.
 

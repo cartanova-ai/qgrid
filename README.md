@@ -2,9 +2,9 @@
 
 **English** · [한국어](./README.ko.md)
 
-**Use your LLM subscription tokens like an API.** Qgrid is an LLM proxy server that exposes OpenAI/Anthropic subscription credits as an HTTP API.
+**Use your LLM subscription tokens like an API.** Qgrid is an LLM proxy server that exposes OpenAI, Anthropic, and xAI (Grok) subscription credits as an HTTP API.
 
-Call GPT-5.5, Claude Opus, and more on a **flat-rate subscription** instead of pay-as-you-go API keys. Pool the quotas of N accounts and distribute requests in parallel.
+Call GPT-6, Claude Opus, Grok, and more on a **flat-rate subscription** instead of pay-as-you-go API keys. Pool the quotas of N accounts and distribute requests in parallel.
 
 ---
 
@@ -12,10 +12,11 @@ Call GPT-5.5, Claude Opus, and more on a **flat-rate subscription** instead of p
 
 Existing subscription-token proxies (claude-proxy and the like) are **single-turn text proxies** — they invoke a CLI once and return text. Subscription tokens aren't usable through an official API, only through the CLI/app, and a bare CLI invocation doesn't support API features like tool calls, structured output, or multi-turn agent loops.
 
-Qgrid solves this with an AI SDK `LanguageModelV3` custom provider over two subscription-backed runtimes:
+Qgrid solves this with an AI SDK `LanguageModelV3` custom provider over three subscription-backed runtimes:
 
 - **OpenAI** — Direct HTTPS requests to `https://chatgpt.com/backend-api/codex/responses`, with streaming responses decoded from SSE. Qgrid sends Codex CLI identity headers and replays the full conversation history on every turn. An opaque key derived from `sessionKey` supplies prompt-cache affinity without retaining provider threads.
 - **Anthropic** — Claude Code in `stream-json` mode. Qgrid spawns a fresh, isolated process per request and replays the full conversation history, so multi-turn works without persistent sessions.
+- **Grok (xAI)** — Direct requests with one xAI subscription OAuth token: the Grok chat proxy (`cli-chat-proxy.grok.com`) for text, and `api.x.ai` for images, video, speech-to-text, and text-to-speech. Qgrid replays the conversation history itself.
 
 As a result:
 
@@ -29,7 +30,7 @@ As a result:
 
 ## Why Qgrid?
 
-- **Zero API key cost** — Reuse the OpenAI/Anthropic subscription tokens you already pay for. No separate pay-as-you-go API key required.
+- **Zero API key cost** — Reuse the OpenAI, Anthropic, and xAI subscription tokens you already pay for. No separate pay-as-you-go API key required.
 - **Tool Calling + Agent Loop** — Run tool calls and multi-step agent loops on a subscription token. Not just a plain text proxy.
 - **AI SDK compatible** — Swap a single `model` line in your existing code. `generateText`, `streamText`, structured output, and tool calls all work.
   ```ts
@@ -38,7 +39,9 @@ As a result:
 - **Pool N subscriptions** — Combine teammates' subscription accounts for parallel processing. Smooth weighted routing distributes requests across tokens, while per-token quota thresholds exclude overloaded tokens.
 - **Request Log dashboard** — Inspect token usage, cost, cache hits, TTFT, tool-call traces, and reasoning for every request in real time through a web UI.
 - **Image generation** — Use AI SDK `generateImage` with `qgrid.image()` for direct subscription-backed generation and editing. Dashboard chat offers an image tool automatically and uses the same Images endpoints for ordinary and transparent output.
-- **OpenAI + Anthropic** — Register subscription tokens for both. One-click OAuth login.
+- **Video and voice** — Grok video with `experimental_generateVideo`; speech-to-text and text-to-speech on Grok and OpenAI with `transcribe` and `generateSpeech`; GPT-Live voice conversations over WebRTC.
+- **Decisions** — AI SDK `experimental_decide` on OpenAI Decisions (`gpt-6-luna`): choices, scores, and true/false probabilities without generating text.
+- **OpenAI + Anthropic + Grok** — Register subscription tokens for all three. One-click OAuth login.
 
 ---
 
@@ -112,6 +115,8 @@ If you're already using the google/openai provider directly, **add one line** to
 
 - **OpenAI** — Calls `https://chatgpt.com/backend-api/codex/responses` directly. The default `QGRID_OPENAI_TRANSPORT=websocket` mode scheme-swaps that URL to `wss` and reuses a connection for sequential requests with the same prompt-cache affinity. Requests without cache affinity use one connection each. `QGRID_OPENAI_TRANSPORT=https` remains available but does not preserve prompt-cache connection affinity. Qgrid does not replay ambiguous requests. Only a definitively rejected 401 handshake may refresh credentials and reconnect once. Requests run uncapped; new work uses smooth weighted routing across eligible tokens. Invalid selector values fail during dispatcher configuration.
 - **Anthropic** — Spawns a fresh, isolated Claude Code process per request (`stream-json` in/out) with per-token config isolation. Conversation history is replayed each turn; OAuth tokens are refreshed automatically.
+- **Grok** — Calls the xAI subscription endpoints directly with smooth weighted routing across tokens. `QGRID_GROK_MAX_INFLIGHT_PER_TOKEN` optionally caps concurrent requests per token.
+- **Other OpenAI APIs** — Realtime voice, GPT-Live, and Decisions share the OpenAI token pool (selection, quota gate, OAuth refresh) with the Responses route. Decisions calls the public `api.openai.com/v1/decisions` endpoint with the subscription token.
 - **Quota threshold** — Each token has a utilization threshold (default 80%). Tokens over the threshold are excluded from routing until their rolling window recovers.
 - **Request Log** — Records each request's generate steps, tool-call steps, reasoning, token usage, cache metrics, TTFT, and cost in the DB. View them in the dashboard.
 
@@ -226,6 +231,35 @@ const { image } = await generateImage({
 
 Up to five PNG/JPEG/WebP references are supported. Compress or resize large inline photos before sending them; oversized inputs are rejected. `generateText` has no image-generation options and does not support general vision. Dashboard `qgrid_chat` retains its separate automatic image routing.
 
+### Decisions
+
+```typescript
+import { experimental_decide as decide } from "ai";
+
+// Probabilities instead of text: no output tokens are charged
+const { answers } = await decide({
+  model: qgrid.decision("openai/gpt-6-luna"),
+  state: "I was charged twice for my order. Please refund it!",
+  questions: {
+    department: {
+      type: "choice",
+      instructions: "Which team should handle this?",
+      criteria: { billing: "Payments and refunds", other: "Anything else" },
+    },
+    refund: { type: "boolean", instructions: "The customer asks for money back." },
+  },
+});
+
+answers.department.choice; // "billing"
+answers.refund.probability; // 0.99
+```
+
+AI SDK marks `experimental_decide` experimental. See the [SDK Decisions section](packages/ai-sdk/README.md#decisions-openai-experimental) for question types, limits, and options.
+
+### Grok, video, and voice
+
+`grok/*` text models, Grok images and video, speech-to-text and text-to-speech on Grok and OpenAI, and GPT-Live conversations use the matching AI SDK functions with `qgrid.image()`, `qgrid.video()`, `qgrid.transcription()`, `qgrid.speech()`, and `qgrid.realtime()`. See [Using Grok](packages/ai-sdk/README.md#using-grok) in the SDK README.
+
 ---
 
 ## CLI
@@ -282,10 +316,22 @@ With server and AI SDK 2.10.0+, `generateText` returns the request-log ID at `re
 
 | Provider | Models |
 |---|---|
-| OpenAI | `openai/gpt-6-astra`, `openai/gpt-6.1-sol`, `openai/gpt-6.1-terra`, `openai/gpt-6-sol`, `openai/gpt-6-luna`, `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`, `openai/gpt-5.5`, `openai/gpt-5.3-codex-spark` |
-| Anthropic | `anthropic/claude-fable-5-1`, `anthropic/claude-fable-5`, `anthropic/claude-opus-5-5`, `anthropic/claude-opus-5`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-sonnet-5`, `anthropic/claude-haiku-5-5`, `anthropic/claude-opus-4-8`, `anthropic/claude-opus-4-7`, `anthropic/claude-opus-4-6`, `anthropic/claude-opus-4-5`, `anthropic/claude-opus-4-1`, `anthropic/claude-opus-4`, `anthropic/claude-sonnet-4-7`, `anthropic/claude-sonnet-4-6`, `anthropic/claude-sonnet-4-5`, `anthropic/claude-sonnet-4`, `anthropic/claude-haiku-4-5` |
+| OpenAI | `openai/gpt-6-astra`, `openai/gpt-6.1-sol`, `openai/gpt-6.1-terra`, `openai/gpt-6-sol`, `openai/gpt-6-luna`, `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna` |
+| Anthropic | `anthropic/claude-fable-5-1`, `anthropic/claude-fable-5`, `anthropic/claude-opus-5-5`, `anthropic/claude-opus-5`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-sonnet-5`, `anthropic/claude-haiku-5-5`, `anthropic/claude-opus-4-8`, `anthropic/claude-opus-4-7`, `anthropic/claude-opus-4-6`, `anthropic/claude-opus-4-5`, `anthropic/claude-sonnet-4-6`, `anthropic/claude-haiku-4-5` |
+| Grok | `grok/grok-4.7`, `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5` (other `grok/<id>` values are forwarded unchanged) |
 
-> `openai/gpt-5.4`, `openai/gpt-5.4-mini`, `openai/gpt-5.2`, and `openai/gpt-5.3-codex` are still accepted by the SDK type for backward compatibility, but the ChatGPT-subscription Codex route that qgrid uses no longer serves them. `gpt-5.4` and `gpt-5.4-mini` retired on 2026-08-31; use `openai/gpt-5.6-terra` and `openai/gpt-5.6-luna` instead.
+> The table lists the text models the server serves. The SDK type still accepts ids the subscription routes no longer serve: `openai/gpt-5.5` (scheduled to retire from the Codex/ChatGPT route on 2026-10-14; use `openai/gpt-6.1-sol` or `openai/gpt-6-luna`), `openai/gpt-5.4` and `openai/gpt-5.4-mini` (retired 2026-08-31; use `openai/gpt-5.6-terra` and `openai/gpt-5.6-luna`), `openai/gpt-5.2`, `openai/gpt-5.3-codex`, `openai/gpt-5.3-codex-spark` (rejected for ChatGPT accounts, checked 2026-09-29), `anthropic/claude-opus-4` and `anthropic/claude-sonnet-4` (retired 2026-06-15), `anthropic/claude-opus-4-1` (retired 2026-08-05; Claude Code serves Opus 5.5 instead), `anthropic/claude-sonnet-4-5` (deprecated, retirement scheduled for 2026-11-30), and `anthropic/claude-sonnet-4-7` (not in Anthropic's catalog).
+
+Other model types use their own factories:
+
+| Use | Factory | Models |
+|---|---|---|
+| Images | `qgrid.image()` | `openai/gpt-image-2`, `grok/grok-imagine-image`, `grok/grok-imagine-image-2.0` |
+| Video | `qgrid.video()` | `grok/grok-imagine-video`, `grok/grok-imagine-video-1.5`, `grok/grok-imagine-video-1.5-lite` |
+| Speech-to-text | `qgrid.transcription()` | `grok/grok-voice-transcribe-2.0`, `openai/gpt-transcribe` (recommended), and the other OpenAI ids in the SDK README |
+| Text-to-speech | `qgrid.speech()` | `grok/grok-tts`, `openai/gpt-realtime-2.1-mini`, `openai/gpt-realtime-2.1` |
+| Live voice | `qgrid.realtime()` | `openai/gpt-live-1` |
+| Decisions | `qgrid.decision()` | `openai/gpt-6-luna` |
 
 > `claude-fable-5-1`, `claude-fable-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5-5`, `claude-sonnet-5`, `claude-haiku-5-5`, `claude-sonnet-4-6`, `claude-opus-4-6`, and `claude-opus-4-8` automatically run with a 1M-token context window. Omitting thinking preserves the adaptive defaults of Fable 5.1/5, Opus 5.5/5, Sonnet 5.5, and Haiku 5.5; `effort` controls depth. `providerOptions.qgrid.thinking: false` ignores effort and disables pre-answer thinking on supported models. Unsupported or unverified models return errors; update SDK and server together. Off for Haiku 5.5 and Sonnet 5.5 requires Claude Code 2.1.295 or newer; Sonnet may retain thinking between tools. See [supported models and runtime limits](packages/ai-sdk/README.md#provider-options). Fable 5.1 shares Fable 5's $10/$50 per-1M-token pricing but bills cache reads at $0.25 instead of $1. Opus 5.5 (released 2026-09-22) costs $4/$20 per 1M tokens with cache reads at $0.20 (0.05x); Opus 5 stays at $5/$25. Sonnet 5.5 (released 2026-09-28) keeps Sonnet 5's $2/$10; its cache reads were halved to $0.10 (0.05x) on 2026-10-07. Haiku 5.5 (released 2026-10-07) is priced by prompt length: $0.10/$0.50 per 1M tokens with cache reads at $0.01 for prompts up to 100K tokens, and 5x those rates ($0.50/$2.50, cache reads $0.05) applied to the whole request once the prompt exceeds 100K tokens.
 
@@ -299,7 +345,7 @@ With server and AI SDK 2.10.0+, `generateText` returns the request-log ID at `re
 | `openai/gpt-6-sol` | 272K | 128K | $2 / $0.20 / $2.50 / $10 |
 | `openai/gpt-6-luna` | 272K | 128K | $0.10 / $0.01 / $0.125 / $0.50 |
 
-The Codex catalog fetched on 2026-09-23 advertises a 272K context window for Astra, Sol, and Luna. Astra and Sol support reasoning effort through `ultra`; Luna supports it through `max`. The backend default is `medium` for all three, while qgrid's SDK defaults to `low`; select an effort explicitly to override it. The public API model pages for [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), and [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) separately list a 1.05M context window, 922K maximum input, 128K maximum output, and reasoning effort through `max` (no `ultra`). Those public limits do not establish the subscription route's limits. [Standard API pricing](https://developers.openai.com/api/docs/pricing) is used for qgrid's cost estimate: cache writes cost 1.25x the uncached input rate, and input over 272K tokens applies 2x input/cache and 1.5x output rates to the full request. GPT-6 Sol and Luna (released 2026-09-22) are priced at half of GPT-5.6 Sol and Luna; existing model prices were re-verified on 2026-09-23 and did not change. [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) (released 2026-09-29) keeps GPT-6 Sol's prices except cached input at $0.10; the Codex catalog fetched on 2026-09-30 lists a 272K context window, effort through `ultra`, and a `low` backend default, and a live generation through qgrid's request shape succeeded the same day. [GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra) (released 2026-10-26) costs exactly half of GPT-6.1 Sol ($1 / $0.05 / $1.25 / $5) with the same 272K multipliers; the Codex catalog fetched on 2026-10-27 lists a 500K context window, effort through `ultra`, and a `low` backend default, and live generation, structured output, and thinking off succeeded through qgrid the same day. The same catalog now lists a 500K context window for GPT-6.1 Sol as well. `openai/gpt-5.5` retires from the Codex/ChatGPT route on 2026-10-14; migrate to `openai/gpt-6.1-sol` or `openai/gpt-6-luna`.
+The Codex catalog fetched on 2026-09-23 advertises a 272K context window for Astra, Sol, and Luna. Astra and Sol support reasoning effort through `ultra`; Luna supports it through `max`. The backend default is `medium` for all three, while qgrid's SDK defaults to `low`; select an effort explicitly to override it. The public API model pages for [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), and [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) separately list a 1.05M context window, 922K maximum input, 128K maximum output, and reasoning effort through `max` (no `ultra`). Those public limits do not establish the subscription route's limits. [Standard API pricing](https://developers.openai.com/api/docs/pricing) is used for qgrid's cost estimate: cache writes cost 1.25x the uncached input rate, and input over 272K tokens applies 2x input/cache and 1.5x output rates to the full request. GPT-6 Sol and Luna (released 2026-09-22) are priced at half of GPT-5.6 Sol and Luna; existing model prices were re-verified on 2026-09-23 and did not change. [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) (released 2026-09-29) keeps GPT-6 Sol's prices except cached input at $0.10; the Codex catalog fetched on 2026-09-30 lists a 272K context window, effort through `ultra`, and a `low` backend default, and a live generation through qgrid's request shape succeeded the same day. [GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra) (released 2026-10-26) costs exactly half of GPT-6.1 Sol ($1 / $0.05 / $1.25 / $5) with the same 272K multipliers; the Codex catalog fetched on 2026-10-27 lists a 500K context window, effort through `ultra`, and a `low` backend default, and live generation, structured output, and thinking off succeeded through qgrid the same day. The same catalog now lists a 500K context window for GPT-6.1 Sol as well. `openai/gpt-5.5` was scheduled to retire from the Codex/ChatGPT route on 2026-10-14 and is no longer in qgrid's served list; use `openai/gpt-6.1-sol` or `openai/gpt-6-luna`.
 
 ### GPT-5.6 specifications
 
@@ -328,6 +374,9 @@ Qgrid uses [Standard API pricing](https://developers.openai.com/api/docs/pricing
 | `QGRID_DB_USER` | PostgreSQL user (CLI) | `postgres` |
 | `QGRID_DB_PASSWORD` | PostgreSQL password (CLI) | `postgres` |
 | `QGRID_DB_NAME` | Database name (CLI) | `qgrid` |
+| `QGRID_OPENAI_TRANSPORT` | OpenAI Responses transport: `websocket` or `https` | `websocket` |
+| `QGRID_GROK_MAX_INFLIGHT_PER_TOKEN` | Cap on concurrent Grok requests per token. Unset means uncapped | — |
+| `QGRID_ALIGNER_MODEL` | Path to the speech aligner model (see the CLI README) | `~/.cache/qgrid/models/mms-300m-fa-int8.onnx` |
 | `SLACK_BOT_TOKEN` | Slack bot token for token-expiry notifications. Unset disables notifications | — |
 | `SLACK_CHANNEL_ID` | Slack channel that receives those notifications | — |
 | `SLACK_EXPIRY_REMINDER_INTERVAL_MINUTES` | Minutes between repeats of the session-expiry alert. Unset or 0 disables | — |
@@ -364,6 +413,7 @@ packages/
 
 - **OpenAI models**: use the direct private Codex Responses backend. Sampling parameters like `temperature` and `maxOutputTokens` are not supported by this route.
 - **Anthropic models**: Claude Code based. Requires OAuth login. Tool calling and object structured output are supported; OpenAI-style `sessionKey` cache affinity does not apply because every request runs in a fresh process.
+- **Grok models**: xAI subscription based. Options follow the `@ai-sdk/xai` names under `providerOptions.xai`; token names carry the `grok/` prefix.
 - **Structured output on Anthropic**: unlike codex (constrained decoding), the Anthropic route has no enforcement mechanism. Qgrid renders the caller's original schema — and the tool envelope contract when tools are present — as text at the end of the system prompt, runs Claude Code in plain text mode, and strips code fences from the reply. The response is JSON text guided by the schema, not server-validated JSON: **validate it with your own schema (the AI SDK's `Output.object` zod does this automatically)**. Non-conforming output surfaces as an explicit validation failure on your side instead of hidden Claude Code retries.
 - **Positional tuples (OpenAI)**: OpenAI normalizes and enforces positional tuple constraints in supported positive schema positions. Tuples in negative, conditional, or otherwise non-normalizable positions fail with HTTP 400 instead of being rewritten with changed semantics. References from those positions are rejected for the same reason; definitions are normalized globally. Tuple nodes must explicitly use `type: "array"`; nullable tuples use `anyOf`. The Anthropic route delivers the schema as prompt text without rewriting, so these restrictions do not apply there.
 - **Schema references (OpenAI)**: structured schemas accept only local root-relative JSON Pointer `$ref` values targeting the document root or a chain of `$defs`/`definitions` entry roots. References into properties, tuple internals, conditionals, or literal values fail with HTTP 400 because normalization can move or rewrite those targets. Resource IDs, anchors, external refs, dynamic refs, and recursive refs are also rejected. The Anthropic route passes the schema through verbatim, so any `$ref` form the model can read is accepted.
