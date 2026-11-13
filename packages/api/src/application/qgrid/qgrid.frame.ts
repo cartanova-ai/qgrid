@@ -634,30 +634,36 @@ function grokRateLimited(error: GrokRateLimitedError): TooManyRequestsException 
   return new TooManyRequestsException(SD("qgrid.grokRateLimited")(error.retryAfterSec));
 }
 
+/**
+ * OpenAI answered 429 (HTTP response or WebSocket handshake). qgrid does not retry it on another
+ * token because acceptance is ambiguous, so the caller gets the 429 and the upstream delay when
+ * one was sent, on text, voice, and Decisions alike.
+ */
+function openaiRateLimited(error: OpenAIProtocolError): TooManyRequestsException {
+  if (error.retryAfterMs !== undefined) setRetryAfter(Math.ceil(error.retryAfterMs / 1000));
+
+  return new TooManyRequestsException(SD("qgrid.openaiRateLimited")(error.message));
+}
+
 const DECISION_CALLER_FAULT_STATUSES = new Set([400, 413, 415, 422]);
 
 /**
  * OpenAI's verdict on a Decisions request qgrid could not pre-validate (an unreachable image URL,
- * rejected content) answers 400, and its rate limit 429 with the upstream delay. Credential
- * (401/403) and server failures stay upstream failures.
+ * rejected content) answers 400. Its 429 is mapped with every other OpenAI 429 in
+ * `throwGrokCallerError`. Credential (401/403) and server failures stay upstream failures.
  */
 function decisionCallerError(cause: Error): Error {
-  if (!(cause instanceof OpenAIProtocolError) || cause.status === undefined) return cause;
-
-  if (cause.status === 429) {
-    if (cause.retryAfterMs !== undefined) setRetryAfter(Math.ceil(cause.retryAfterMs / 1000));
-
-    return new TooManyRequestsException(SD("qgrid.openaiRateLimited")(cause.message));
-  }
-
-  return DECISION_CALLER_FAULT_STATUSES.has(cause.status)
+  return cause instanceof OpenAIProtocolError &&
+    cause.status !== undefined &&
+    DECISION_CALLER_FAULT_STATUSES.has(cause.status)
     ? new BadRequestException(SD("qgrid.invalidInput")(cause.message))
     : cause;
 }
 
 /**
- * Caller-fault Grok errors become 400/429/503 at the chat and media boundaries; upstream and
- * provider failures propagate unchanged (500 by the server error handler). "No eligible token for
+ * Caller-fault Grok errors become 400/429/503 at the chat and media boundaries, and an OpenAI
+ * upstream 429 stays a 429; other upstream and provider failures propagate unchanged (500 by the
+ * server error handler). "No eligible token for
  * this request class" (no workers, in-flight cap, on-demand D6, ZDR video) is a 503, not a server
  * fault; every token cooling down is a 429 with the soonest retry delay.
  */
@@ -695,6 +701,8 @@ function throwGrokCallerError(cause: unknown): never {
   }
 
   if (cause instanceof GrokRateLimitedError) throw grokRateLimited(cause);
+
+  if (cause instanceof OpenAIProtocolError && cause.status === 429) throw openaiRateLimited(cause);
 
   if (cause instanceof GrokNoWorkersError) {
     throw new ServiceUnavailableException(SD("qgrid.grokNoWorkers")(cause.message));

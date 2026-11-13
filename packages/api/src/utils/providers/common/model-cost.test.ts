@@ -16,20 +16,30 @@ describe("Grok cost", () => {
     expect(usdFromGrokTicks(33_760_000)).toBeCloseTo(0.003376, 12);
   });
 
-  it.each(["grok-4.7", "grok-4.6", "grok-4.5", "grok/grok-4.7"])(
-    "prices %s from the catalog ticks when the provider omitted the cost",
-    (model) => {
-      expect(getModelCosts(model)).toEqual({ inputTokens: 2, cachedInputTokens: 0.5, outputTokens: 6 });
-      // 1M input of which 400k cached, 100k output: 0.6*2 + 0.4*0.5 + 0.1*6.
-      expect(
-        calculateCostUsd(model, {
-          inputTokens: 1_000_000,
-          cachedInputTokens: 400_000,
-          outputTokens: 100_000,
-        }),
-      ).toBeCloseTo(2.0, 10);
-    },
-  );
+  // Fallback rows follow https://docs.x.ai/developers/pricing as read on 2026-11-13.
+  it.each([
+    ["grok-4.7", 2, 0.5, 6],
+    ["grok/grok-4.7", 2, 0.5, 6],
+    ["grok-4.6", 2, 0.5, 6],
+    ["grok-4.5", 2, 0.3, 6],
+    ["grok-4.7-build-fast", 4, 1, 12],
+  ])("prices %s from the list price when the provider omitted the cost", (model, input, cached, output) => {
+    expect(getModelCosts(model)).toMatchObject({ inputTokens: input, cachedInputTokens: cached, outputTokens: output });
+    // 100k input of which 40k cached, 10k output, below the 200k long-context threshold.
+    expect(
+      calculateCostUsd(model, { inputTokens: 100_000, cachedInputTokens: 40_000, outputTokens: 10_000 }),
+    ).toBeCloseTo((60_000 * input + 40_000 * cached + 10_000 * output) / 1_000_000, 10);
+  });
+
+  it("bills a Grok prompt of 200k tokens or more at the long-context rate for every token", () => {
+    const usage = { inputTokens: 200_000, cachedInputTokens: 0, outputTokens: 10_000 };
+
+    // Standard models double: 200k * $4/M + 10k * $12/M.
+    expect(calculateCostUsd("grok-4.7", usage)).toBeCloseTo(0.92, 10);
+    expect(calculateCostUsd("grok-4.7", { ...usage, inputTokens: 199_999 })).toBeCloseTo(0.459998, 10);
+    // Grok 4.7 Fast goes from $4/$12 to $6/$18.
+    expect(calculateCostUsd("grok-4.7-build-fast", usage)).toBeCloseTo(1.38, 10);
+  });
 
   it("prefers reported image ticks and falls back to the catalog per-image price", () => {
     expect(grokImageCost("grok/grok-imagine-image-2.0", 2, 700_000_000)).toEqual({

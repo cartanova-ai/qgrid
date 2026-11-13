@@ -89,6 +89,13 @@ STT words (2.17.0+): `/stt` sends word-level `words` (`text`, `start`, `end`; `s
 
 OpenAI speech timing no longer touches Grok (2.19.0+; 2.17.x ran a Grok STT pass): see `openai-codex-runtime.md`, Realtime voice.
 
+Language-model fallback prices (`GROK_COSTS` in `model-cost.ts`, used only when a response omits
+ticks) follow the public list re-read on 2026-11-13 (https://docs.x.ai/developers/pricing):
+`grok-4.7` and `grok-4.6` $2 / $0.50 cached / $6 per 1M tokens, `grok-4.5` $2 / $0.30 / $6, and a
+prompt of 200k tokens or more bills the whole request at 2x. `grok-4.7-build-fast` uses the page's
+"Grok 4.7 Fast (Cursor and Grok Build only)" rates, $4 / $1 / $12 and 1.5x of that from 200k; the
+page names no model id, so that mapping is an inference from the name.
+
 Image generation and editing default to `grok-imagine-image-2.0`; the public SDK lists it and
 `grok-imagine-image` (1.0). Quality omission passes through as upstream `auto`, currently low for
 generation and medium for editing. Reported ticks remain authoritative. Without ticks, image cost

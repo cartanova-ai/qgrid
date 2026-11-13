@@ -465,6 +465,16 @@ describe("QgridFrame.query request logging", () => {
     expect(finishRunWithErrorMock).toHaveBeenCalledWith(41, "provider failed", args);
   });
 
+  it.each([true, false])("answers an OpenAI upstream 429 as 429 and leaves other upstream statuses alone (logger %s)", async (logger) => {
+    const args = { prompt: "hi", model: "openai/gpt-6-luna", logger };
+    dispatcherQueryMock.mockRejectedValueOnce(new OpenAIProtocolError("Rate limit reached", "rate_limit_exceeded", 429, 7_000));
+    await expect(QgridFrame.query(args)).rejects.toMatchObject({ statusCode: 429, message: expect.stringContaining("Rate limit reached") });
+    dispatcherQueryMock.mockRejectedValueOnce(new OpenAIProtocolError("server exploded", undefined, 500));
+    await expect(QgridFrame.query(args)).rejects.toBeInstanceOf(OpenAIProtocolError);
+    dispatcherQueryMock.mockRejectedValueOnce(new OpenAIProtocolError("bad token", undefined, 401));
+    await expect(QgridFrame.query(args)).rejects.toBeInstanceOf(OpenAIProtocolError);
+  });
+
   it.each(["error", "abort", "logger-disabled"])("handles completed driver accounting on image %s", async (mode) => {
     const requestRaw = Object.assign(new EventEmitter(), { aborted: false });
     const responseRaw = Object.assign(new EventEmitter(), { destroyed: false, writableEnded: false });

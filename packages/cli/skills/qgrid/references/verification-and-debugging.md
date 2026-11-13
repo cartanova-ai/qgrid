@@ -24,7 +24,7 @@ project, use that project's configured task and tool runner.
 Root:
 
 - `mise run check`: qgrid docs consistency, oxlint (including the vendored anti-slop rules in `tools/oxlint/anti-slop`, loaded by `.oxlintrc.json`), and oxfmt check for the repo. `mise run format` applies the auto-fixable rules, such as the blank-line spacing rule.
-- `mise run test`: DB-free API tests, SDK tests, and CLI packaging tests. No provider credentials are needed; the OAuth relay test opens a local loopback listener.
+- `mise run test`: DB-free API tests, SDK tests, CLI packaging tests, and web (dashboard) unit tests. No provider credentials are needed; the OAuth relay test opens a local loopback listener.
 - `mise run build`: recursive package build.
 - `mise run dev`: parallel package dev servers.
 

@@ -273,11 +273,44 @@ function grokTokenCosts(input: number, cached: number, output: number): ModelCos
   };
 }
 
+// Public list prices re-read 2026-11-13 (https://docs.x.ai/developers/pricing): a prompt of 200k
+// tokens or more bills every token of the request at 2x.
+const GROK_LONG_CONTEXT_200K: NonNullable<ModelCosts["longContext"]> = {
+  threshold: 199_999,
+  inputMultiplier: 2,
+  cachedInputMultiplier: 2,
+  outputMultiplier: 2,
+};
+
+// "Grok 4.7 Fast (Cursor and Grok Build only)" on the same page: $4/$1/$12 below 200k and
+// $6/$1.50/$18 from 200k. The page names no model id; mapping it to the subscription catalog id
+// `grok-4.7-build-fast` is an inference from the name.
+const GROK_FAST_LONG_CONTEXT_200K: NonNullable<ModelCosts["longContext"]> = {
+  threshold: 199_999,
+  inputMultiplier: 1.5,
+  cachedInputMultiplier: 1.5,
+  outputMultiplier: 1.5,
+};
+
 const GROK_COSTS = new Map<string, ModelCosts>(
   Object.entries({
-    "grok-4.7": grokTokenCosts(20_000, 5_000, 60_000),
-    "grok-4.6": grokTokenCosts(20_000, 5_000, 60_000),
-    "grok-4.5": grokTokenCosts(20_000, 5_000, 60_000),
+    "grok-4.7": {
+      ...grokTokenCosts(20_000, 5_000, 60_000),
+      longContext: GROK_LONG_CONTEXT_200K,
+    },
+    "grok-4.7-build-fast": {
+      ...grokTokenCosts(40_000, 10_000, 120_000),
+      longContext: GROK_FAST_LONG_CONTEXT_200K,
+    },
+    "grok-4.6": {
+      ...grokTokenCosts(20_000, 5_000, 60_000),
+      longContext: GROK_LONG_CONTEXT_200K,
+    },
+    // Cached input is $0.30, not the $0.50 of 4.6 and 4.7.
+    "grok-4.5": {
+      ...grokTokenCosts(20_000, 3_000, 60_000),
+      longContext: GROK_LONG_CONTEXT_200K,
+    },
   }),
 );
 

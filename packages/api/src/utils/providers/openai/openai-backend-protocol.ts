@@ -224,6 +224,13 @@ export class OpenAIProtocolError extends Error {
   }
 }
 
+/** `Retry-After` in seconds (the form OpenAI sends); an HTTP date or junk yields undefined. */
+export function retryAfterMsFromHeader(header: string | null): number | undefined {
+  const seconds = header === null ? Number.NaN : Number(header);
+
+  return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds * 1000) : undefined;
+}
+
 /** A rejected access token: the token pool refreshes the credentials and retries once. */
 export function isOpenAIUnauthorizedError(error: Error): boolean {
   return error instanceof OpenAIProtocolError && error.status === 401;

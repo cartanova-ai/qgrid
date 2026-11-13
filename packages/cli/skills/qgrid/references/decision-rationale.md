@@ -95,6 +95,7 @@ Key decisions:
 - Requests run uncapped, matching the Anthropic runtime: transport is a single HTTPS/WS request, so no local resource justifies a cap, and upstream limits are the backend's responses. The worker-era permit/queue layer was removed once this became clear.
 - Every turn sends full Responses-format history. A model-scoped opaque value derived from `sessionKey` is forwarded as `prompt_cache_key`; it is not a provider thread address.
 - `AbortSignal` cancellation covers token selection (including the quota lookup) and the active transport. There is no queue.
+- An OpenAI upstream 429 is answered as 429 (2.22.2), like Grok's all-tokens-cooling-down case: the caller should back off, and qgrid does not retry on another token because acceptance is ambiguous. Other upstream statuses stay 500 so an upstream 401 or 400 is not presented as the caller's own fault; Decisions is the exception for 400-class verdicts on the request it could not pre-validate.
 - The transport interface is independent of HTTPS; the WebSocket transport (`QGRID_OPENAI_TRANSPORT=websocket`, the current default) uses the same dispatcher behavior.
 - The backend is private and unstable. Mocked protocol tests do not establish live provider compatibility.
 - OpenAI cached tokens are included in `input_tokens`. Cache-hit denominator is `input_tokens`, not `input + cache_read + cache_creation`.

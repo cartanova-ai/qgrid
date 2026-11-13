@@ -13,7 +13,9 @@ import { z } from "zod";
 //  - `gpt-5.2`, `gpt-5.3-codex`: 같은 경로에서 이미 제공 종료.
 //  - `gpt-5.3-codex-spark`: 같은 경로에서 400("not supported when using Codex with a ChatGPT account"),
 //    Codex 카탈로그에서도 빠짐(2026-09-29 확인).
-//  - `gpt-5.5`: Codex/ChatGPT 경로에서 2026-10-14 은퇴 예정(대체 gpt-6.1-sol / gpt-6-luna).
+//  - `gpt-5.5`: Codex/ChatGPT 경로에서 은퇴(2026-10-14 예고, 2026-11-13 실요청이
+//    "not supported when using Codex with a ChatGPT account"로 거부).
+//    대체 gpt-6.1-sol / gpt-6-luna.
 //  - `claude-opus-4`, `claude-sonnet-4`: 2026-06-15 retired, Claude Code 에서 모델 오류.
 //  - `claude-opus-4-1`: 2026-08-05 retired, Claude Code 가 claude-opus-5-5 로 대체 서빙.
 //  - `claude-sonnet-4-5`: 2026-09-30 deprecated, 2026-11-30 retirement 예정(대체 claude-sonnet-5-5).

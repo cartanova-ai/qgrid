@@ -14,6 +14,7 @@ import {
   type OpenAINormalizedEvent,
   type OpenAIResponsesOptions,
   type OpenAIResponsesRequest,
+  retryAfterMsFromHeader,
 } from "./openai-backend-protocol";
 import {
   buildStandaloneImageRequest,
@@ -462,7 +463,12 @@ async function responseError(response: Response): Promise<OpenAIProtocolError> {
     code = undefined;
   }
 
-  return new OpenAIProtocolError(message, code, response.status);
+  return new OpenAIProtocolError(
+    message,
+    code,
+    response.status,
+    retryAfterMsFromHeader(response.headers.get("retry-after")),
+  );
 }
 
 export class OpenAIHttpsTransport implements OpenAIResponsesTransport {

@@ -11,7 +11,7 @@ import {
   OpenAIDecisionRequest,
   OpenAIDecisionResult,
 } from "../../../application/qgrid/qgrid.types";
-import { OpenAIProtocolError } from "./openai-backend-protocol";
+import { OpenAIProtocolError, retryAfterMsFromHeader } from "./openai-backend-protocol";
 import { type OpenAIDirectCredentials } from "./openai-direct-client";
 
 /**
@@ -25,13 +25,6 @@ const DECISIONS_TIMEOUT_MS = 60_000;
 const errorBody = z.object({
   error: z.object({ message: z.string(), code: z.string().nullish() }),
 });
-
-/** `Retry-After` in seconds (the form OpenAI sends); an HTTP date or junk yields undefined. */
-function retryAfterMs(header: string | null): number | undefined {
-  const seconds = header === null ? Number.NaN : Number(header);
-
-  return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds * 1000) : undefined;
-}
 
 /** One native Decisions call. Token selection and 401 refresh belong to `OpenAITokenPool.runWithToken`. */
 export async function createOpenAIDecision(
@@ -72,7 +65,7 @@ export async function createOpenAIDecision(
         : `OpenAI Decisions returned HTTP ${response.status}`,
       (error.success ? error.data.error.code : undefined) ?? "decisions_http_error",
       response.status,
-      retryAfterMs(response.headers.get("retry-after")),
+      retryAfterMsFromHeader(response.headers.get("retry-after")),
     );
   }
 
