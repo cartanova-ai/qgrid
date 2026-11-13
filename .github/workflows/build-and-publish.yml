@@ -63,7 +63,7 @@ jobs:
       - name: Check
         run: mise run check
 
-      - name: Test API units, SDK, and CLI packaging contract
+      - name: Test API units, SDK, CLI packaging contract, and web
         run: mise run test
 
       # Sonamu 0.11 refuses to start without packages/api/.env or .env.<NODE_ENV>, even for

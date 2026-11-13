@@ -36,6 +36,8 @@ vi.mock("react", () => {
       return [entry.value, setState];
     },
     useRef: (initial: unknown) => slot(() => ({ current: initial })).value,
+    // Deps never change in this hook, so the first callback is kept, as React would.
+    useCallback: (callback: unknown) => slot(() => callback).value,
     useEffect: (effect: () => unknown) => {
       const i = runtime.index++;
       if (!runtime.slots[i]) {
