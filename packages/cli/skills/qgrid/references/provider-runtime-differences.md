@@ -10,7 +10,7 @@ Use this reference when comparing OpenAI, Anthropic, and Grok behavior, debuggin
 | Epoch | Legacy compatibility value; not a process generation | Always `0` | `-1`; not a process generation |
 | Request concurrency | Uncapped; stateless request per call | Uncapped; fresh process per request | Uncapped by default; optional `QGRID_GROK_MAX_INFLIGHT_PER_TOKEN` excludes accounts at the cap |
 | Token selection | Smooth weighted RR over quota-eligible tokens; valid affinity may prefer its token | Smooth weighted RR over quota-eligible tokens per request | Smooth weighted RR after quota, on-demand, cooldown, entitlement, and capacity gates; valid affinity may prefer its token |
-| Model routing | `openai/*`; qgrid strips provider prefix before provider call | `anthropic/*`; provider canonicalizes model and strips prefix/`[1m]` | `grok/*`; qgrid strips the provider prefix and validates against the seeded/live catalog |
+| Model routing | `openai/*`; qgrid strips provider prefix before provider call | `anthropic/*`; provider canonicalizes model and strips prefix/`[1m]` | `grok/*`; qgrid strips the provider prefix and looks the id up in the seeded/live catalog; an unlisted id is forwarded as-is and the upstream decides |
 | Prefix-less models | Fallback not implemented | Fallback not implemented | Fallback not implemented |
 | Effort vocabulary | Codex catalog levels `low`..`ultra` | Claude Code `--effort` levels `low`..`max` | Catalog levels `low`, `medium`, `high`, `xhigh`; thinking-off is unverified and rejected |
 | Unsupported effort | Server drops it before the request; backend default applies | Server drops it; qgrid default `low` applies | Server drops it; catalog default applies |
@@ -25,7 +25,7 @@ Use this reference when comparing OpenAI, Anthropic, and Grok behavior, debuggin
 | Cost source | qgrid model price fallback | Prefer Claude Code `total_cost_usd`, else qgrid fallback | Provider ticks are authoritative; catalog-seeded fallback when ticks are absent |
 | Settings isolation | Per-token credentials in memory | Shared project cwd plus per-token `CLAUDE_CONFIG_DIR` | Per-token OAuth credentials and stable ids in memory |
 | Streaming close | `AbortSignal` cancels selection or active transport | Abort kills the fresh child process | `AbortSignal` cancels selection or active SSE; success requires `response.completed` |
-| Media/voice | OpenAI image routes only | Explicitly unsupported | Image generation/editing, async video URL jobs, STT, and TTS on `api.x.ai` |
+| Media/voice | Standalone Codex Images, realtime STT/TTS, GPT-Live conversations, and native Decisions | Explicitly unsupported | Image generation/editing, async video URL jobs, STT, and TTS on `api.x.ai` |
 
 ## Routing contract
 

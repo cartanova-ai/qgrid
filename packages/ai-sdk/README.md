@@ -214,7 +214,7 @@ const { text } = await generateText({
 | --- | --- | --- | --- |
 | `tokenName` | provider-prefixed token name | both providers | Strictly targets one active token, such as `anthropic/yds`. The prefix must match the model provider; empty, missing, inactive, or over-threshold targets fail without fallback |
 | `logger` | `boolean` | both providers | qgrid request logging. Defaults to `true`; `false` disables request-log persistence for this generation without disabling client tools or multi-step continuation |
-| `sessionKey` | `string` | OpenAI only | Multi-turn conversation identifier used to derive opaque prompt-cache affinity while replaying full history (see [below](#multi-turn-prompt-cache-sessionkey)) |
+| `sessionKey` | `string` | OpenAI and Grok (Grok also accepts `providerOptions.xai.promptCacheKey`); not Anthropic | Multi-turn conversation identifier used to derive opaque prompt-cache affinity while replaying full history (see [below](#multi-turn-prompt-cache-sessionkey)) |
 | `thinking` | `boolean` | Both providers | Omit to preserve existing model behavior. `true` enables thinking with effort; `false` ignores request effort and config `defaultEffort`. Unsupported models or runtimes return an error |
 | `effort` | OpenAI: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` \| `"ultra"` | OpenAI only (`QgridOpenAIProviderOptions`) | Reasoning depth on the ChatGPT-subscription Codex route. GPT-6 Astra, GPT-6/6.1 Sol, GPT-6.1 Terra, and GPT-5.6 Sol/Terra support effort through `"ultra"`, which qgrid sends to the backend as `"max"` (Codex's ultra adds sub-agent delegation that qgrid does not run); GPT-6 Luna and GPT-5.6 Luna support it through `"max"`; a value the model does not support is silently ignored by the server and the backend default applies. `"none"`/`"minimal"` are not public effort values; use `thinking: false` to disable thinking |
 | `effort` | Anthropic: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` | Anthropic only (`QgridAnthropicProviderOptions`) | Claude Code `--effort` levels. Values outside this set are silently ignored and qgrid's default (`"low"`) applies; per-model limits (for example no `"xhigh"` on Sonnet 4.6) are handled by Claude Code |
@@ -377,12 +377,12 @@ options qgrid cannot honor are dropped with an AI SDK `unsupported` warning.
 import { generateText } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
-const { text, providerMetadata } = await generateText({
+const { text, finalStep } = await generateText({
   model: qgrid("grok/grok-4.7"),
   prompt: "Summarize this release note",
   providerOptions: { xai: { reasoningEffort: "high", promptCacheKey: "session-42" } },
 });
-providerMetadata?.xai?.costInUsdTicks; // 1 tick = 1e-10 USD
+finalStep.providerMetadata?.xai?.costInUsdTicks; // 1 tick = 1e-10 USD
 ```
 
 Grok language models keep user image parts (https URLs or inline bytes) instead of dropping them.
@@ -859,8 +859,7 @@ If multiple projects/workflows share one qgrid server, set `QGRID_PROJECT_NAME`.
   non-normalizable schema positions are also rejected instead of being
   rewritten with changed semantics. References from those positions are
   rejected for the same reason because definitions are normalized globally.
-  Anthropic positional tuple schemas are rejected with HTTP 400 because Claude
-  Code cannot preserve their positional semantics. Tuple nodes must explicitly
+  Tuple nodes must explicitly
   declare `type: "array"`; express nullable tuples with an `anyOf` array/null
   branch.
 - Structured schemas accept only local root-relative JSON Pointer `$ref` values
@@ -874,8 +873,10 @@ If multiple projects/workflows share one qgrid server, set `QGRID_PROJECT_NAME`.
   budget. Schema values also share a 20,000-node budget and have a maximum
   depth of 128 per schema. Invalid or over-budget inputs fail with HTTP 400
   before provider execution.
-- On Anthropic routes, the final composed schema must also fit the 64 KiB safe
-  single-argument budget used by the Claude Code transport.
+- The Anthropic route delivers the schema as prompt text without rewriting it,
+  so the tuple and `$ref` restrictions above do not apply there; only the
+  size, node, and depth budgets are checked. The former 64 KiB argument limit
+  no longer applies.
 - AI SDK `toolChoice` is not currently supported by qgrid.
 
 ## Repository testing

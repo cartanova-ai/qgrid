@@ -1,7 +1,8 @@
 # Release image
 
-The release workflow packs and verifies the CLI, publishes to npm, then builds
-the image from that verified tarball and pushes `ghcr.io/cartanova-ai/qgrid:<CLI version>`. Images currently
+The release workflow packs and verifies the CLI, builds the image from that
+verified tarball and smoke-tests it, publishes the packages to npm, and then
+pushes `ghcr.io/cartanova-ai/qgrid:<CLI version>`. Images currently
 target Linux amd64, matching dev0. There is no mutable `latest` deployment tag.
 
 Build locally:

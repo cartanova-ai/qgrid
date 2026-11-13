@@ -223,7 +223,7 @@ On DELETE or missing row:
 
 OpenAI row changes:
 
-- active INSERT: `onTokenAdded` spawns workers.
+- active INSERT: `onTokenAdded` adds the token to the pool (there are no workers to spawn).
 - active UPDATE: `onTokenUpdated`, then `onTokenActivated`.
 - inactive row: `onTokenDeactivated`.
 - reconcile uses `replaceTokens`, which removes absent tokens, updates existing tokens, adds new tokens, and activates rows present in active DB set (it sets `active: true` itself; before 2.22.0 it went through `onTokenUpdated`, which keeps the pool's previous `active`, so a missed re-activation NOTIFY left the token out until restart).

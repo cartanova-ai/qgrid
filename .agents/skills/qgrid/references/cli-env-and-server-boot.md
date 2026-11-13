@@ -10,10 +10,9 @@ Use this reference for qgrid startup, configuration, and runtime-facing environm
 
 When npm reports a newer `@cartanova/qgrid-cli`, including patch releases, the CLI installs that exact resolved version and restarts from the updated binary. Do not use a moving `@latest` install target for this path; exact versions avoid stale pnpm global project ranges. The npm lookup and global install are best-effort: a registry/package-manager outage is logged prominently and boot continues on the current qgrid version. A successful install is still verified against the exact resolved version before restart.
 
-The CLI also ensures runtime CLIs are installed/current enough:
+The CLI checks one runtime CLI at startup and only warns when it is missing (it does not install it):
 
-- `codex` from `@openai/codex`, required for OpenAI tokens.
-- `claude` from `@anthropic-ai/claude-code`, required for Anthropic tokens.
+- `claude` (Claude Code), required for Anthropic tokens. OpenAI and Grok tokens need no local CLI: qgrid calls their backends directly.
 
 ## CLI database env vars
 

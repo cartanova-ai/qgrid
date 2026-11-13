@@ -1,8 +1,8 @@
 # dev0 Swarm deployment
 
 Release images are published as `ghcr.io/cartanova-ai/qgrid:VERSION` by
-`.github/workflows/build-and-publish.yml`, after npm publication and container
-smoke checks. The image installs the verified release tarball of that CLI version. Existing
+`.github/workflows/build-and-publish.yml`, after the container smoke checks
+and npm publication. The image installs the verified release tarball of that CLI version. Existing
 image tags are not rebuilt; changes to the image require a new CLI release.
 
 After the first publication, set the `qgrid` container package to **Public** in

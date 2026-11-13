@@ -45,7 +45,7 @@ Request logging is enabled by default. Use `providerOptions.qgrid.logger: false`
 
 ## Non-Negotiable Boundaries
 
-- Use `packages/ai-sdk` as the active public SDK surface. `qgrid()` implements `LanguageModelV3` for text, tools, and structured output; it has no public image-generation options and does not support general vision. `qgrid.image("openai/gpt-image-2")` implements `ImageModelV3` for standard AI SDK `generateImage`, directly calling subscription Images for generation or reference editing without a chat driver. Dashboard chat registers its image tool internally; do not add a public SDK tool factory. See `references/ai-sdk-provider-contract.md` for image options, usage, and metadata.
+- Use `packages/ai-sdk` as the active public SDK surface. `qgrid()` implements `LanguageModelV3` for text, tools, and structured output; it has no public image-generation options. User-message image parts are sent as image input on `openai/` and `grok/` models and dropped on `anthropic/` models. `qgrid.image("openai/gpt-image-2")` implements `ImageModelV3` for standard AI SDK `generateImage`, directly calling subscription Images for generation or reference editing without a chat driver. Dashboard chat registers its image tool internally; do not add a public SDK tool factory. See `references/ai-sdk-provider-contract.md` for image options, usage, and metadata.
 - Expose thinking only as `providerOptions.qgrid.thinking?: boolean`: omission preserves the model policy, false overrides effort, and unsupported/unverified off requests fail explicitly. See the SDK and provider runtime references for the dated support snapshot. Keep Anthropic thinking controls separate from mandatory configuration and memory isolation. Haiku/Sonnet 5.5 off uses a computed thinking-only native body override with Claude Code >=2.1.295; never inherit or expose arbitrary extra body.
 - The old v1 SDK package (`packages/sdk`, `@cartanova/qgrid-sdk`) has been removed from the repository. It survives only as a deprecated npm artifact (1.9.0); do not resurrect it or write new code against it.
 - Let the server infer single-turn versus tool-run request-log lifecycle. Do not recreate caller-selected logging modes in the SDK or API examples.
@@ -59,7 +59,7 @@ Request logging is enabled by default. Use `providerOptions.qgrid.logger: false`
 
 ## Request log IDs (2.10.0+)
 
-- Successful raw query responses and stream `done` events expose optional top-level `requestLogId`. AI SDK text calls expose it as `providerMetadata.qgrid.requestLogId`; await stream metadata after consuming the stream. `generateImage` exposes each call's ID under `providerMetadata.qgrid.images[]` alongside generation metadata.
+- Successful raw query responses and stream `done` events expose optional top-level `requestLogId`. AI SDK text calls expose it as `result.finalStep.providerMetadata.qgrid.requestLogId` (AI SDK 7 keeps top-level `providerMetadata` only as a deprecated alias); for streams, await `finalStep` after consuming the stream. `generateImage` exposes each call's ID under `providerMetadata.qgrid.images[]` alongside generation metadata.
 - The ID identifies the parent request log and stays the same across tool-run steps. It is omitted with `logger: false`. Keep `runContext.requestLogId` for tool continuation only; do not replay the top-level ID as continuation state.
 - Update both server and AI SDK to 2.10.0 or later to consume the metadata. Older servers may omit the ID. This contract does not add IDs to delta or error events or change `createQgridLogger` for external providers.
 

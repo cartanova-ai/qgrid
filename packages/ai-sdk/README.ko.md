@@ -205,7 +205,7 @@ const { text } = await generateText({
 | --- | --- | --- | --- |
 | `tokenName` | provider prefix를 포함한 토큰 이름 | 공통 | `anthropic/yds`처럼 활성 토큰 하나를 엄격히 지정. prefix는 model provider와 같아야 하며 빈 값·누락·inactive·quota 초과 시 다른 토큰으로 fallback하지 않음 |
 | `logger` | `boolean` | 공통 | qgrid request log 저장 여부. 기본값은 `true`. `false`로 설정해도 client tool 실행과 multi-step 연결은 계속 동작 |
-| `sessionKey` | `string` | OpenAI 전용 | 전체 history 재전송 시 불투명 prompt-cache affinity를 파생하는 멀티턴 대화 식별자 ([아래](#멀티턴-prompt-cache-sessionkey) 참조) |
+| `sessionKey` | `string` | OpenAI, Grok (Grok은 `providerOptions.xai.promptCacheKey`도 받음). Anthropic은 미적용 | 전체 history 재전송 시 불투명 prompt-cache affinity를 파생하는 멀티턴 대화 식별자 ([아래](#멀티턴-prompt-cache-sessionkey) 참조) |
 | `thinking` | `boolean` | 공통 | 생략하면 기존 모델별 동작 유지. `true`는 effort로 깊이를 조절하고, `false`는 요청 effort와 config `defaultEffort`를 무시. 모델·실행 경로 미지원 시 오류 |
 | `effort` | OpenAI: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` \| `"ultra"` | OpenAI 전용 (`QgridOpenAIProviderOptions`) | ChatGPT 구독 Codex 경로의 reasoning 깊이. GPT-6 Astra, GPT-6/6.1 Sol, GPT-6.1 Terra, GPT-5.6 Sol/Terra는 `"ultra"`까지 지원하되 qgrid는 `"ultra"`를 백엔드에 `"max"`로 보내며(Codex의 ultra는 qgrid가 실행하지 않는 하위 에이전트 위임을 포함), GPT-6 Luna와 GPT-5.6 Luna는 `"max"`까지 지원하며, 모델이 지원하지 않는 값은 서버가 조용히 무시하고 백엔드 기본값을 적용. `"none"`/`"minimal"`은 공개 effort 값이 아니며 thinking 비활성화에는 `thinking: false`를 사용 |
 | `effort` | Anthropic: `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` | Anthropic 전용 (`QgridAnthropicProviderOptions`) | Claude Code `--effort` 허용값. 집합 밖의 값은 서버가 조용히 무시하고 qgrid 기본(`"low"`)을 적용. 모델별 상한(예: Sonnet 4.6은 `"xhigh"` 없음)은 Claude Code가 처리 |
@@ -367,12 +367,12 @@ subscription backend가 하며 다른 모델로 응답할 수 있으므로, 실�
 import { generateText } from "ai";
 import { qgrid } from "@cartanova/qgrid-ai-sdk";
 
-const { text, providerMetadata } = await generateText({
+const { text, finalStep } = await generateText({
   model: qgrid("grok/grok-4.7"),
   prompt: "Summarize this release note",
   providerOptions: { xai: { reasoningEffort: "high", promptCacheKey: "session-42" } },
 });
-providerMetadata?.xai?.costInUsdTicks; // 1 tick = 1e-10 USD
+finalStep.providerMetadata?.xai?.costInUsdTicks; // 1 tick = 1e-10 USD
 ```
 
 Grok language model은 user 이미지 part(https URL 또는 inline bytes)를 버리지 않고 전달합니다.
@@ -844,9 +844,7 @@ qgrid(modelId, {
   `additionalItems: true`로 명시한 무제한 tail은 HTTP 400으로 거부합니다.
   negative, conditional 등 안전하게 정규화할 수 없는 위치의 tuple도 의미가
   바뀌는 변환 대신 HTTP 400으로 거부합니다. definition은 전역 정규화되므로
-  해당 위치에서 참조하는 경우도 같은 이유로 거부합니다. Anthropic 위치 기반
-  tuple schema는 Claude Code가 위치 의미를 보존할 수 없어 HTTP 400으로
-  거부됩니다. tuple node는 `type: "array"`를 명시해야 하며 nullable tuple은
+  해당 위치에서 참조하는 경우도 같은 이유로 거부합니다. tuple node는 `type: "array"`를 명시해야 하며 nullable tuple은
   array/null `anyOf`로 표현합니다.
 - structured schema에서는 문서 root 또는 `$defs`/`definitions` entry root만
   연속으로 가리키는 로컬 root-relative JSON Pointer `$ref`를 허용합니다.
@@ -858,8 +856,9 @@ qgrid(modelId, {
   schema 값에는 별도로 합산 20,000 node와 schema별 최대 깊이 128 한도가
   적용됩니다. 잘못되거나 한도를 넘는 입력은 provider 실행 전에 HTTP 400으로
   실패합니다.
-- Anthropic 경로에서는 최종 합성 schema가 Claude Code 전송의 안전한 단일 argv
-  한도인 64 KiB도 넘지 않아야 합니다.
+- Anthropic 경로는 schema를 다시 쓰지 않고 프롬프트 텍스트로 전달하므로 위의
+  tuple·`$ref` 제약이 적용되지 않습니다. 크기, node 수, 깊이 한도만 검사합니다.
+  예전의 64 KiB argv 한도는 더 이상 적용되지 않습니다.
 - AI SDK의 `toolChoice`는 현재 qgrid에서 지원하지 않습니다.
 
 ## 저장소 테스트

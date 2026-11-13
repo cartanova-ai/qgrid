@@ -111,8 +111,6 @@ pnpm add @cartanova/qgrid-ai-sdk
 
 ## 아키텍처
 
-![Qgrid architecture](./assets/qgrid-architecture.ko.svg)
-
 - **OpenAI** — `https://chatgpt.com/backend-api/codex/responses`를 직접 호출합니다. 기본값인 `QGRID_OPENAI_TRANSPORT=websocket`은 같은 URL의 scheme을 `wss`로 바꾸고 동일한 prompt-cache affinity의 순차 요청에서 연결을 재사용합니다. Cache affinity가 없는 요청은 요청마다 연결 하나를 사용합니다. `QGRID_OPENAI_TRANSPORT=https`도 사용할 수 있지만 prompt-cache connection affinity는 유지하지 않습니다. Ambiguous request는 재전송하지 않습니다. Handshake가 401로 거부됐음이 확정된 경우에만 credential을 갱신하고 한 번 다시 연결합니다. 잘못된 selector 값은 dispatcher 설정 시 즉시 실패합니다.
 - **Anthropic** — 요청마다 격리된 Claude Code 프로세스를 fresh spawn (`stream-json` 입출력, 토큰별 config 격리). 대화 히스토리는 매 턴 재주입. OAuth 토큰 자동 refresh.
 - **Grok** — xAI 구독 엔드포인트를 직접 호출하고 smooth weighted routing으로 토큰에 분산합니다. `QGRID_GROK_MAX_INFLIGHT_PER_TOKEN`으로 토큰당 동시 요청 수를 제한할 수 있습니다.

@@ -80,13 +80,13 @@ afterEach(() => {
 });
 
 async function grokTextExample() {
-  const { text, providerMetadata } = await generateText({
+  const { text, finalStep } = await generateText({
     model: qgrid("grok/grok-4.7"),
     prompt: "Summarize this release note",
     providerOptions: { xai: { reasoningEffort: "high", promptCacheKey: "session-42" } },
   });
-  providerMetadata?.xai?.costInUsdTicks; // 1 tick = 1e-10 USD
-  return { text, providerMetadata };
+  finalStep.providerMetadata?.xai?.costInUsdTicks; // 1 tick = 1e-10 USD
+  return { text, finalStep };
 }
 
 async function grokImageExample() {
@@ -165,9 +165,9 @@ async function openaiVoiceExample() {
 
 describe("README Grok examples", () => {
   it("runs the text example", async () => {
-    const { text, providerMetadata } = await grokTextExample();
+    const { text, finalStep } = await grokTextExample();
     expect(text).toBe("summary");
-    expect(providerMetadata?.xai?.costInUsdTicks).toBe(10);
+    expect(finalStep.providerMetadata?.xai?.costInUsdTicks).toBe(10);
   });
 
   it("runs the image example", async () => {

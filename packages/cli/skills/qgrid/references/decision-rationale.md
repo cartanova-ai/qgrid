@@ -94,8 +94,8 @@ Key decisions:
 - Direct PKCE OAuth, refresh, and `wham/usage` quota lookup replace delegated runtime calls. Generation and quota requests send Codex CLI identity headers.
 - Requests run uncapped, matching the Anthropic runtime: transport is a single HTTPS/WS request, so no local resource justifies a cap, and upstream limits are the backend's responses. The worker-era permit/queue layer was removed once this became clear.
 - Every turn sends full Responses-format history. A model-scoped opaque value derived from `sessionKey` is forwarded as `prompt_cache_key`; it is not a provider thread address.
-- `AbortSignal` cancellation covers queue wait, retry delay, and active HTTPS transport.
-- The transport interface is independent of HTTPS so a future WebSocket implementation can preserve dispatcher behavior.
+- `AbortSignal` cancellation covers token selection (including the quota lookup) and the active transport. There is no queue.
+- The transport interface is independent of HTTPS; the WebSocket transport (`QGRID_OPENAI_TRANSPORT=websocket`, the current default) uses the same dispatcher behavior.
 - The backend is private and unstable. Mocked protocol tests do not establish live provider compatibility.
 - OpenAI cached tokens are included in `input_tokens`. Cache-hit denominator is `input_tokens`, not `input + cache_read + cache_creation`.
 
@@ -154,7 +154,7 @@ Sources: `docs/plans/2026-10-17-openai-realtime-audio-plan.md`, `docs/diagnosis/
 
 - Decisions is OpenAI-only (2026-11-13). Anthropic and xAI document no decision endpoint, and neither exposes token logprobs on current models (xAI ignores them on `grok-4.20`+). AI SDK emulates Anthropic with prompted estimates and no distributions; qgrid does not add that emulation, so a qgrid probability is always a native one.
 - The qgrid `/decide` API is provider-neutral (the AI SDK decision call in JSON), and the OpenAI provider layer converts both ways (user decision 2026-11-13). An OpenAI-shaped API was rejected because it would expose one provider's wire format at the API boundary and break deployed SDKs when a second provider (Google, Perplexity) arrives; this matches `transcribe`, which routes `openai/` and `grok/` by model prefix.
-- Missing instructions are a 400, not a synthesized default sentence: a default would change the judgment silently, and OpenAI itself rejects the omission.
+- Missing instructions on `choice` and `score` questions are a 400, not a synthesized default sentence: a default would change the judgment silently, and OpenAI itself rejects the omission. A `boolean` question may rely on its criteria, which become the instructions.
 
 ## Grok (xAI Subscription) Runtime
 
@@ -261,7 +261,7 @@ Key decisions:
 - CLI and SDK were split so AI consumers do not install Sonamu, database, and runtime-server dependencies just to call qgrid.
 - The CLI is a direct Node/bundle runner, not a Docker wrapper. Docker was removed to keep `npm i -g ...` plus `qgrid start` usable without local Docker setup.
 - CLI user-facing configuration is intentionally small: database connection, port, public callback URL, server URL, and project name. Bundle bootstrapping details are implementation internals.
-- The CLI checks runtime CLIs (`codex`, `claude`) because qgrid delegates provider execution to those local binaries.
+- The CLI checks for `claude` only and warns when it is missing: Anthropic execution is delegated to that local binary, while OpenAI and Grok are called directly.
 - The dashboard version should follow the CLI package version because the dashboard is shipped by the CLI bundle, not as an independently versioned web product.
 - qgrid skills ship with the CLI package, not a separate skills package. qgrid cannot be used with the AI SDK alone; a local qgrid CLI server is required, so CLI install is the right moment to sync `.agents/skills/qgrid` and `.claude/skills/qgrid` into the consuming project.
 - Sonamu 0.11 (2.11.0) keeps qgrid-side workarounds instead of pinning back: the API build sets `NODE_ENV=production` (SON-567), CI creates an empty `packages/api/.env`, and `.oxlintrc.json` disables `no-unnecessary-type-assertion` for Sonamu's lint temp files (SON-564). Remove each workaround once the matching Sonamu issue ships. Peer ranges that upstream packages have not widened yet are allowed per parent in `pnpm-workspace.yaml` `peerDependencyRules.allowedVersions`, with the reason next to each entry.

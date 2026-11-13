@@ -125,7 +125,7 @@ AI SDK structured output:
 - `scripts/qgrid-structured-ai-sdk-smoke.ts`
 - Uses local `packages/ai-sdk/src/index`.
 - Env: `QGRID_URL`, `SMOKE_MODEL`, `SMOKE_CASES`, `SMOKE_REPEAT`.
-- Uses AI SDK 6 `streamText` with `Output.object`; useful for structured-output regressions.
+- Uses AI SDK 7 `streamText` with `Output.object`; useful for structured-output regressions.
 
 AI SDK tools plus structured output:
 
@@ -198,7 +198,7 @@ Dashboard throws `Module "" has been externalized for browser compatibility. Can
 
 `Direct LLM API fallback not implemented`:
 
-- Model likely lacks `openai/` or `anthropic/` prefix.
+- Model likely lacks the `openai/`, `anthropic/`, or `grok/` prefix.
 - Do not silently route prefix-less Claude model names to Anthropic.
 
 `No anthropic tokens available`:
@@ -227,7 +227,7 @@ Dashboard throws `Module "" has been externalized for browser compatibility. Can
 
 `image generation is not supported on the Anthropic route`:
 
-- Image generation is OpenAI/Codex-only.
+- Image generation runs on OpenAI (`openai/gpt-image-2`) and Grok (`grok/grok-imagine-image*`) image models; the Anthropic route has none.
 
 `qgrid.image: expected one image from the direct subscription Images route`:
 

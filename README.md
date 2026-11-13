@@ -111,8 +111,6 @@ If you're already using the google/openai provider directly, **add one line** to
 
 ## Architecture
 
-![Qgrid architecture](./assets/qgrid-architecture.en.svg)
-
 - **OpenAI** — Calls `https://chatgpt.com/backend-api/codex/responses` directly. The default `QGRID_OPENAI_TRANSPORT=websocket` mode scheme-swaps that URL to `wss` and reuses a connection for sequential requests with the same prompt-cache affinity. Requests without cache affinity use one connection each. `QGRID_OPENAI_TRANSPORT=https` remains available but does not preserve prompt-cache connection affinity. Qgrid does not replay ambiguous requests. Only a definitively rejected 401 handshake may refresh credentials and reconnect once. Requests run uncapped; new work uses smooth weighted routing across eligible tokens. Invalid selector values fail during dispatcher configuration.
 - **Anthropic** — Spawns a fresh, isolated Claude Code process per request (`stream-json` in/out) with per-token config isolation. Conversation history is replayed each turn; OAuth tokens are refreshed automatically.
 - **Grok** — Calls the xAI subscription endpoints directly with smooth weighted routing across tokens. `QGRID_GROK_MAX_INFLIGHT_PER_TOKEN` optionally caps concurrent requests per token.
