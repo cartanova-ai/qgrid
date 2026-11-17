@@ -93,7 +93,7 @@
   },
   {
     "path": "api/src/sonamu.config.ts",
-    "checksum": "0d315e069f42c6c941c2623696bf17a97741701a"
+    "checksum": "6f9b563dd100f2cdf54d1972eb0a18c47ece4104"
   },
   {
     "path": "web/src/i18n/en.ts",
