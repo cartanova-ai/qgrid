@@ -11,16 +11,19 @@ const RETRY_AFTER_SECONDS = "30";
 //
 // sonamu 의 isSoException 은 `statusCode !== undefined` 만 보는 duck-typing 이라 바로 그
 // upstream 예외를 통과시킨다. 여기서는 instanceof 로 실제 계약을 확인한다.
-export function handleServerError(error: Error, reply: FastifyReply): void {
-  getLogger(["qgrid"]).error(`${error}`);
-
-  const statusCode =
-    error instanceof SoException &&
+export function errorStatusCode(error: Error): number {
+  return error instanceof SoException &&
     Number.isInteger(error.statusCode) &&
     error.statusCode >= 400 &&
     error.statusCode <= 599
-      ? error.statusCode
-      : 500;
+    ? error.statusCode
+    : 500;
+}
+
+export function handleServerError(error: Error, reply: FastifyReply): void {
+  getLogger(["qgrid"]).error(`${error}`);
+
+  const statusCode = errorStatusCode(error);
 
   // 503 은 "지금은 아니지만 곧 된다"는 뜻이라 재시도 시점을 함께 준다. 값이 없으면
   // 클라이언트는 재시도 간격을 스스로 정해야 하고, 대개 즉시 재시도해 부하만 키운다.

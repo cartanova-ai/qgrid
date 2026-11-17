@@ -14,6 +14,7 @@ import {
   startExpiredTokenReminder,
   stopExpiredTokenReminder,
 } from "./application/qgrid/expired-token-reminder";
+import { chatCompletionsHandler } from "./application/qgrid/openai-compat";
 import { QgridDispatcher } from "./application/qgrid/qgrid.dispatcher";
 import {
   mapRequestBodyTooLarge,
@@ -137,6 +138,7 @@ export default defineConfig({
       custom: (server) => {
         server.get("/callback", oauthCallback);
         server.get("/auth/callback", oauthCallback);
+        server.post("/v1/chat/completions", chatCompletionsHandler);
       },
     },
     apiConfig: {
