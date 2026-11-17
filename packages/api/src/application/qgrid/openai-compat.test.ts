@@ -33,7 +33,7 @@ describe("toQueryInput", () => {
   it("replays earlier turns as Responses-style history and joins text parts", () => {
     const input = toQueryInput(
       parse({
-        model: "m",
+        model: "openai/m",
         messages: [
           { role: "user", content: "a" },
           { role: "assistant", content: "b" },
@@ -57,7 +57,7 @@ describe("toQueryInput", () => {
     ["tool messages", { messages: [{ role: "tool", content: "x" }] }],
     ["trailing assistant", { messages: [{ role: "assistant", content: "x" }] }],
   ])("rejects %s", (_name, overrides) => {
-    const body = parse({ model: "m", messages: [{ role: "user", content: "hi" }], ...overrides });
+    const body = parse({ model: "openai/m", messages: [{ role: "user", content: "hi" }], ...overrides });
 
     expect(() => toQueryInput(body)).toThrow(ChatCompletionRequestError);
   });
@@ -65,8 +65,9 @@ describe("toQueryInput", () => {
   it.each([
     ["image parts", { messages: [{ role: "user", content: [{ type: "image_url" }] }] }],
     ["empty model", { model: "" }],
+    ["prefix-less model", { model: "claude-opus-5-5" }],
   ])("schema rejects %s", (_name, overrides) => {
-    const body = { model: "m", messages: [{ role: "user", content: "hi" }], ...overrides };
+    const body = { model: "openai/m", messages: [{ role: "user", content: "hi" }], ...overrides };
 
     expect(ChatCompletionRequest.safeParse(body).success).toBe(false);
   });
