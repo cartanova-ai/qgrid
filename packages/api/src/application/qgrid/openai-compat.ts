@@ -29,7 +29,10 @@ const ChatMessage = z.looseObject({
 // Sampling options (temperature, top_p, max_tokens, ...) pass through looseObject and are ignored:
 // qgrid has no matching inputs, and rejecting them would break most clients.
 export const ChatCompletionRequest = z.looseObject({
-  model: z.string().min(1),
+  // Prefix-less names fall through to the OpenAI runtime and fail upstream with a misleading 500.
+  model: z
+    .string()
+    .regex(/^[a-z]+\/.+/, "use a provider-prefixed qgrid model, e.g. anthropic/claude-opus-5-5"),
   messages: z.array(ChatMessage).min(1),
   stream: z.boolean().optional(),
   tools: z.array(z.unknown()).optional(),
