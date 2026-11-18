@@ -314,7 +314,7 @@ With server and AI SDK 2.10.0+, `generateText` returns the request-log ID at `re
 
 | Provider | Models |
 |---|---|
-| OpenAI | `openai/gpt-6-astra`, `openai/gpt-6.1-sol`, `openai/gpt-6.1-terra`, `openai/gpt-6-sol`, `openai/gpt-6-luna`, `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna` |
+| OpenAI | `openai/gpt-6.2-astra`, `openai/gpt-6.2-sol`, `openai/gpt-6-astra`, `openai/gpt-6.1-sol`, `openai/gpt-6.1-terra`, `openai/gpt-6-sol`, `openai/gpt-6-luna`, `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna` |
 | Anthropic | `anthropic/claude-fable-5-1`, `anthropic/claude-fable-5`, `anthropic/claude-opus-5-5`, `anthropic/claude-opus-5`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-sonnet-5`, `anthropic/claude-haiku-5-5`, `anthropic/claude-opus-4-8`, `anthropic/claude-opus-4-7`, `anthropic/claude-opus-4-6`, `anthropic/claude-opus-4-5`, `anthropic/claude-sonnet-4-6`, `anthropic/claude-haiku-4-5` |
 | Grok | `grok/grok-4.7`, `grok/grok-4.7-build-fast`, `grok/grok-4.6`, `grok/grok-4.5` (other `grok/<id>` values are forwarded unchanged) |
 
@@ -340,6 +340,8 @@ Other model types use their own factories:
 
 | Model | Context (Codex catalog) | Max output (public API) | Input / cached input / cache write / output per 1M tokens |
 |---|---:|---:|---:|
+| `openai/gpt-6.2-astra` | 272K | 128K | $8 / $0.40 / $10 / $40 |
+| `openai/gpt-6.2-sol` | 500K | 128K | $2 / $0.10 / $2.50 / $10 |
 | `openai/gpt-6-astra` | 272K | 128K | $10 / $1 / $12.50 / $50 |
 | `openai/gpt-6.1-sol` | 500K | 128K | $2 / $0.10 / $2.50 / $10 |
 | `openai/gpt-6.1-terra` | 500K | 128K | $1 / $0.05 / $1.25 / $5 |
@@ -347,6 +349,8 @@ Other model types use their own factories:
 | `openai/gpt-6-luna` | 272K | 128K | $0.10 / $0.01 / $0.125 / $0.50 |
 
 The Codex catalog fetched on 2026-09-23 advertises a 272K context window for Astra, Sol, and Luna. Astra and Sol support reasoning effort through `ultra`; Luna supports it through `max`. The backend default is `medium` for all three, while qgrid's SDK defaults to `low`; select an effort explicitly to override it. The public API model pages for [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), and [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) separately list a 1.05M context window, 922K maximum input, 128K maximum output, and reasoning effort through `max` (no `ultra`). Those public limits do not establish the subscription route's limits. [Standard API pricing](https://developers.openai.com/api/docs/pricing) is used for qgrid's cost estimate: cache writes cost 1.25x the uncached input rate, and input over 272K tokens applies 2x input/cache and 1.5x output rates to the full request. GPT-6 Sol and Luna (released 2026-09-22) are priced at half of GPT-5.6 Sol and Luna; existing model prices were re-verified on 2026-09-23 and did not change. [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) (released 2026-09-29) keeps GPT-6 Sol's prices except cached input at $0.10; the Codex catalog fetched on 2026-09-30 lists a 272K context window, effort through `ultra`, and a `low` backend default, and a live generation through qgrid's request shape succeeded the same day. [GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra) (released 2026-10-26) costs exactly half of GPT-6.1 Sol ($1 / $0.05 / $1.25 / $5) with the same 272K multipliers; the Codex catalog fetched on 2026-10-27 lists a 500K context window, effort through `ultra`, and a `low` backend default, and live generation, structured output, and thinking off succeeded through qgrid the same day. The same catalog now lists a 500K context window for GPT-6.1 Sol as well. `openai/gpt-5.5` is retired from the Codex/ChatGPT route (announced for 2026-10-14; a live request on 2026-11-13 was rejected for ChatGPT accounts) and is not in qgrid's served list; use `openai/gpt-6.1-sol` or `openai/gpt-6-luna`.
+
+[GPT-6.2 Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra) and [GPT-6.2 Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol) were released on 2026-11-17. Astra costs 20% less than GPT-6 Astra on input, output, and cache writes, with cached input at $0.40; Sol keeps GPT-6.1 Sol's prices. Both use the same 272K long-context multipliers and the 2x Fast rate. The Codex catalog fetched on 2026-11-18 lists a 272K context window for Astra and 500K for Sol, effort through `ultra`, and a `low` backend default. On 2026-11-18, `low`, `ultra`, and structured output succeeded for both through a local qgrid server. Thinking off is unverified for both; the public model pages state that the API rejects effort `none`.
 
 ### GPT-5.6 specifications
 
