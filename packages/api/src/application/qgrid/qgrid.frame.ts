@@ -13,6 +13,8 @@ import {
   SoException,
   Sonamu,
   stream,
+  websocket,
+  type WebSocketContext,
 } from "sonamu";
 import { getCacheManagerRef } from "sonamu/cache";
 import { z } from "zod";
@@ -102,6 +104,7 @@ import {
   type OpenAILiveDelegation,
   type OpenAILiveSummary,
   type OpenAILiveTurn,
+  OPENAI_STREAM_DEFAULT_TRANSCRIPTION_MODEL,
   OpenAIVoiceInputError,
 } from "../../utils/providers/openai/openai-voice-client";
 import { alignSpeech } from "../../utils/speech-aligner";
@@ -114,6 +117,7 @@ import {
 } from "../request-log/request-log.model";
 import { type HistoryItems, type RequestLogListParams } from "../request-log/request-log.types";
 import { type TokenSubsetA } from "../sonamu.generated";
+import { type StreamOutEvent, TranscribeStreamSession } from "./transcribe-stream";
 
 /** Fields token refresh reads; dispatchers pass their pooled view of a token. */
 type RefreshableToken = Pick<TokenSubsetA, "id" | "name" | "provider" | "credentials">;
@@ -156,6 +160,9 @@ import {
   GenerateImagesInput,
   type GenerateImagesOutput,
   LiveCallInput,
+  TranscribeStreamInEvents,
+  TranscribeStreamOutEvents,
+  TranscribeStreamStart,
   type LiveCallOutput,
   type LiveHistoryItem,
   OpenAIDecisionRequest,
@@ -1565,6 +1572,146 @@ async function finishLiveRun(run: LiveRun, summary: OpenAILiveSummary): Promise<
   }
 }
 
+/** Streams end themselves at two hours, under the live stale sweep threshold for running stt rows. */
+const TRANSCRIBE_STREAM_MAX_MS = 2 * 60 * 60 * 1000;
+
+type TranscribeStreamRun = {
+  session: TranscribeStreamSession;
+  route: string;
+  model: string;
+  sampleRate: number;
+  input: TranscribeStreamStart;
+  /** The token of the most recent (re)open. */
+  token: { name: string };
+  requestLogId: number | undefined;
+  startedAt: number;
+  finished: boolean;
+  timer?: NodeJS.Timeout;
+};
+
+async function startTranscribeStream(
+  params: TranscribeStreamStart,
+  publish: (out: StreamOutEvent) => void,
+): Promise<TranscribeStreamRun> {
+  const input = parseMediaInput(TranscribeStreamStart, params);
+  const dispatcher = openaiVoice();
+  const selection = await resolveMediaTokenSelection("openai", input.tokenName);
+
+  const { id, route } = routeProviderModelId(
+    "openai",
+    input.model,
+    OPENAI_STREAM_DEFAULT_TRANSCRIPTION_MODEL,
+  );
+
+  const requestLogId = await startMediaRun(input.logger, {
+    kind: "stt",
+    model: route,
+    prompt: "",
+    systemPrompt: input.prompt,
+    projectName: input.projectName,
+  });
+
+  const token = { name: "" };
+
+  // Every (re)open picks a token the usual way and refreshes a 401 once.
+  const session = new TranscribeStreamSession(async (onEvent) => {
+    const opened = await dispatcher.startTranscriptionStream({
+      model: id,
+      language: input.language,
+      prompt: input.prompt,
+      onEvent,
+      ...selection,
+    });
+
+    token.name = opened.tokenName;
+
+    return opened.result;
+  }, publish);
+
+  const run: TranscribeStreamRun = {
+    session,
+    route,
+    model: id,
+    sampleRate: input.sampleRate,
+    input,
+    token,
+    requestLogId,
+    startedAt: Date.now(),
+    finished: false,
+  };
+
+  try {
+    await run.session.start();
+  } catch (e) {
+    await failMediaRun(requestLogId, e, false);
+    throw e instanceof OpenAIVoiceInputError
+      ? new BadRequestException(SD("qgrid.invalidInput")(e.message))
+      : e;
+  }
+
+  return run;
+}
+
+async function finishTranscribeStream(
+  run: TranscribeStreamRun,
+  publishDone:
+    | ((done: { audioMs: number; segments: number; requestLogId?: number }) => void)
+    | undefined,
+): Promise<void> {
+  if (run.finished) return;
+  run.finished = true;
+  clearTimeout(run.timer);
+
+  if (publishDone) await run.session.stop();
+  else run.session.abort();
+
+  const audioMs = Math.round(run.session.audioMs);
+  const segments = run.session.segments;
+  publishDone?.({
+    audioMs,
+    segments: segments.length,
+    ...(run.requestLogId !== undefined && { requestLogId: run.requestLogId }),
+  });
+
+  if (run.requestLogId === undefined) return;
+
+  if (!run.token.name) {
+    await failMediaRun(
+      run.requestLogId,
+      new Error("stream ended before the upstream opened"),
+      true,
+    );
+
+    return;
+  }
+
+  await finishMediaRun(run.requestLogId, {
+    kind: "stt",
+    model: run.route,
+    tokenName: run.token.name,
+    durationMs: Date.now() - run.startedAt,
+    response: segments.map((s) => s.text).join("\n"),
+    cost: sttCost(run.route, audioMs / 1000),
+    steps: [
+      {
+        toolCallId: "transcription:stream",
+        args: {
+          kind: "stt",
+          model: run.route,
+          transport: "realtime-ws-stream",
+          sampleRate: run.sampleRate,
+          language: run.input.language,
+          prompt: run.input.prompt,
+          audioMs,
+          segments: segments.length,
+          endedBy: publishDone ? "stop" : "disconnect",
+        },
+        result: JSON.stringify({ segments }),
+      },
+    ],
+  });
+}
+
 class QgridFrameClass extends BaseFrameClass {
   constructor() {
     super("Qgrid");
@@ -2857,6 +3004,128 @@ class QgridFrameClass extends BaseFrameClass {
     if (requestLogId !== undefined) output.requestLogId = requestLogId;
 
     return output;
+  }
+
+  // Streaming speech-to-text (openai/ only). The client sends start, then ~100 ms PCM frames,
+  // and gets text deltas while a segment is spoken and a segment event when it ends. One request
+  // log row covers the whole stream; it is written when the stream ends.
+  @websocket({
+    outEvents: TranscribeStreamOutEvents,
+    inEvents: TranscribeStreamInEvents,
+    heartbeat: 20_000,
+    description: "Streams microphone audio and returns live transcript deltas and segments.",
+  })
+  async transcribeStream(
+    ctx: WebSocketContext<TranscribeStreamOutEvents, TranscribeStreamInEvents>,
+  ): Promise<void> {
+    const ws = ctx.ws;
+    let run: TranscribeStreamRun | undefined;
+    let startAttempted = false;
+    let closed = false;
+
+    // Events can still arrive from the upstream pump after the client left; never throw there.
+    const publish: typeof ws.publish = (event, data) => {
+      if (closed) return;
+
+      try {
+        ws.publish(event, data);
+      } catch (e) {
+        mediaLogger.warn(
+          `transcribeStream publish failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    };
+
+    const end = async (withDone: boolean) => {
+      if (!run || run.finished) return;
+      await finishTranscribeStream(run, withDone ? (done) => publish("done", done) : undefined);
+
+      if (!closed) ws.close();
+    };
+
+    // Handlers run in arrival order; audio frames must reach the upstream in that order too.
+    let queue: Promise<void> = Promise.resolve();
+
+    const serial = (task: () => Promise<void>) => {
+      queue = queue.then(task).catch((e) => {
+        mediaLogger.error(`transcribeStream: ${e instanceof Error ? e.message : String(e)}`);
+        publish("error", { message: e instanceof Error ? e.message : String(e), fatal: false });
+      });
+    };
+
+    ws.onMessage("start", (input) =>
+      serial(async () => {
+        if (startAttempted) return;
+        startAttempted = true;
+
+        try {
+          run = await startTranscribeStream(input, (out) => {
+            if (out.event === "delta") publish("delta", out.data);
+            else if (out.event === "segment") publish("segment", out.data);
+            else {
+              publish("error", out.data);
+
+              // The session gave up (reconnect failed); finish with what was transcribed.
+              if (out.data.fatal) serial(() => end(true));
+            }
+          });
+        } catch (e) {
+          publish("error", { message: e instanceof Error ? e.message : String(e), fatal: true });
+
+          if (!closed) ws.close();
+
+          return;
+        }
+
+        // The client left while the upstream was opening: close it now rather than at 2 hours.
+        if (closed) {
+          await end(false);
+
+          return;
+        }
+
+        publish("ready", {
+          model: run.route,
+          tokenName: run.token.name,
+          ...(run.requestLogId !== undefined && { requestLogId: run.requestLogId }),
+        });
+        run.timer = setTimeout(() => {
+          publish("error", { message: "stream reached the 2 hour limit", fatal: true });
+          serial(() => end(true));
+        }, TRANSCRIBE_STREAM_MAX_MS);
+      }),
+    );
+
+    ws.onMessage("audio", ({ pcm }) =>
+      serial(async () => {
+        if (!run) throw new Error("send start before audio");
+
+        if (run.finished) return;
+        // Copy into a fresh buffer: Buffer.from(base64) may sit at an odd pool offset, which an
+        // Int16Array view cannot start at.
+        const bytes = Buffer.from(pcm, "base64");
+        const samples = new Int16Array(Math.floor(bytes.byteLength / 2));
+        new Uint8Array(samples.buffer).set(bytes.subarray(0, samples.byteLength));
+        await run.session.audio(samples, run.sampleRate);
+      }),
+    );
+
+    ws.onMessage("commit", () =>
+      serial(async () => {
+        if (run && !run.finished) await run.session.commit();
+      }),
+    );
+
+    ws.onMessage("stop", () => serial(() => end(true)));
+
+    ws.onClose(() => {
+      closed = true;
+
+      // A client that leaves without stop still gets its stream logged with what was transcribed.
+      if (run && !run.finished) void finishTranscribeStream(run, undefined);
+    });
+
+    await ws.waitForClose();
   }
 
   @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })

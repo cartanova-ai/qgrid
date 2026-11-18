@@ -42,6 +42,8 @@ import {
   DecideOutput,
   LiveCallInput,
   LiveCallOutput,
+  TranscribeStreamOutEvents,
+  TranscribeStreamInEvents,
   UsageResponse,
   HealthResponse,
 } from "./qgrid/qgrid.types";
@@ -1242,6 +1244,19 @@ export namespace QgridService {
     useMutation({
       mutationFn: (params: { params: LiveCallInput }) => QgridService.liveCall(params.params),
     });
+
+  export function useTranscribeStream(
+    params: {},
+    handlers: EventHandlers<TranscribeStreamOutEvents>,
+    options: WebSocketChannelOptions = {},
+  ) {
+    return useWebSocketChannel<TranscribeStreamOutEvents, TranscribeStreamInEvents>(
+      `/api/qgrid/transcribeStream`,
+      params,
+      handlers,
+      options,
+    );
+  }
 
   export async function usage(tokenId?: number): Promise<UsageResponse> {
     return fetch({

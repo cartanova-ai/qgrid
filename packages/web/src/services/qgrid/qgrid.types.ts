@@ -598,6 +598,72 @@ export const TranscribeInput = z.object({
 
 export type TranscribeInput = z.infer<typeof TranscribeInput>;
 
+// ─── Streaming transcription (WebSocket /api/qgrid/transcribeStream) ───
+
+/** One second of 24 kHz PCM16 is 48,000 bytes, 64,000 base64 characters; frames are capped there. */
+const STREAM_AUDIO_MAX_BASE64 = 64_000;
+
+export const TranscribeStreamStart = z.object({
+  // openai/ only: the realtime transcription socket. Default openai/gpt-live-transcribe, the one
+  // model that streams text while audio is still arriving.
+  model: z
+    .string()
+    .regex(/^openai\/[A-Za-z0-9._-]+$/, "model must be openai/<id>")
+    .optional(),
+  language: z.string().min(1).max(16).optional(),
+  prompt: z.string().min(1).max(2_000).optional(),
+  // Mono PCM16 at this rate; 16 kHz is resampled to the upstream 24 kHz.
+  sampleRate: z.union([z.literal(16_000), z.literal(24_000)]),
+  ...MediaCallOptions,
+});
+
+export type TranscribeStreamStart = z.infer<typeof TranscribeStreamStart>;
+
+export const TranscribeStreamInEvents = z.object({
+  // First message; audio before it is rejected.
+  start: TranscribeStreamStart,
+  // Base64 mono PCM16 at start.sampleRate, about 100 ms per frame, at most one second.
+  audio: z.object({
+    pcm: z
+      .string()
+      .min(1)
+      .max(STREAM_AUDIO_MAX_BASE64)
+      .refine((value) => value.length % 4 === 0 && BASE64.test(value), "pcm must be base64"),
+  }),
+  // Ends the current segment now; the server also ends segments at pauses and every 20 s.
+  commit: z.object({}),
+  // Finishes the stream: the last segment is committed and its transcript awaited before done.
+  stop: z.object({}),
+});
+
+export type TranscribeStreamInEvents = z.infer<typeof TranscribeStreamInEvents>;
+
+export const TranscribeStreamOutEvents = z.object({
+  ready: z.object({
+    model: z.string(),
+    tokenName: z.string(),
+    requestLogId: z.number().optional(),
+  }),
+  // Text appended to a segment that is still being spoken.
+  delta: z.object({ segmentId: z.string(), text: z.string() }),
+  // A finished segment; times are milliseconds of audio received in this stream.
+  segment: z.object({
+    segmentId: z.string(),
+    text: z.string(),
+    startMs: z.number(),
+    endMs: z.number(),
+  }),
+  // fatal: the stream is over and the socket closes.
+  error: z.object({ message: z.string(), fatal: z.boolean() }),
+  done: z.object({
+    audioMs: z.number(),
+    segments: z.number(),
+    requestLogId: z.number().optional(),
+  }),
+});
+
+export type TranscribeStreamOutEvents = z.infer<typeof TranscribeStreamOutEvents>;
+
 const TranscribedWord = z.object({
   text: z.string(),
   start: z.number(),

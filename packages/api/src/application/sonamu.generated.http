@@ -792,6 +792,12 @@ Content-Type: application/json
 
 ###
 
+GET {{baseUrl}}/api/qgrid/transcribeStream
+	?
+Content-Type: application/json
+
+###
+
 GET {{baseUrl}}/api/qgrid/usage
 	?tokenId=0
 Content-Type: application/json

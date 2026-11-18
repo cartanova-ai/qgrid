@@ -130,6 +130,8 @@ export default defineConfig({
       formbody: true,
       qs: true,
       sse: true,
+      // @fastify/websocket for @websocket routes (transcribeStream); without it upgrades hang.
+      ws: true,
       multipart: { limits: { fileSize: 1024 * 1024 * 30 } },
       static: {
         root: path.join(import.meta.dirname, "/../", "public"),
