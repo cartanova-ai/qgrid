@@ -445,6 +445,34 @@ export const transcriptionCompletedEvent = z.looseObject({
   transcript: z.string(),
 });
 
+/**
+ * Incremental text for the uncommitted buffer. gpt-live-transcribe streams these while audio is
+ * still arriving (first text about 1.3 s after speech starts, subscription probe 2026-11-18);
+ * gpt-transcribe sends them all at once after the commit.
+ */
+export const transcriptionDeltaEvent = z.looseObject({
+  type: z.literal("conversation.item.input_audio_transcription.delta"),
+  item_id: z.string(),
+  delta: z.string(),
+});
+
+/** Acknowledges a commit; item_id names the buffer that the commit ended. */
+export const audioBufferCommittedEvent = z.looseObject({
+  type: z.literal("input_audio_buffer.committed"),
+  item_id: z.string(),
+});
+
+/** item_id ties a completed transcript to the deltas that preceded it. */
+export const transcriptionCompletedItemEvent = transcriptionCompletedEvent.extend({
+  item_id: z.string(),
+});
+
+export const transcriptionFailedItemEvent = z.looseObject({
+  type: z.literal("conversation.item.input_audio_transcription.failed"),
+  item_id: z.string(),
+  error: z.looseObject({ message: z.string().optional(), code: z.string().nullish() }).optional(),
+});
+
 export const transcriptionFailedEvent = z.looseObject({
   type: z.literal("conversation.item.input_audio_transcription.failed"),
   error: z.looseObject({ message: z.string().optional(), code: z.string().nullish() }).optional(),

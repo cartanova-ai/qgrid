@@ -33,11 +33,16 @@ import {
   OPENAI_REALTIME_SAMPLE_RATE,
   OPENAI_REALTIME_SYNTHETIC_SDP,
   OPENAI_REALTIME_WS_URL,
+  OPENAI_TRANSCRIPTION_MODELS,
   OPENAI_TRANSCRIPTION_MODELS_WITHOUT_PROMPT,
   type OpenAIRealtimeCredentials,
   type OpenAIRealtimeHeaders,
+  audioBufferCommittedEvent,
   outputAudioDeltaEvent,
   outputAudioTranscriptDoneEvent,
+  transcriptionCompletedItemEvent,
+  transcriptionDeltaEvent,
+  transcriptionFailedItemEvent,
   prepareRealtimeInput,
   realtimeErrorEvent,
   realtimeServerEvent,
@@ -99,6 +104,43 @@ export interface OpenAIVoiceClientOptions {
   ttsTimeoutMs?: number;
   liveWsUrl?: string;
   liveWatchLimitMs?: number;
+}
+
+/** Model for streaming transcription when the caller names none: the only one that streams text. */
+export const OPENAI_STREAM_DEFAULT_TRANSCRIPTION_MODEL = "gpt-live-transcribe";
+
+/** Bounds the socket handshake and session.update of a streaming transcription. */
+export const OPENAI_STREAM_OPEN_TIMEOUT_MS = 15_000;
+
+export type OpenAITranscriptionStreamEvent =
+  | { type: "delta"; itemId: string; text: string }
+  /** The commit that ended item `itemId` was accepted; commits are acknowledged in order. */
+  | { type: "committed"; itemId: string }
+  | { type: "completed"; itemId: string; text: string }
+  | { type: "failed"; itemId: string; message: string }
+  /** A server error event; the socket stays open (e.g. committing an empty buffer). */
+  | { type: "error"; message: string; code?: string }
+  /** The socket ended. `error` is set unless it closed normally. Always the last event. */
+  | { type: "closed"; error?: Error };
+
+export interface OpenAITranscriptionStreamRequest {
+  model?: string;
+  language?: string;
+  prompt?: string;
+  onEvent: (event: OpenAITranscriptionStreamEvent) => void;
+  /** Bounds the handshake and, once open, closes the stream when aborted. */
+  signal?: AbortSignal;
+}
+
+export interface OpenAITranscriptionStream {
+  readonly model: string;
+  /** Mono PCM16 at 24 kHz. */
+  append(pcm: Uint8Array): Promise<void>;
+  /** Ends the current item; its completed transcript follows. */
+  commit(): Promise<void>;
+  /** Drops the uncommitted buffer without transcribing it. */
+  clear(): Promise<void>;
+  close(): void;
 }
 
 export interface OpenAITranscribeRequest {
@@ -574,6 +616,75 @@ export class OpenAIVoiceClient {
     }
   }
 
+  /**
+   * A long-lived transcription session on the direct socket. The /calls path cannot host one: a
+   * call with no RTP peer is torn down about 30 s after creation. The direct socket stayed open for
+   * a 6 min 40 s stream with 20 commits (subscription probe 2026-11-18). Commits are manual
+   * because gpt-live-transcribe rejects server VAD and transcribes only about the first 30 s of a
+   * single committed buffer.
+   */
+  async openTranscriptionStream(
+    credentials: OpenAIRealtimeCredentials,
+    request: OpenAITranscriptionStreamRequest,
+  ): Promise<OpenAITranscriptionStream> {
+    const model = request.model ?? OPENAI_STREAM_DEFAULT_TRANSCRIPTION_MODEL;
+
+    if (!OPENAI_TRANSCRIPTION_MODELS.some((known) => known === model))
+      throw new OpenAIVoiceInputError(`unsupported transcription model "${model}"`);
+
+    if (request.prompt !== undefined && OPENAI_TRANSCRIPTION_MODELS_WITHOUT_PROMPT.has(model))
+      throw new OpenAIVoiceInputError(`${model} does not accept a prompt`);
+    const correlation = { threadId: crypto.randomUUID(), sessionId: crypto.randomUUID() };
+    const headers = buildOpenAIRealtimeHeaders(credentials, correlation);
+
+    const session = buildTranscriptionSession({
+      model,
+      language: request.language,
+      prompt: request.prompt,
+      manualCommit: true,
+    });
+
+    const lifetime = new AbortController();
+    const onCallerAbort = () => lifetime.abort(request.signal?.reason);
+
+    if (request.signal?.aborted) throw abortError(request.signal);
+    request.signal?.addEventListener("abort", onCallerAbort, { once: true });
+    const socket = this.webSocketFactory(`${this.realtimeWsUrl}?intent=transcription`, { headers });
+    const records = socketRecords(socket, lifetime.signal);
+    let openTimer: NodeJS.Timeout | undefined;
+
+    try {
+      const timedOut = new Promise<never>((_, reject) => {
+        openTimer = setTimeout(() => {
+          socket.terminate();
+          reject(new OpenAIProtocolError("realtime socket open timed out", "realtime_timeout"));
+        }, OPENAI_STREAM_OPEN_TIMEOUT_MS);
+      });
+
+      await Promise.race([this.awaitOpen(records.next), timedOut]);
+      await sendJson(socket, sessionUpdateEvent(session));
+    } catch (error) {
+      socket.terminate();
+      records.cleanup();
+      request.signal?.removeEventListener("abort", onCallerAbort);
+      throw error;
+    } finally {
+      clearTimeout(openTimer);
+    }
+
+    void pumpTranscriptionStream(records, request.onEvent).finally(() =>
+      request.signal?.removeEventListener("abort", onCallerAbort),
+    );
+
+    return {
+      model,
+      append: (pcm) => sendJson(socket, audioAppendEvent(Buffer.from(pcm).toString("base64"))),
+      commit: () => sendJson(socket, audioCommitEvent()),
+      clear: () => sendJson(socket, { type: "input_audio_buffer.clear" }),
+      close: () => socket.close(1000, "done"),
+    };
+  }
+
   /** session.update → append PCM → commit → await the completed transcript. */
   private async runTranscriptionSocket(
     url: string,
@@ -1016,3 +1127,80 @@ export function isSidebandTeardownError(error: Error): boolean {
 
 /** Event schema export for tests that replay captured server traffic. */
 export { realtimeServerEvent };
+
+/** Forwards stream events until the socket ends, then reports `closed` exactly once. */
+async function pumpTranscriptionStream(
+  records: ReturnType<typeof socketRecords>,
+  onEvent: (event: OpenAITranscriptionStreamEvent) => void,
+): Promise<void> {
+  let error: Error | undefined;
+
+  try {
+    for (;;) {
+      const record = await records.next();
+
+      if (record.kind === "error") {
+        error = record.error;
+        break;
+      }
+
+      if (record.kind === "close") {
+        if (record.code !== 1000)
+          error = new OpenAIProtocolError(
+            `realtime socket closed (${record.code}${record.reason ? `: ${record.reason}` : ""})`,
+          );
+        break;
+      }
+
+      if (record.kind === "rejected") {
+        error = new OpenAIProtocolError("realtime socket rejected", undefined, record.status);
+        break;
+      }
+
+      if (record.kind !== "event") continue;
+      const serverError = serverErrorFromEvent(record.event);
+
+      if (serverError) {
+        onEvent({ type: "error", message: serverError.message, code: serverError.code });
+        continue;
+      }
+
+      const delta = transcriptionDeltaEvent.safeParse(record.event);
+
+      if (delta.success) {
+        onEvent({ type: "delta", itemId: delta.data.item_id, text: delta.data.delta });
+        continue;
+      }
+
+      const committed = audioBufferCommittedEvent.safeParse(record.event);
+
+      if (committed.success) {
+        onEvent({ type: "committed", itemId: committed.data.item_id });
+        continue;
+      }
+
+      const completed = transcriptionCompletedItemEvent.safeParse(record.event);
+
+      if (completed.success) {
+        onEvent({
+          type: "completed",
+          itemId: completed.data.item_id,
+          text: completed.data.transcript,
+        });
+        continue;
+      }
+
+      const failed = transcriptionFailedItemEvent.safeParse(record.event);
+
+      if (failed.success)
+        onEvent({
+          type: "failed",
+          itemId: failed.data.item_id,
+          message: failed.data.error?.message ?? "transcription failed",
+        });
+    }
+  } finally {
+    records.cleanup();
+    onEvent({ type: "closed", error });
+  }
+}

@@ -24,6 +24,8 @@ import {
   type OpenAISpeechResult,
   type OpenAITranscribeRequest,
   type OpenAITranscription,
+  type OpenAITranscriptionStream,
+  type OpenAITranscriptionStreamRequest,
   OpenAIVoiceClient,
 } from "./openai-voice-client";
 
@@ -159,6 +161,19 @@ export class OpenAIDispatcher implements ProviderDispatcher {
       { preferredTokenId, requirePreferredToken },
       request.signal,
       (credentials) => this.voiceClient.speak(credentials, voiceRequest),
+    );
+  }
+
+  /** Opens a long-lived transcription stream; the token is chosen (and a 401 refreshed) at open. */
+  async startTranscriptionStream(
+    request: OpenAITranscriptionStreamRequest & MediaTokenSelection,
+  ): Promise<MediaDispatchResult<OpenAITranscriptionStream>> {
+    const { preferredTokenId, requirePreferredToken, ...streamRequest } = request;
+
+    return this.pool.runWithToken(
+      { preferredTokenId, requirePreferredToken },
+      request.signal,
+      (credentials) => this.voiceClient.openTranscriptionStream(credentials, streamRequest),
     );
   }
 

@@ -789,3 +789,78 @@ describe("OpenAIVoiceClient.createLiveCall", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("OpenAIVoiceClient.openTranscriptionStream", () => {
+  it("opens the direct socket with a manual-commit session and forwards stream events", async () => {
+    const ws = mockedWebSocket();
+    const client = new OpenAIVoiceClient({ webSocketFactory: ws.factory });
+    const events: unknown[] = [];
+
+    const opening = client.openTranscriptionStream(credentials, {
+      language: "ko",
+      onEvent: (event) => events.push(event),
+    });
+
+    await tick();
+    const socket = ws.sockets[0]!;
+    expect(ws.calls[0]!.url).toBe(`${OPENAI_REALTIME_WS_URL}?intent=transcription`);
+    expect(ws.calls[0]!.headers.originator).toBe(CODEX_CLI_ORIGINATOR);
+    socket.emit("open");
+    const stream = await opening;
+
+    expect(stream.model).toBe("gpt-live-transcribe");
+    expect(socket.sentEvents()[0]).toEqual({
+      type: "session.update",
+      session: buildTranscriptionSession({ model: "gpt-live-transcribe", language: "ko", manualCommit: true }),
+    });
+
+    await stream.append(new Uint8Array([1, 0, 2, 0]));
+    await stream.commit();
+    await stream.clear();
+    expect(socket.sentEvents().slice(1)).toEqual([
+      { type: "input_audio_buffer.append", audio: Buffer.from([1, 0, 2, 0]).toString("base64") },
+      { type: "input_audio_buffer.commit" },
+      { type: "input_audio_buffer.clear" },
+    ]);
+
+    socket.message({ type: "conversation.item.input_audio_transcription.delta", item_id: "i1", delta: "안녕" });
+    socket.message({ type: "input_audio_buffer.committed", item_id: "i1" });
+    socket.message({ type: "conversation.item.input_audio_transcription.completed", item_id: "i1", transcript: "안녕하세요." });
+    socket.message({ type: "error", error: { code: "input_audio_buffer_commit_empty", message: "empty" } });
+    socket.emit("close", 1000, Buffer.from("done"));
+    await tick();
+
+    expect(events).toEqual([
+      { type: "delta", itemId: "i1", text: "안녕" },
+      { type: "committed", itemId: "i1" },
+      { type: "completed", itemId: "i1", text: "안녕하세요." },
+      { type: "error", message: "empty", code: "input_audio_buffer_commit_empty" },
+      { type: "closed", error: undefined },
+    ]);
+  });
+
+  it("reports an abnormal close as the closing error", async () => {
+    const ws = mockedWebSocket();
+    const client = new OpenAIVoiceClient({ webSocketFactory: ws.factory });
+    const events: Array<{ type: string; error?: Error }> = [];
+    const opening = client.openTranscriptionStream(credentials, { onEvent: (e) => events.push(e) });
+    await tick();
+    ws.sockets[0]!.emit("open");
+    await opening;
+    ws.sockets[0]!.emit("close", 1006, Buffer.from(""));
+    await tick();
+
+    expect(events.at(-1)?.type).toBe("closed");
+    expect(events.at(-1)?.error?.message).toMatch(/1006/);
+  });
+
+  it("rejects an unknown model before opening a socket", async () => {
+    const ws = mockedWebSocket();
+    const client = new OpenAIVoiceClient({ webSocketFactory: ws.factory });
+
+    await expect(
+      client.openTranscriptionStream(credentials, { model: "gpt-nope", onEvent: () => {} }),
+    ).rejects.toBeInstanceOf(OpenAIVoiceInputError);
+    expect(ws.sockets).toHaveLength(0);
+  });
+});
