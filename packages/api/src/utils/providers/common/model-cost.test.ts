@@ -85,6 +85,8 @@ describe("Grok cost", () => {
 
 describe("calculateCostUsd", () => {
   it.each([
+    ["gpt-6.2-astra", 2],
+    ["gpt-6.2-sol", 0.5],
     ["gpt-6-astra", 2.6],
     ["gpt-6.1-sol", 0.5],
     ["gpt-6.1-terra", 0.25],
@@ -141,6 +143,8 @@ describe("calculateCostUsd", () => {
     ).toBeCloseTo(0.0875, 10);
   });
   it.each([
+    ["gpt-6.2-astra", 8, 40, 0.4, 10],
+    ["gpt-6.2-sol", 2, 10, 0.1, 2.5],
     ["gpt-6-astra", 10, 50, 1, 12.5],
     ["gpt-6.1-sol", 2, 10, 0.1, 2.5],
     ["gpt-6.1-terra", 1, 5, 0.05, 1.25],
@@ -229,6 +233,8 @@ describe("calculateCostUsd", () => {
   });
 
   it.each([
+    ["gpt-6.2-astra", 8, 40, 0.4, 10, 4.47],
+    ["gpt-6.2-sol", 2, 10, 0.1, 2.5, 1.1175],
     ["gpt-6-astra", 10, 50, 1, 12.5, 5.6125],
     ["gpt-6.1-sol", 2, 10, 0.1, 2.5, 1.1175],
     ["gpt-6.1-terra", 1, 5, 0.05, 1.25, 0.55875],
@@ -259,6 +265,8 @@ describe("calculateCostUsd", () => {
   );
 
   it.each([
+    ["gpt-6.2-astra", 1.82],
+    ["gpt-6.2-sol", 0.455],
     ["gpt-6-astra", 2.475],
     ["gpt-6.1-sol", 0.455],
     ["gpt-6.1-terra", 0.2275],
@@ -278,6 +286,8 @@ describe("calculateCostUsd", () => {
   });
 
   it.each([
+    ["gpt-6.2-astra", 2.02],
+    ["gpt-6.2-sol", 0.505],
     ["gpt-6-astra", 2.725],
     ["gpt-6.1-sol", 0.505],
     ["gpt-6.1-terra", 0.2525],

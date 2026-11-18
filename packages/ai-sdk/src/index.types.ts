@@ -241,6 +241,8 @@ export const qgridXaiProviderOptionsSchema = z.object({
 export type QgridXaiProviderOptions = z.infer<typeof qgridXaiProviderOptionsSchema>;
 
 export type QgridSupportedModel =
+  | "openai/gpt-6.2-astra"
+  | "openai/gpt-6.2-sol"
   | "openai/gpt-6-astra"
   | "openai/gpt-6.1-sol"
   | "openai/gpt-6.1-terra"

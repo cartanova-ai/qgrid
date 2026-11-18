@@ -55,6 +55,28 @@ type OpenAIModelSpec = ModelCosts & { maxEffort?: OpenAIEffort };
 
 const OPENAI_COSTS = new Map<string, OpenAIModelSpec>(
   Object.entries({
+    // GPT-6.2 Astra, Sol (2026-11-17 출시): Standard API pricing verified 2026-11-18.
+    // Astra 는 GPT-6 Astra 대비 input/output/cache write 20% 인하, cached input $0.40. Sol 은 GPT-6.1 Sol 과 같다.
+    // Codex 카탈로그(2026-11-18, client 0.169.0)는 둘 다 ultra 까지 허용하고 기본 effort 는 low,
+    // context_window 는 Astra 272K, Sol 500K 다.
+    // @see https://developers.openai.com/api/docs/models/gpt-6.2-astra
+    // @see https://developers.openai.com/api/docs/models/gpt-6.2-sol
+    "gpt-6.2-astra": {
+      maxEffort: "ultra",
+      inputTokens: 8,
+      outputTokens: 40,
+      cachedInputTokens: 0.4,
+      cacheCreationInputTokens: 10,
+      longContext: LONG_CONTEXT_272K,
+    },
+    "gpt-6.2-sol": {
+      maxEffort: "ultra",
+      inputTokens: 2,
+      outputTokens: 10,
+      cachedInputTokens: 0.1,
+      cacheCreationInputTokens: 2.5,
+      longContext: LONG_CONTEXT_272K,
+    },
     // GPT-6 Astra: Standard API-equivalent pricing, verified 2026-09-07.
     // Codex subscription catalog supports ultra; the public API lists only through max.
     // @see https://developers.openai.com/api/docs/models/gpt-6-astra
@@ -408,6 +430,8 @@ export function getModelCosts(model: string): ModelCosts {
 // https://developers.openai.com/api/docs/pricing
 const OPENAI_FAST_MULTIPLIERS = new Map<string, number>(
   Object.entries({
+    "gpt-6.2-astra": 2,
+    "gpt-6.2-sol": 2,
     "gpt-6-astra": 2,
     "gpt-6.1-sol": 2,
     "gpt-6.1-terra": 2,
