@@ -624,13 +624,14 @@ class RequestLogModelClass extends BaseModelClass<
   }
 
   /**
-   * Live voice sessions end within two hours and log themselves at the end; a live run still
-   * running past `threshold` lost its server mid-session. Returns how many were closed.
+   * Live voice sessions and transcription streams end within two hours and log themselves at the
+   * end; one-shot stt runs finish within minutes. A live or stt run still running past `threshold`
+   * lost its server mid-session. Returns how many were closed.
    */
   async expireStaleLiveRuns(threshold: Date, errorMessage: string): Promise<number> {
     return this.getPuri("w")
       .from("request_logs")
-      .where("media_kind", "live")
+      .whereIn("media_kind", ["live", "stt"])
       .where("status", "running")
       .where("created_at", "<", threshold)
       .update({ status: "error", error_message: errorMessage });

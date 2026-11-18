@@ -293,7 +293,7 @@ describe("qgrid run lifecycle start", () => {
 
     expect(expireStaleLiveRunsMock).toHaveBeenCalledWith(
       new Date(lifecycleNow - (2 * 60 + 15) * 60 * 1000),
-      "live session: the server stopped before the session ended",
+      "live session or transcription stream: the server stopped before it ended",
     );
   });
 

@@ -421,7 +421,7 @@ async function performStaleRunCleanup(): Promise<void> {
 
     const liveCount = await RequestLogModel.expireStaleLiveRuns(
       new Date(Date.now() - STALE_LIVE_RUN_THRESHOLD_MS),
-      "live session: the server stopped before the session ended",
+      "live session or transcription stream: the server stopped before it ended",
     );
 
     const cleanedCount = staleIds.length + liveCount;
