@@ -117,6 +117,7 @@ import {
 } from "../request-log/request-log.model";
 import { type HistoryItems, type RequestLogListParams } from "../request-log/request-log.types";
 import { type TokenSubsetA } from "../sonamu.generated";
+import { buildModelCatalog } from "./model-catalog";
 import { type StreamOutEvent, TranscribeStreamSession } from "./transcribe-stream";
 
 /** Fields token refresh reads; dispatchers pass their pooled view of a token. */
@@ -177,6 +178,7 @@ import {
   type GrokDeviceCodeStart,
   type GrokDevicePollResult,
   type HealthResponse,
+  type ModelCatalog,
   type OAuthStartResult,
   type QueryOutput,
   type QgridRunContext,
@@ -3318,6 +3320,20 @@ class QgridFrameClass extends BaseFrameClass {
       ready: Object.values(providers).includes("ready"),
       providers,
     };
+  }
+
+  // Models by task with prices and capabilities; `available` means the provider has started and
+  // holds an active token, so a request would be routed now.
+  @api({ httpMethod: "GET", clients: ["axios", "tanstack-query"] })
+  async models(): Promise<ModelCatalog> {
+    const withTokens = new Set([...QgridDispatcher.tokens.values()].map((t) => t.provider));
+
+    return buildModelCatalog(
+      (provider) =>
+        isProviderId(provider) &&
+        QgridDispatcher.dispatchers.has(provider) &&
+        withTokens.has(provider),
+    );
   }
 }
 

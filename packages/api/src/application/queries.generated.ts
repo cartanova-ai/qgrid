@@ -120,6 +120,9 @@ export namespace QgridService {
 
   export const health = (): SSRQuery =>
     createSSRQuery("QgridFrame", "health", [], ["Qgrid", "health"]);
+
+  export const models = (): SSRQuery =>
+    createSSRQuery("QgridFrame", "models", [], ["Qgrid", "models"]);
 }
 
 export namespace MonitService {

@@ -810,6 +810,12 @@ Content-Type: application/json
 
 ###
 
+GET {{baseUrl}}/api/qgrid/models
+	?
+Content-Type: application/json
+
+###
+
 GET {{baseUrl}}/api/monit/monitLogs
 	?cursor=0
 Content-Type: application/json
