@@ -443,6 +443,11 @@ const OPENAI_FAST_MULTIPLIERS = new Map<string, number>(
   }),
 );
 
+/** Rate multiplier for serviceTier "fast"; undefined when the model has no fast tier. */
+export function openaiFastMultiplier(model: string): number | undefined {
+  return OPENAI_FAST_MULTIPLIERS.get(model.split("/").pop() ?? model);
+}
+
 export function calculateCostUsd(
   model: string,
   usage: {
@@ -576,6 +581,11 @@ export function openaiDecisionCost(usage: {
       cacheCreationInputTokens: usage.cacheWriteTokens,
     }),
   );
+}
+
+/** USD per minute of audio for a transcription route such as "openai/gpt-transcribe". */
+export function sttUsdPerMinute(route: string): number | undefined {
+  return STT_USD_PER_MINUTE.get(route);
 }
 
 /** Transcription by audio length; unknown models or a missing duration stay unpriced. */

@@ -46,6 +46,7 @@ import {
   TranscribeStreamInEvents,
   UsageResponse,
   HealthResponse,
+  ModelCatalog,
 } from "./qgrid/qgrid.types";
 import {
   RequestLogStepListParams,
@@ -1296,6 +1297,27 @@ export namespace QgridService {
     useRefreshable(
       useQuery({
         ...healthQueryOptions(),
+        ...options,
+      }),
+    );
+
+  export async function models(): Promise<ModelCatalog> {
+    return fetch({
+      method: "GET",
+      url: `/api/qgrid/models`,
+    });
+  }
+
+  export const modelsQueryOptions = () =>
+    queryOptions({
+      queryKey: ["Qgrid", "models"],
+      queryFn: () => models(),
+    });
+
+  export const useModels = (options?: { enabled?: boolean }) =>
+    useRefreshable(
+      useQuery({
+        ...modelsQueryOptions(),
         ...options,
       }),
     );

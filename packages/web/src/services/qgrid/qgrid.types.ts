@@ -1035,6 +1035,71 @@ export const HealthResponse = z.object({
 
 export type HealthResponse = z.infer<typeof HealthResponse>;
 
+// ─── Model catalog (GET /api/qgrid/models) ───
+
+// USD per 1M tokens, from the same table that prices request logs.
+export const CatalogTokenPricing = z.object({
+  input: z.number(),
+  output: z.number(),
+  cachedInput: z.number(),
+  // Cache write without a TTL breakdown, then Anthropic's 5-minute and 1-hour rates.
+  cacheWrite: z.number().optional(),
+  cacheWrite5m: z.number().optional(),
+  cacheWrite1h: z.number().optional(),
+  // Over `threshold` input tokens the whole request is billed at these multipliers.
+  longContext: z
+    .object({
+      threshold: z.number(),
+      inputMultiplier: z.number(),
+      cachedInputMultiplier: z.number(),
+      outputMultiplier: z.number(),
+    })
+    .optional(),
+  // Multiplier on every rate with serviceTier "fast".
+  fastMultiplier: z.number().optional(),
+});
+
+export type CatalogTokenPricing = z.infer<typeof CatalogTokenPricing>;
+
+export const CatalogTextModel = z.object({
+  id: z.string(),
+  provider: z.string(),
+  // The provider has started and has at least one active token.
+  available: z.boolean(),
+  pricing: CatalogTokenPricing,
+  // Reasoning effort values the model accepts, lowest first.
+  efforts: z.array(z.string()),
+  // Whether user-message images reach the model (anthropic/ drops them).
+  imageInput: z.boolean(),
+});
+
+export type CatalogTextModel = z.infer<typeof CatalogTextModel>;
+
+export const CatalogSpeechModel = z.object({
+  id: z.string(),
+  provider: z.string(),
+  available: z.boolean(),
+  // USD per minute of audio; absent when the model is not in the pricing table.
+  usdPerMinute: z.number().optional(),
+  // Whether a transcription prompt (glossary) is accepted.
+  prompt: z.boolean(),
+  // Whether text streams while audio is still arriving (before the segment is committed).
+  liveDraft: z.boolean(),
+});
+
+export type CatalogSpeechModel = z.infer<typeof CatalogSpeechModel>;
+
+export const ModelCatalog = z.object({
+  // query / AI SDK language models.
+  text: z.array(CatalogTextModel),
+  // transcribe / qgrid.transcription().
+  transcription: z.array(CatalogSpeechModel),
+  // WebSocket transcribeStream.
+  transcriptionStream: z.array(CatalogSpeechModel),
+});
+
+export type ModelCatalog = z.infer<typeof ModelCatalog>;
+
 // ─── Decisions (OpenAI native /v1/decisions wire format) ───
 // Limits follow https://developers.openai.com/api/reference/resources/decisions/methods/create (2026-11-13).
 
