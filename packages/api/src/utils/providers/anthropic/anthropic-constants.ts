@@ -50,6 +50,7 @@ export function hasOneMillionSuffix(model?: string): boolean {
 // 1M 지원 여부는 Claude Code 내부의 광범위한 prefix 판정이 아니라 qgrid에서 확인한 exact set 으로
 // 고정한다. opus-4-7 은 실측 전까지 미포함. 새 모델 추가 시 공식 사양과 실제 CLI 동작을 확인한다.
 const ONE_MILLION_CONTEXT_MODELS = new Set([
+  "claude-fable-5-2",
   "claude-fable-5-1",
   "claude-fable-5",
   "claude-opus-5",
@@ -68,6 +69,7 @@ const CLI_ONE_MILLION_SUFFIX_MODELS = new Set(["claude-sonnet-4-6", "claude-opus
 // explicit false supports Opus 5, and native extra-body delivery supports Haiku 5.5
 // (disabled) and Sonnet 5.5 (between_tools). See anthropic-thinking.ts.
 const ADAPTIVE_THINKING_MODELS = new Set([
+  "claude-fable-5-2",
   "claude-fable-5-1",
   "claude-fable-5",
   "claude-opus-5",
@@ -79,7 +81,7 @@ const ADAPTIVE_THINKING_MODELS = new Set([
 // Fable 계열: 구독 플랜에서 usage credits 가 필요한 최상위 티어. 구독 usage API 의
 // `seven_day_overage_included` 버킷은 이 계열에만 적용되므로 quota threshold 판정이 참조한다.
 // Mythos 는 Project Glasswing 조직 전용이라 구독 토큰 경로에서 도달할 수 없어 포함하지 않는다.
-const FABLE_FAMILY_MODELS = new Set(["claude-fable-5-1", "claude-fable-5"]);
+const FABLE_FAMILY_MODELS = new Set(["claude-fable-5-2", "claude-fable-5-1", "claude-fable-5"]);
 
 // 불변 계약: suffix 가 필요한 모델은 반드시 1M 지원 모델의 부분집합이어야 한다. 역방향 불일치(suffix
 // 대상인데 지원 집합엔 없음)면 needsCli1mSuffix=true·supports1MContext=false 가 동시에 나서

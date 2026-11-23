@@ -44,6 +44,7 @@ export const QGRID_MODEL_GROUPS: { label: string; models: string[] }[] = [
   {
     label: "Anthropic",
     models: [
+      "anthropic/claude-fable-5-2",
       "anthropic/claude-fable-5-1",
       "anthropic/claude-fable-5",
       "anthropic/claude-opus-5-5",

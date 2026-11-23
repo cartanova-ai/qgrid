@@ -752,6 +752,7 @@ type QgridSupportedModel =
   | "openai/gpt-5.3-codex"
   | "openai/gpt-5.3-codex-spark"
   // Anthropic
+  | "anthropic/claude-fable-5-2"
   | "anthropic/claude-fable-5-1"
   | "anthropic/claude-fable-5"
   | "anthropic/claude-haiku-4-5"
@@ -803,6 +804,8 @@ type QgridSupportedModel =
 Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/docs/pricing)를 사용합니다. Sol의 표에 명시된 프로모션 가격은 2026-11-30에 끝나며, 이후 단가는 공시되기 전까지 가정하지 않습니다. 입력이 272K tokens를 넘으면 요청 전체에 input/cache 2x, output 1.5x 단가가 적용됩니다. Cache write는 uncached input 단가의 1.25x입니다.
 
 `anthropic/claude-fable-5`는 1M context와 128K 최대 출력을 지원합니다. 1M tokens당 표준 단가는 input $10, cache read $1, 5분 cache write $12.50, 1시간 cache write $20, output $50입니다. qgrid는 Claude 응답의 5분/1시간 cache creation breakdown을 보존해 TTL별 단가를 각각 적용하며, breakdown이 없는 구버전 응답에서만 Claude Code가 subscription OAuth 경로에 자동 적용하는 1시간 TTL 단가로 fallback합니다. Fable은 adaptive thinking이 항상 켜져 있어야 하므로 qgrid는 이 모델의 adaptive thinking을 보존합니다.
+
+`anthropic/claude-fable-5-2`(2026-11-09 출시)는 Fable 5.1과 같은 1M context, 128K 최대 출력, 항상 켜진 adaptive thinking을 지원합니다. 1M tokens당 단가는 input $8, cache read $0.20(input의 0.025x, Fable 5.1과 같은 배율), 5분 cache write $10, 1시간 cache write $16, output $40입니다. 공식 문서상 thinking을 끌 수 없으므로 qgrid는 `thinking: false` 요청을 실행 전에 거부합니다.
 
 `anthropic/claude-fable-5-1`(2026-09-01 출시)은 Fable 5와 같은 1M context, 128K 최대 출력, 항상 켜진 adaptive thinking, input $10 / output $50 단가를 공유합니다. cache read만 Fable 5의 $1 대신 1M tokens당 $0.25(input의 0.025x)로 과금되며, cache write는 $12.50(5분)/$20(1시간)으로 같습니다. Fable 5.1의 API 수준 파괴적 변경(forced `tool_choice` 거부, 모델에 귀속된 thinking 블록)은 qgrid에 영향을 주지 않습니다. qgrid는 도구를 끈 Claude Code를 fresh 프로세스로 실행하고 히스토리를 텍스트로 평탄화해 전달하기 때문입니다.
 

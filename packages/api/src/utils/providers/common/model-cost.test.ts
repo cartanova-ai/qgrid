@@ -177,6 +177,7 @@ describe("calculateCostUsd", () => {
 
   it.each([
     // Fable 5.1 은 cache read 만 0.025x 특례($0.25), 나머지 배율은 표준과 같다.
+    ["claude-fable-5-2", 8, 40, 0.2, 16],
     ["claude-fable-5-1", 10, 50, 0.25, 20],
     ["claude-fable-5", 10, 50, 1, 20],
     ["claude-haiku-4-5", 1, 5, 0.1, 2],

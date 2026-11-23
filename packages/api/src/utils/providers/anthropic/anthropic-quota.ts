@@ -28,7 +28,7 @@ export async function readAnthropicQuotaUsage(
     const utilizationPct = fiveHour !== null && Number.isFinite(fiveHour) ? fiveHour : null;
     const weeklyUsages = [data.seven_day?.utilization];
 
-    // Fable 계열(5, 5.1)은 5시간 창과 별개로 usage credits 기반 7일 버킷도 소진될 수 있다.
+    // Fable 계열(5, 5.1, 5.2)은 5시간 창과 별개로 usage credits 기반 7일 버킷도 소진될 수 있다.
     if (isFableFamilyModel(model)) {
       weeklyUsages.push(data.seven_day_overage_included?.utilization);
     }

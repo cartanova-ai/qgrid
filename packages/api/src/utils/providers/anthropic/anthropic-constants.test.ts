@@ -30,6 +30,7 @@ describe("canonicalAnthropicModel", () => {
 
 describe("Anthropic 1M context policy", () => {
   it("지원 모델은 실측 확인된 exact set 만 true", () => {
+    expect(supports1MContext("claude-fable-5-2")).toBe(true);
     expect(supports1MContext("claude-fable-5-1")).toBe(true);
     expect(supports1MContext("claude-fable-5")).toBe(true);
     expect(supports1MContext("claude-opus-5")).toBe(true);
@@ -85,6 +86,7 @@ describe("Anthropic 1M context policy", () => {
 
 describe("Anthropic thinking policy", () => {
   it("Fable 5/5.1, Opus 5, Opus 5.5, Sonnet 5.5, Haiku 5.5 는 adaptive thinking 을 보존한다", () => {
+    expect(usesAdaptiveThinking("claude-fable-5-2")).toBe(true);
     expect(usesAdaptiveThinking("claude-fable-5-1")).toBe(true);
     expect(usesAdaptiveThinking("anthropic/claude-fable-5-1")).toBe(true);
     expect(usesAdaptiveThinking("claude-fable-5")).toBe(true);
@@ -105,6 +107,7 @@ describe("Anthropic thinking policy", () => {
 
 describe("Anthropic Fable family", () => {
   it("Fable 5/5.1 만 Fable 계열로 판정하고 prefix/[1m] 은 무시한다", () => {
+    expect(isFableFamilyModel("claude-fable-5-2")).toBe(true);
     expect(isFableFamilyModel("claude-fable-5-1")).toBe(true);
     expect(isFableFamilyModel("claude-fable-5")).toBe(true);
     expect(isFableFamilyModel("anthropic/claude-fable-5-1[1m]")).toBe(true);

@@ -217,6 +217,10 @@ function anthropicCosts(
 // 2026-10-07 에 Sonnet 5.5 cache read 가 $0.20→$0.10(0.05x)으로 인하됐다)
 const ANTHROPIC_COSTS = new Map<string, ModelCosts>(
   Object.entries({
+    // Fable 5.2 (2026-11-09 출시): $8/$40. cache read 는 Fable 5.1 과 같은 0.025x($0.20) 특례,
+    // cache write 는 표준 배율($10/$16). 1M 컨텍스트, adaptive thinking 상시(끌 수 없음).
+    // @see https://platform.claude.com/docs/en/models/fable-5-2/overview
+    "claude-fable-5-2": anthropicCosts(8, 40, { cachedInputTokens: 0.2 }),
     // Fable 5.1 (2026-09-01 출시): input/output 은 Fable 5 와 같고 cache read 만 0.025x($0.25) 특례.
     // @see https://platform.claude.com/docs/en/models/fable-5-1/overview
     "claude-fable-5-1": anthropicCosts(10, 50, { cachedInputTokens: 0.25 }),

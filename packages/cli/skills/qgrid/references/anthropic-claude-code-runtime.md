@@ -98,8 +98,8 @@ Important details:
 - Large system prompts over 64 KiB are written to a temporary file to avoid argv `E2BIG` — this
   same branch absorbs large injected schema contracts, so the old 64 KiB schema argv limit no
   longer applies (only the global 512 KiB caller-schema complexity limit remains).
-- One policy resolves the CLI thinking flag and effort before spawning. Omission preserves the existing model policy: Fable 5/5.1, Opus 5/5.5, Sonnet 5.5 and Haiku 5.5 keep adaptive defaults; other models use `--thinking disabled`. Explicit `true` uses `--thinking adaptive` and the normal effort resolution. Explicit `false` uses `--thinking disabled --effort low` only on supported models, ignoring caller/default effort. `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING` and `MAX_THINKING_TOKENS` are no longer sent. Do not reintroduce overlapping suppressors or inherit `CLAUDE_CODE_EFFORT_LEVEL`.
-- The 2026-10-10 off policy includes Haiku 4.5/5.5, Sonnet 4.5/4.6/5/5.5, and Opus 4.5/4.6/4.7/4.8/5. Fable 5/5.1 and Opus 5.5 reject disabled thinking at the backend. Off requests for unverified models fail before spawning instead of changing models or silently enabling thinking.
+- One policy resolves the CLI thinking flag and effort before spawning. Omission preserves the existing model policy: Fable 5/5.1/5.2, Opus 5/5.5, Sonnet 5.5 and Haiku 5.5 keep adaptive defaults; other models use `--thinking disabled`. Explicit `true` uses `--thinking adaptive` and the normal effort resolution. Explicit `false` uses `--thinking disabled --effort low` only on supported models, ignoring caller/default effort. `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING` and `MAX_THINKING_TOKENS` are no longer sent. Do not reintroduce overlapping suppressors or inherit `CLAUDE_CODE_EFFORT_LEVEL`.
+- The 2026-10-10 off policy includes Haiku 4.5/5.5, Sonnet 4.5/4.6/5/5.5, and Opus 4.5/4.6/4.7/4.8/5. Fable 5/5.1 and Opus 5.5 reject disabled thinking at the backend; Fable 5.2 (added 2026-11-23) is documented as always-on adaptive and is rejected by the same pre-spawn check, not by a live backend probe. Off requests for unverified models fail before spawning instead of changing models or silently enabling thinking.
 - Haiku 5.5 and Sonnet 5.5 require Claude Code 2.1.295 or newer for explicit false. Cache the result of `claude --version`; unknown or older versions return an input error. The policy computes `CLAUDE_CODE_EXTRA_BODY` containing only `thinking: {type: "disabled"}` for Haiku or `thinking: {type: "between_tools"}` for Sonnet, alongside `--thinking disabled --effort low`. Native delivery was verified on 2.1.295; invalid-type and Sonnet-disabled negative controls confirmed that the CLI applied the body field. `between_tools` disables pre-answer thinking but may emit thinking blocks between tools. Never inherit this env variable or expose arbitrary body overrides to callers.
 - Legacy environment suppression versus CLI-only disabled was compared on Sonnet 4.6 and Opus 4.8: both completed with zero thinking tokens in the short-text baseline. The comparison supports removing the duplicate suppressors without changing the omitted-option policy.
 
@@ -189,7 +189,7 @@ cacheCreationInputTokens1h = cache_creation.ephemeral_1h_input_tokens
 
 ## Fable refusal fallback
 
-Fable 5 and Fable 5.1 run upstream safety classifiers. A refusal is a successful HTTP response with
+Fable 5, 5.1, and 5.2 run upstream safety classifiers. A refusal is a successful HTTP response with
 `stop_reason: "refusal"`, not an HTTP/provider error, and can happen before output or after
 partial streamed output. Claude Code handles the refusal fallback and can retry on another Opus
 model; the current CLI routes by refusal category (bio → Opus 5, cyber → Opus 4.8). Do not
@@ -258,6 +258,7 @@ Model normalization strips provider prefix and `[1m]` for canonical model/cost k
 
 qgrid's exact 1M support set currently includes:
 
+- `claude-fable-5-2`
 - `claude-fable-5-1`
 - `claude-fable-5`
 - `claude-opus-5`
