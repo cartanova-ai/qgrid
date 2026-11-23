@@ -2910,6 +2910,15 @@ class QgridFrameClass extends BaseFrameClass {
   @api({ httpMethod: "POST", clients: ["axios", "tanstack-mutation"] })
   async liveCall(params: LiveCallInput): Promise<LiveCallOutput> {
     const input = parseMediaInput(LiveCallInput, params);
+
+    // The instructions also go out as the first initial item (buildLiveSession), so with them the
+    // caller's history may take one item fewer than OpenAI's 128.
+    if (input.instructions && (input.history?.length ?? 0) > 127) {
+      throw new BadRequestException(
+        SD("qgrid.invalidInput")("history holds at most 127 items when instructions are set"),
+      );
+    }
+
     const dispatcher = openaiVoice();
     const selection = await resolveMediaTokenSelection("openai", input.tokenName);
     const voice = input.voice ?? OPENAI_LIVE_DEFAULT_VOICE;

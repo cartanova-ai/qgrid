@@ -146,8 +146,18 @@ export function buildLiveSession(options: {
     delegation: { type: "client" },
   };
 
-  if (options.history?.length) {
-    session.initial_items = options.history.map(({ role, text }) => ({
+  // The ChatGPT backend does not apply session.instructions to GPT-Live: on 2026-11-23 a session with
+  // only instructions answered as the default assistant and said the setting had not reached it,
+  // while the same text as a developer initial item was followed (persona, English-only reply to
+  // Korean speech). Codex sends instructions the same way, so the field stays and the text also
+  // leads the initial items.
+  const items: LiveHistoryMessage[] = [
+    ...(options.instructions ? [{ role: "developer" as const, text: options.instructions }] : []),
+    ...(options.history ?? []),
+  ];
+
+  if (items.length) {
+    session.initial_items = items.map(({ role, text }) => ({
       type: "message",
       role,
       content: [{ type: role === "assistant" ? "output_text" : "input_text", text }],

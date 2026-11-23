@@ -2674,6 +2674,11 @@ describe("QgridFrame Grok media and voice (U11)", () => {
       await expect(QgridFrame.liveCall({ sdp: "v=0", history: tooLong })).rejects.toMatchObject({
         statusCode: 400,
       });
+      // The instructions take one initial item, so with them 128 history items are too many.
+      const full = tooLong.slice(1);
+      await expect(
+        QgridFrame.liveCall({ sdp: "v=0", instructions: "Be brief.", history: full }),
+      ).rejects.toMatchObject({ statusCode: 400 });
     });
 
     it("tells the voice when a delegation fails instead of leaving it waiting", async () => {
