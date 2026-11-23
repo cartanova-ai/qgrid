@@ -362,7 +362,7 @@ The Codex catalog fetched on 2026-09-23 advertises a 272K context window for Ast
 
 The Codex catalog fetched on 2026-09-07 advertises a 272K context window for all three models. Sol and Terra support reasoning effort through `ultra`; Luna supports it through `max`. Backend defaults are `low` for Sol and `medium` for Terra and Luna, while qgrid's SDK defaults to `low` for all three. The public API model pages for [Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol), [Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra), and [Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna) separately list 1.05M context, 922K maximum input, and 128K maximum output; these do not establish the subscription route's limits.
 
-Qgrid uses [Standard API pricing](https://developers.openai.com/api/docs/pricing) for cost estimates. Sol's listed promotional pricing is available at least through 2026-11-21; no later rate is assumed. Input over 272K tokens applies 2x input/cache and 1.5x output rates to the full request. Cache writes cost 1.25x the uncached input rate.
+Qgrid uses [Standard API pricing](https://developers.openai.com/api/docs/pricing) for cost estimates. Sol's listed promotional pricing ends on 2026-11-30; no later rate is assumed until one is published. Input over 272K tokens applies 2x input/cache and 1.5x output rates to the full request. Cache writes cost 1.25x the uncached input rate.
 
 ---
 

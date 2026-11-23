@@ -361,7 +361,7 @@ QGRID_PROJECT_NAME=my-service   # request log 프로젝트 라벨
 
 2026-09-07에 조회한 Codex 카탈로그는 세 모델 모두 272K context window를 제공합니다. Sol과 Terra는 `ultra`까지, Luna는 `max`까지 reasoning effort를 지원합니다. 백엔드 기본값은 Sol이 `low`, Terra와 Luna가 `medium`이며, qgrid SDK의 기본값은 세 모델 모두 `low`입니다. [Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol), [Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra), [Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna)의 공개 API 문서는 별도로 1.05M context, 최대 입력 922K, 최대 출력 128K를 명시합니다. 이 공개 API 한도를 구독 경로의 한도로 간주하지 않습니다.
 
-Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/docs/pricing)를 사용합니다. Sol의 표에 명시된 프로모션 가격은 최소 2026-11-21까지 제공되며, 이후 단가는 가정하지 않습니다. 입력이 272K tokens를 넘으면 요청 전체에 input/cache 2x, output 1.5x 단가가 적용됩니다. Cache write는 uncached input 단가의 1.25x입니다.
+Qgrid 비용 추정에는 [표준 API 단가](https://developers.openai.com/api/docs/pricing)를 사용합니다. Sol의 표에 명시된 프로모션 가격은 2026-11-30에 끝나며, 이후 단가는 공시되기 전까지 가정하지 않습니다. 입력이 272K tokens를 넘으면 요청 전체에 input/cache 2x, output 1.5x 단가가 적용됩니다. Cache write는 uncached input 단가의 1.25x입니다.
 
 ---
 

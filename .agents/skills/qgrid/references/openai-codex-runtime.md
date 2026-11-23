@@ -148,9 +148,10 @@ Codex default effort is `low` for GPT-6.2 Astra/Sol, GPT-6.1 Sol/Terra and GPT-5
 GPT-5.5 is retired from the Codex/ChatGPT route (announced for 2026-10-14; on 2026-11-13 a live request through qgrid returned `The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.`; the API-key route is unaffected); it stays in the SDK type and price table but is excluded from chat presets.
 The SDK default remains `low` regardless of the backend default.
 
-[Sol's model page](https://developers.openai.com/api/docs/models/gpt-5.6-sol) guarantees promotional
-pricing at least through 2026-11-21. That is not an announced expiration date. Keep the latest verified
-rates until another official rate is published; never guess a future reversion. Above 272K input,
+Sol's promotional pricing ends 2026-11-30 (pricing page footnote, checked 2026-11-23; see the
+[model page](https://developers.openai.com/api/docs/models/gpt-5.6-sol)). The rate after that is not published.
+Keep the latest verified rates until another official rate is published; never guess a future reversion.
+All OpenAI rows in `model-cost.ts` were re-verified against the pricing page on 2026-11-23 without changes. Above 272K input,
 GPT-6, GPT-5.6 and GPT-5.5 apply 2x input/cache and 1.5x output to the full request.
 
 Changing the price table affects new calculations and legacy estimates that resolve rates on read.
