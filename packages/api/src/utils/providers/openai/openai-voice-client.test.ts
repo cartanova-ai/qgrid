@@ -625,7 +625,7 @@ describe("OpenAIVoiceClient.createLiveCall", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       sdp: "v=0\r\noffer",
       session: {
-        model: "gpt-live-1-codex",
+        model: "gpt-live-1.1-codex",
         instructions: "Be brief.",
         audio: { output: { voice: "hanul" } },
         delegation: { type: "client" },

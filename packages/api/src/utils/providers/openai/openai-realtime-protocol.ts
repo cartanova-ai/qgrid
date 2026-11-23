@@ -98,10 +98,13 @@ export const OPENAI_LIVE_WS_URL = "wss://api.openai.com/v1/live" as const;
 export const OPENAI_LIVE_MODEL = "gpt-live-1";
 
 /**
- * Sent as session.model, as Codex does (DEFAULT_FRAMELESS_REALTIME_MODEL). The backend ignores the
- * field on this route: made-up names opened a session too (2026-11-10).
+ * Sent as session.model, as Codex does (DEFAULT_FRAMELESS_REALTIME_MODEL, gpt-live-1.1-codex since
+ * openai/codex b05266d6, 2026-11-13). The backend ignores the field on this route: made-up names,
+ * gpt-realtime-2.1 and an empty string all opened sessions that held the same conversation, and no
+ * event names the serving model (backend_model_usage stays empty) (2026-11-10, rechecked 2026-11-23).
+ * The served model is presumably Codex's current default, but it cannot be confirmed.
  */
-const OPENAI_LIVE_WIRE_MODEL = "gpt-live-1-codex";
+const OPENAI_LIVE_WIRE_MODEL = "gpt-live-1.1-codex";
 
 export const OPENAI_LIVE_DEFAULT_VOICE = "cove";
 
