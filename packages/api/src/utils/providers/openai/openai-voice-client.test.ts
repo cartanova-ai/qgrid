@@ -629,10 +629,19 @@ describe("OpenAIVoiceClient.createLiveCall", () => {
         instructions: "Be brief.",
         audio: { output: { voice: "hanul" } },
         delegation: { type: "client" },
+        // The backend ignores session.instructions, so the same text leads the initial items
+        initial_items: [
+          { type: "message", role: "developer", content: [{ type: "input_text", text: "Be brief." }] },
+        ],
       },
     });
 
-    expect(buildLiveSession({ voice: "cove" })).toMatchObject({ instructions: "" });
+    expect(buildLiveSession({ voice: "cove" })).toEqual({
+      model: "gpt-live-1.1-codex",
+      instructions: "",
+      audio: { output: { voice: "cove" } },
+      delegation: { type: "client" },
+    });
     expect(call).toMatchObject({ sdp: "v=0", callId: "rtc_live" });
     expect(call.quotaHeaders.get("x-codex-primary-used-percent")).toBe("88");
     expect(ws.calls[0]?.url).toBe(`${OPENAI_LIVE_WS_URL}/rtc_live`);
@@ -722,6 +731,7 @@ describe("OpenAIVoiceClient.createLiveCall", () => {
 
     await client.createLiveCall(credentials, {
       sdp: "v=0",
+      instructions: "Speak English.",
       history: [
         { role: "developer", text: "Stay in character as Kuma." },
         { role: "user", text: "My name is Dongseon." },
@@ -731,6 +741,8 @@ describe("OpenAIVoiceClient.createLiveCall", () => {
 
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body)).session.initial_items).toEqual([
+      // The instructions come first, then the caller's history in order
+      { type: "message", role: "developer", content: [{ type: "input_text", text: "Speak English." }] },
       { type: "message", role: "developer", content: [{ type: "input_text", text: "Stay in character as Kuma." }] },
       { type: "message", role: "user", content: [{ type: "input_text", text: "My name is Dongseon." }] },
       { type: "message", role: "assistant", content: [{ type: "output_text", text: "Nice to meet you!" }] },
