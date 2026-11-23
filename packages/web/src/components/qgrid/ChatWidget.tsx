@@ -12,7 +12,6 @@ import XIcon from "~icons/lucide/x";
 import chatIcon from "@/assets/chat-icon.png";
 import {
   Effort,
-  QGRID_MODEL_GROUPS,
   type QgridThreadCoord,
   type QueryInput,
   type QueryOutput,
@@ -31,6 +30,7 @@ import {
   type ChatConfig,
 } from "./chat-token-selection";
 import { ChatImagePreview } from "./ChatImagePreview";
+import { ModelOptions } from "./ModelOptions";
 
 const CHAT_PROJECT_NAME = "qgrid_chat";
 const DEFAULT_MODEL = "anthropic/claude-fable-5-1";
@@ -453,15 +453,7 @@ export function ChatWidget() {
                   disabled={busy}
                   className="min-w-0 flex-1 rounded-xl border border-sand-200/80 bg-white px-2 py-1.5 text-[12px] text-sand-800 focus:outline-none focus:border-sienna-300 disabled:opacity-50"
                 >
-                  {QGRID_MODEL_GROUPS.map((group) => (
-                    <optgroup key={group.label} label={group.label}>
-                      {group.models.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
+                  <ModelOptions selected={model} />
                 </select>
                 <select
                   value={effort}
