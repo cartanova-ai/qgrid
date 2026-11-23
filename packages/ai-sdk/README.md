@@ -765,6 +765,7 @@ type QgridSupportedModel =
   | "openai/gpt-5.3-codex"
   | "openai/gpt-5.3-codex-spark"
   // Anthropic
+  | "anthropic/claude-fable-5-2"
   | "anthropic/claude-fable-5-1"
   | "anthropic/claude-fable-5"
   | "anthropic/claude-haiku-4-5"
@@ -816,6 +817,8 @@ The Codex catalog fetched on 2026-09-07 advertises a 272K context window for all
 Qgrid uses [Standard API pricing](https://developers.openai.com/api/docs/pricing) for cost estimates. Sol's listed promotional pricing ends on 2026-11-30; no later rate is assumed until one is published. Input over 272K tokens applies 2x input/cache and 1.5x output rates to the full request. Cache writes cost 1.25x the uncached input rate.
 
 `anthropic/claude-fable-5` has a 1M context window and 128K max output. Its standard prices per 1M tokens are $10 input, $1 cache read, $12.50 five-minute cache write, $20 one-hour cache write, and $50 output. qgrid preserves Claude's 5m/1h cache-creation breakdown and prices each TTL separately; only legacy responses without that breakdown fall back to the one-hour TTL automatically selected by Claude Code on subscription OAuth. Fable requires always-on adaptive thinking, so qgrid preserves adaptive thinking for this model.
+
+`anthropic/claude-fable-5-2` (released 2026-11-09) has the same 1M context window, 128K max output, and always-on adaptive thinking as Fable 5.1. Its prices per 1M tokens are $8 input, $0.20 cache read (0.025x the input price, the same multiplier as Fable 5.1), $10 five-minute cache write, $16 one-hour cache write, and $40 output. The API docs state that its thinking cannot be turned off, so qgrid rejects `thinking: false` before spawning.
 
 `anthropic/claude-fable-5-1` (released 2026-09-01) shares Fable 5's 1M context window, 128K max output, always-on adaptive thinking, and $10 input / $50 output pricing. Its cache reads cost $0.25 per 1M tokens (0.025x the input price) instead of Fable 5's $1; cache writes stay at $12.50 (5m) and $20 (1h). Fable 5.1's API-level breaking changes (forced `tool_choice` rejection, model-bound thinking blocks) do not affect qgrid, which runs Claude Code with tools disabled and replays history as flattened text in a fresh process.
 

@@ -257,6 +257,7 @@ export type QgridSupportedModel =
   | "openai/gpt-5.4-mini"
   | "openai/gpt-5.3-codex"
   | "openai/gpt-5.3-codex-spark"
+  | "anthropic/claude-fable-5-2"
   | "anthropic/claude-fable-5-1"
   | "anthropic/claude-fable-5"
   | "anthropic/claude-haiku-4-5"
