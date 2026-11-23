@@ -637,7 +637,7 @@ app.post("/live", async (req, res) => {
 - Voices (`QGRID_LIVE_VOICES`, type `QgridLiveVoice`, also from the `/realtime` entry): `cove` (default) `juniper maple spruce ember vale breeze arbor sol aube bubbie haetsal hanul himari leher miko neer porto rindo rio rivage selva sonna tinta viola`. The realtime speech voices (`marin` and others) do not apply; the server rejects them with HTTP 400, because OpenAI would accept the call and then never start the session.
 - Data channel events: `turn.created`, `turn.delta` and `turn.done` carry each turn's `role` and `transcript` as it is spoken; `session.usage.updated` and `session.closed` carry `usage.audio_duration_ms`. A session ends on its own two hours after it starts.
 - Call the endpoint from your server, not from the browser: qgrid has no caller authentication and sends no CORS headers.
-- The upstream ignores the requested model name, so the serving model cannot be confirmed; Codex itself sends `gpt-live-1-codex`, as qgrid does. Caller-defined tools are not exposed: the voice's delegations run on qgrid's chosen model only.
+- The upstream ignores the requested model name, so the serving model cannot be confirmed; Codex itself sends `gpt-live-1.1-codex` (its default since 2026-11-13), as qgrid does, so the session presumably runs GPT-Live 1.1. Caller-defined tools are not exposed: the voice's delegations run on qgrid's chosen model only.
 
 ## Decisions (OpenAI, experimental)
 

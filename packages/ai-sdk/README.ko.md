@@ -625,7 +625,7 @@ app.post("/live", async (req, res) => {
 - 음성(`QGRID_LIVE_VOICES`, 타입 `QgridLiveVoice`, `/realtime` 진입점에서도 export): `cove`(기본) `juniper maple spruce ember vale breeze arbor sol aube bubbie haetsal hanul himari leher miko neer porto rindo rio rivage selva sonna tinta viola`. realtime 음성 합성용 음성(`marin` 등)은 쓸 수 없습니다. OpenAI가 call은 받아 주지만 세션이 시작되지 않기 때문에 서버가 HTTP 400으로 막습니다.
 - 데이터 채널 이벤트: `turn.created`, `turn.delta`, `turn.done`이 말하는 대로 각 턴의 `role`과 `transcript`를 전하고, `session.usage.updated`와 `session.closed`가 `usage.audio_duration_ms`를 전합니다. 세션은 시작 2시간 뒤 스스로 끝납니다.
 - 엔드포인트는 브라우저가 아니라 앱 서버에서 부르세요. qgrid에는 호출자 인증이 없고 CORS 헤더도 보내지 않습니다.
-- 업스트림이 요청한 모델 이름을 무시해서 실제 모델은 확인할 수 없습니다. Codex도 qgrid도 `gpt-live-1-codex`를 보냅니다. 호출자가 정의한 도구는 열지 않았습니다. 음성의 위임은 qgrid가 고른 모델로만 처리합니다.
+- 업스트림이 요청한 모델 이름을 무시해서 실제 모델은 확인할 수 없습니다. Codex도 qgrid도 `gpt-live-1.1-codex`(Codex 기본값, 2026-11-13부터)를 보내므로 GPT-Live 1.1로 동작할 것으로 봅니다. 호출자가 정의한 도구는 열지 않았습니다. 음성의 위임은 qgrid가 고른 모델로만 처리합니다.
 
 ## Decisions (OpenAI, 실험 기능)
 
