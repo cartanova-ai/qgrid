@@ -687,6 +687,10 @@ type LiveTurn = { id: string; role: string; text: string };
 
 type LiveSession = { pc: RTCPeerConnection; channel: RTCDataChannel; mic: MediaStream };
 
+// GPT-Live speaks first when told to, so a preview needs no microphone (checked 2026-11-23).
+const PREVIEW_INSTRUCTIONS =
+  "As soon as the session starts, without waiting for the user, say exactly this one Korean sentence and nothing else: 안녕하세요, 이 목소리로 대화하게 됩니다.";
+
 const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
 
 /** Ends the session at once; a peer that only disconnects keeps it (and its billed time) ~30 s. */
@@ -715,6 +719,7 @@ function LivePanel() {
   const [error, setError] = useState<string>();
   const [turns, setTurns] = useState<LiveTurn[]>([]);
   const [requestLogId, setRequestLogId] = useState<number>();
+  const [previewing, setPreviewing] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
   const session = useRef<LiveSession | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -774,6 +779,69 @@ function LivePanel() {
       setTurns((items) =>
         items.map((item) => (item.id === turnId ? { ...item, text: item.text + delta } : item)),
       );
+    }
+  };
+
+  // One greeting in the selected voice: an unlogged session without the microphone, closed after the reply.
+  const preview = async () => {
+    setPreviewing(true);
+    setError(undefined);
+    const pc = new RTCPeerConnection();
+    const channel = pc.createDataChannel("oai-events");
+    // A receive-only peer never gets a reply; a silent outgoing track does (2026-11-23).
+    const silence = new AudioContext();
+    const output = silence.createMediaStreamDestination();
+    const tone = silence.createOscillator();
+    // Zero gain still sends frames; an unconnected destination may send none.
+    tone.connect(new GainNode(silence, { gain: 0 })).connect(output);
+    tone.start();
+    void silence.resume();
+    const mic = output.stream;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const finish = () => {
+      clearTimeout(timer);
+      endLiveSession({ pc, channel, mic });
+      void silence.close();
+      setPreviewing(false);
+    };
+
+    mic.getTracks().forEach((track) => pc.addTrack(track));
+    pc.addEventListener("track", (event) => {
+      const audio = new Audio();
+      audio.srcObject = new MediaStream([event.track]);
+      void audio.play();
+    });
+    channel.addEventListener("message", (event) => {
+      try {
+        const { type, turn } = LiveEvent.parse(JSON.parse(String(event.data)));
+
+        // The transcript ends slightly before the audio does.
+        if (type === "turn.done" && turn?.role === "assistant") timer = setTimeout(finish, 1500);
+      } catch {
+        // Not an event this preview needs.
+      }
+    });
+
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const out = await liveCall.mutateAsync({
+        params: {
+          sdp: offer.sdp ?? "",
+          voice,
+          instructions: PREVIEW_INSTRUCTIONS,
+          logger: false,
+          projectName: PROJECT_NAME,
+        },
+      });
+
+      await pc.setRemoteDescription({ type: "answer", sdp: out.sdp });
+      timer = setTimeout(finish, 20_000);
+    } catch (e) {
+      finish();
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -851,18 +919,33 @@ function LivePanel() {
       <div className="flex flex-col gap-3 p-4">
         <div className="grid grid-cols-2 gap-2">
           <Field label="Voice">
-            <select
-              value={voice}
-              onChange={(e) => setVoice(e.target.value)}
-              disabled={status !== "idle"}
-              className={CONTROL}
-            >
-              {OPENAI_LIVE_VOICES.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-1">
+              <select
+                value={voice}
+                onChange={(e) => setVoice(e.target.value)}
+                disabled={status !== "idle" || previewing}
+                className={`${CONTROL} min-w-0 flex-1`}
+              >
+                {OPENAI_LIVE_VOICES.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => void preview()}
+                disabled={status !== "idle" || previewing}
+                title={`Play a "${voice}" sample (a few seconds, not logged)`}
+                className="p-1 text-sand-400 hover:text-sienna-500 disabled:opacity-50"
+              >
+                {previewing ? (
+                  <LoaderIcon className="size-3.5 animate-spin" />
+                ) : (
+                  <PlayIcon className="size-3.5" />
+                )}
+              </button>
+            </div>
           </Field>
           <Field label="Instructions">
             <input
