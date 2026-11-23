@@ -37,8 +37,10 @@ availability or identical limits on qgrid's ChatGPT-subscription route.
    `packages/api/src/utils/providers/common/model-cost.ts`. Preserve existing historical model
    rows. The shared calculator also prices request logs; no separate dashboard price table is needed.
 4. Add `openai/<slug>` to `QgridSupportedModel` in `packages/ai-sdk/src/index.types.ts` and
-   `MODEL_PRESET_GROUPS` in `packages/web/src/components/qgrid/ChatWidget.tsx`. The web package
-   does not import the SDK model union. Keep existing defaults unless a default change is requested.
+   `QGRID_MODEL_GROUPS` in `packages/api/src/application/qgrid/qgrid.types.ts`. That list feeds the
+   `/api/qgrid/models` catalog, which the dashboard chat and voice model selectors read at runtime
+   (`ModelOptions.tsx`), so no dashboard component changes are needed. The web package does not import
+   the SDK model union. Keep existing defaults unless a default change is requested.
 5. Verify model ID and effort propagation through SDK generation/streaming, provider dispatch,
    Responses construction, and returned model metadata. New models use the existing OpenAI
    route; do not add a second transport or enable built-in tools automatically.

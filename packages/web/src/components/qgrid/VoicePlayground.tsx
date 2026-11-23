@@ -16,7 +16,6 @@ import {
   type LiveHistoryItem,
   OPENAI_LIVE_VOICES,
   OPENAI_SPEECH_VOICES,
-  QGRID_MODEL_GROUPS,
   type SpeakInput,
   type SpeakOutput,
   type TranscribeInput,
@@ -24,6 +23,7 @@ import {
 import { QgridService } from "@/services/services.generated";
 
 import { CodePanel } from "./CodePanel";
+import { ModelOptions } from "./ModelOptions";
 import { TimedPlayer, type TimedWord } from "./TimedPlayer";
 import { audioToWavBase64, bytesToBase64 } from "./voice-audio";
 import { liveExample, sttExample, ttsExample } from "./voice-sdk-examples";
@@ -880,15 +880,7 @@ function LivePanel() {
               disabled={status !== "idle"}
               className={CONTROL}
             >
-              {QGRID_MODEL_GROUPS.map((group) => (
-                <optgroup key={group.label} label={group.label}>
-                  {group.models.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
+              <ModelOptions selected={delegateModel} />
             </select>
           </Field>
           <div className="flex items-end gap-3">
