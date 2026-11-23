@@ -35,7 +35,7 @@ export interface ModelCosts {
 
 // ── OpenAI ─────────────────────────────────────────────────────────
 //
-// Standard pricing verified 2026-09-23 (기존 모델 단가 변동 없음): https://developers.openai.com/api/docs/pricing
+// Standard pricing re-verified 2026-11-23 for every OpenAI row below (변동 없음): https://developers.openai.com/api/docs/pricing
 // 신모델 출시마다 단가가 바뀌므로(5.2→5.4→5.5) 모델 추가 시 반드시 공식 페이지 재확인해야함
 
 // GPT-5.4에서 처음 도입된 long-context 할증 (5.2/5.3-codex는 해당 없음, 5.4-mini/nano는 공식 표에서 long-context 단가 없음)
@@ -137,8 +137,8 @@ const OPENAI_COSTS = new Map<string, OpenAIModelSpec>(
     // @see https://developers.openai.com/api/docs/models/gpt-5.6-sol
     // @see https://developers.openai.com/api/docs/models/gpt-5.6-terra
     // @see https://developers.openai.com/api/docs/models/gpt-5.6-luna
-    // Sol promotional rates are available at least through 2026-11-21.
-    // No confirmed end date/replacement rate: recheck official pricing instead of auto-reverting.
+    // Sol's promotional pricing ends 2026-11-30 (pricing page footnote, checked 2026-11-23). The rate after
+    // that is not published: recheck official pricing in December instead of guessing a reversion.
     "gpt-5.6-sol": {
       maxEffort: "ultra",
       inputTokens: 4,
@@ -213,8 +213,8 @@ function anthropicCosts(
   return costs;
 }
 
-// 가격 출처: https://platform.claude.com/docs/en/about-claude/pricing (2026-10-08 확인. 2026-10-07 에 Sonnet 5.5
-// cache read 가 $0.20→$0.10(0.05x)으로 인하됐고, 그 외 기존 모델 단가는 변동 없음)
+// 가격 출처: https://platform.claude.com/docs/en/about-claude/pricing (2026-11-23 재확인, 아래 행 모두 변동 없음.
+// 2026-10-07 에 Sonnet 5.5 cache read 가 $0.20→$0.10(0.05x)으로 인하됐다)
 const ANTHROPIC_COSTS = new Map<string, ModelCosts>(
   Object.entries({
     // Fable 5.1 (2026-09-01 출시): input/output 은 Fable 5 와 같고 cache read 만 0.025x($0.25) 특례.
