@@ -617,6 +617,16 @@ export const TranscribeStreamStart = z.object({
   prompt: z.string().min(1).max(2_000).optional(),
   // Mono PCM16 at this rate; 16 kHz is resampled to the upstream 24 kHz.
   sampleRate: z.union([z.literal(16_000), z.literal(24_000)]),
+  // When the server ends a segment on quiet (defaults 1500 / 600 / 2000 ms): after pauseMs of quiet
+  // once the segment holds minSpeechMs of speech, or after longPauseMs of quiet with any speech.
+  // Callers that judge end of turn themselves can cut short (e.g. 300 / 300 / 0) and join segments.
+  commit: z
+    .object({
+      pauseMs: z.number().int().min(200).max(5_000).optional(),
+      longPauseMs: z.number().int().min(200).max(5_000).optional(),
+      minSpeechMs: z.number().int().min(0).max(5_000).optional(),
+    })
+    .optional(),
   ...MediaCallOptions,
 });
 

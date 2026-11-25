@@ -3,6 +3,7 @@ import {
   type OpenAITranscriptionStream,
   type OpenAITranscriptionStreamEvent,
 } from "../../utils/providers/openai/openai-voice-client";
+import { TranscribeStreamStart } from "./qgrid.types";
 import { CommitPolicy, type StreamOutEvent, TranscribeStreamSession } from "./transcribe-stream";
 
 const RATE = 24_000;
@@ -43,6 +44,39 @@ describe("CommitPolicy", () => {
     for (let i = 0; i < 8; i++) p.push(frame(0.2)); // 0.8 s, under the minimum
     const out = Array.from({ length: 20 }, () => p.push(frame(0)));
     expect(out.indexOf("commit")).toBe(19); // 2 s of quiet
+  });
+
+  it("commits a short answer after a short pause when the caller shortens the timers", () => {
+    const short = new CommitPolicy({ pauseMs: 300, longPauseMs: 300, minSpeechMs: 0 });
+    const byDefault = new CommitPolicy();
+    for (const p of [short, byDefault]) for (let i = 0; i < 2; i++) p.push(frame(0.2)); // 0.2 s "Yes."
+    const out = Array.from({ length: 20 }, () => short.push(frame(0)));
+    const outDefault = Array.from({ length: 20 }, () => byDefault.push(frame(0)));
+    expect(out.indexOf("commit")).toBe(2); // 0.3 s of quiet
+    expect(outDefault.indexOf("commit")).toBe(19); // still 2 s by default
+  });
+});
+
+describe("TranscribeStreamStart commit", () => {
+  const start = { sampleRate: 16_000 } as const;
+
+  it("accepts timers in range and leaves them out by default", () => {
+    expect(TranscribeStreamStart.parse(start).commit).toBeUndefined();
+    expect(
+      TranscribeStreamStart.parse({ ...start, commit: { pauseMs: 300, longPauseMs: 300, minSpeechMs: 0 } })
+        .commit,
+    ).toEqual({ pauseMs: 300, longPauseMs: 300, minSpeechMs: 0 });
+  });
+
+  it.each([
+    { pauseMs: 199 },
+    { pauseMs: 5_001 },
+    { longPauseMs: 100 },
+    { minSpeechMs: -1 },
+    { minSpeechMs: 5_001 },
+    { pauseMs: 300.5 },
+  ])("rejects %o", (commit) => {
+    expect(TranscribeStreamStart.safeParse({ ...start, commit }).success).toBe(false);
   });
 });
 
@@ -97,6 +131,36 @@ describe("TranscribeStreamSession", () => {
       { event: "segment", data: { segmentId: "s1", text: "다음 안건입니다.", startMs: 2600, endMs: 5200 } },
     ]);
     expect(session.segments.map((s) => s.text)).toEqual(["안녕하세요.", "다음 안건입니다."]);
+  });
+
+  it("records the time from commit to final text for the request log only", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const up = fakeUpstream();
+      const out: StreamOutEvent[] = [];
+      const session = new TranscribeStreamSession(up.opens, (e) => out.push(e), {
+        pauseMs: 300,
+        longPauseMs: 300,
+        minSpeechMs: 0,
+      });
+      await session.start();
+      await speak(session, 200, 300); // the policy commits on the last quiet frame
+      expect(up.calls).toContain("commit");
+      vi.advanceTimersByTime(250);
+      up.send({ type: "committed", itemId: "e" });
+      up.send({ type: "completed", itemId: "e", text: "Yes." });
+
+      expect(session.segments).toEqual([
+        { segmentId: "s0", text: "Yes.", startMs: 0, endMs: 500, commitToTextMs: 250 },
+      ]);
+      expect(out.at(-1)).toEqual({
+        event: "segment",
+        data: { segmentId: "s0", text: "Yes.", startMs: 0, endMs: 500 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clears quiet-only audio instead of committing it", async () => {

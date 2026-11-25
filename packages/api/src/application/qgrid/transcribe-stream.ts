@@ -94,7 +94,14 @@ export type StreamOutEvent =
   | { event: "segment"; data: { segmentId: string; text: string; startMs: number; endMs: number } }
   | { event: "error"; data: { message: string; fatal: boolean } };
 
-export type StreamSegment = { segmentId: string; text: string; startMs: number; endMs: number };
+export type StreamSegment = {
+  segmentId: string;
+  text: string;
+  startMs: number;
+  endMs: number;
+  /** Wall-clock ms from sending the commit to receiving the final text; request log only. */
+  commitToTextMs?: number;
+};
 
 /** Opens (or reopens) the upstream stream; events must be routed to `onEvent`. */
 export type OpenUpstream = (
@@ -107,6 +114,8 @@ type PendingSegment = {
   /** First frame above the silence threshold; reported as the segment start. */
   speechStartMs?: number;
   endMs?: number;
+  /** Date.now() when the commit went upstream. */
+  committedAt?: number;
   text?: string;
 };
 
@@ -197,6 +206,7 @@ export class TranscribeStreamSession {
     }
 
     this.awaitingAck.push(segment.index);
+    segment.committedAt = Date.now();
     await upstream.commit();
   }
 
@@ -286,14 +296,18 @@ export class TranscribeStreamSession {
           this.emit({ event: "error", data: { message: event.message, fatal: false } });
 
         if (segment.text) {
-          const out: StreamSegment = {
+          const out = {
             segmentId: `s${segment.index}`,
             text: segment.text,
             startMs: segment.speechStartMs ?? segment.startMs,
             endMs: segment.endMs ?? Math.round(ms(this.receivedSamples)),
           };
 
-          this.segments.push(out);
+          this.segments.push(
+            segment.committedAt === undefined
+              ? out
+              : { ...out, commitToTextMs: Date.now() - segment.committedAt },
+          );
           this.emit({ event: "segment", data: out });
         }
 

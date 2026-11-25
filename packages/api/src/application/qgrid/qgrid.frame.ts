@@ -1616,19 +1616,23 @@ async function startTranscribeStream(
   const token = { name: "" };
 
   // Every (re)open picks a token the usual way and refreshes a 401 once.
-  const session = new TranscribeStreamSession(async (onEvent) => {
-    const opened = await dispatcher.startTranscriptionStream({
-      model: id,
-      language: input.language,
-      prompt: input.prompt,
-      onEvent,
-      ...selection,
-    });
+  const session = new TranscribeStreamSession(
+    async (onEvent) => {
+      const opened = await dispatcher.startTranscriptionStream({
+        model: id,
+        language: input.language,
+        prompt: input.prompt,
+        onEvent,
+        ...selection,
+      });
 
-    token.name = opened.tokenName;
+      token.name = opened.tokenName;
 
-    return opened.result;
-  }, publish);
+      return opened.result;
+    },
+    publish,
+    input.commit,
+  );
 
   const run: TranscribeStreamRun = {
     session,
@@ -1702,6 +1706,7 @@ async function finishTranscribeStream(
           model: run.route,
           transport: "realtime-ws-stream",
           sampleRate: run.sampleRate,
+          ...(run.input.commit && { commit: run.input.commit }),
           language: run.input.language,
           prompt: run.input.prompt,
           audioMs,
