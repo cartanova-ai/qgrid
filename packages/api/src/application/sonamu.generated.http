@@ -227,6 +227,7 @@ Content-Type: application/json
       "image_cost_method": null,
       "service_tier": null,
       "effort": null,
+      "thinking": null,
       "history": null,
       "input_images": null,
       "tools": null,

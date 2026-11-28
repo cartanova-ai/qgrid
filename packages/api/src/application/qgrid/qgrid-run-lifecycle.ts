@@ -127,6 +127,7 @@ export async function beforeQuery(args: QueryInput): Promise<{
         : args.system,
       requested_model_name: args.model,
       effort: args.thinking === false ? undefined : args.effort,
+      thinking: args.thinking,
       service_tier: args.model?.startsWith("openai/") ? args.serviceTier : undefined,
       project_name: args.projectName,
       history: filterHistoryForStorage(args.history),

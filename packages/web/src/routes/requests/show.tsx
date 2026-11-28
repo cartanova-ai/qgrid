@@ -385,6 +385,11 @@ function HeaderBar({ data }: { data: RequestLog }) {
           effort={data.effort}
         </span>
       )}
+      {data.thinking !== null && (
+        <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-sand-100 text-sand-500 font-mono">
+          thinking={data.thinking ? "on" : "off"}
+        </span>
+      )}
       {data.project_name && (
         <span className="text-[12px] text-sand-400">· project={data.project_name}</span>
       )}

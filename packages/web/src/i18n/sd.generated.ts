@@ -235,6 +235,8 @@ const entityLabels = {
   "entity.RequestLog.image_cost_method": "이미지 비용 계산 방식",
   "entity.RequestLog.service_tier": "Requested OpenAI service tier",
   "entity.RequestLog.effort": "effort level",
+  "entity.RequestLog.thinking":
+    "Requested thinking switch; null when the caller left the model default",
   "entity.RequestLog.history": "inject_items 히스토리",
   "entity.RequestLog.input_images": "현재 user turn 입력 이미지",
   "entity.RequestLog.tools": "요청에 장착된 tool 정의 목록",

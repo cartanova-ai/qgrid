@@ -548,6 +548,7 @@ class RequestLogModelClass extends BaseModelClass<
     system_prompt?: string | null;
     requested_model_name?: string | null;
     effort?: string | null;
+    thinking?: boolean | null;
     service_tier?: string | null;
     project_name?: string | null;
     history?: HistoryItems;
@@ -567,6 +568,7 @@ class RequestLogModelClass extends BaseModelClass<
       requested_model_name: params.requested_model_name ?? null,
       model_name: null,
       effort: params.effort ?? null,
+      thinking: params.thinking ?? null,
       service_tier: params.service_tier ?? null,
       project_name: params.project_name ?? null,
       status: "running",
