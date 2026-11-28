@@ -49,6 +49,7 @@ const row: RequestLogSubsetP = {
   image_cost_usd: null,
   image_cost_method: null,
   effort: "low",
+  thinking: null,
   service_tier: null,
   status: "succeeded",
   response_json_ok: null,
