@@ -217,10 +217,11 @@ describe("qgrid run lifecycle start", () => {
     }));
   });
 
-  it.each([false, true, undefined])("does not log ignored effort when thinking is %s", async (thinking) => {
+  it.each([false, true, undefined])("logs thinking %s and drops the effort it ignores", async (thinking) => {
     await beforeQuery({ prompt: "hi", model: "openai/gpt-6-sol", thinking, effort: "high" });
     expect(createRunMock).toHaveBeenCalledWith(expect.objectContaining({
       effort: thinking === false ? undefined : "high",
+      thinking,
     }));
   });
 

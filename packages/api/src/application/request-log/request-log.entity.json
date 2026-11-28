@@ -158,6 +158,12 @@
       "desc": "effort level"
     },
     {
+      "name": "thinking",
+      "type": "boolean",
+      "nullable": true,
+      "desc": "Requested thinking switch; null when the caller left the model default"
+    },
+    {
       "name": "history",
       "type": "json",
       "id": "HistoryItems",
@@ -309,6 +315,7 @@
       "image_cost_usd",
       "image_cost_method",
       "effort",
+      "thinking",
       "service_tier",
       "history",
       "input_images",
@@ -342,6 +349,7 @@
       "image_cost_usd",
       "image_cost_method",
       "effort",
+      "thinking",
       "service_tier",
       "status",
       "response_json_ok",

@@ -33,11 +33,11 @@
   },
   {
     "path": "api/src/application/request-log/request-log.entity.json",
-    "checksum": "05496858e7a94b655c7bcec1cc41df97331cf670"
+    "checksum": "131df5cc5570793b5578a487af060effb93a27e3"
   },
   {
     "path": "api/src/application/request-log/request-log.model.ts",
-    "checksum": "9715a5e60da734659cdd68851baf11803c9b3819"
+    "checksum": "502f7134b537120eb318819e971cdfb0dd63deac"
   },
   {
     "path": "api/src/application/request-log/request-log.types.ts",
@@ -57,15 +57,15 @@
   },
   {
     "path": "api/src/application/sonamu.generated.http",
-    "checksum": "5a64b5c96ce3c7aab4af213c7562b777e568fe79"
+    "checksum": "8030b44f625500d542edf312720a7bfd6cd88c01"
   },
   {
     "path": "api/src/application/sonamu.generated.sso.ts",
-    "checksum": "6f9c492b18d9a52f36cc5c8f8109c0d126027353"
+    "checksum": "d9b4269fe062ed6d7b2d89e101c4b9647ccce496"
   },
   {
     "path": "api/src/application/sonamu.generated.ts",
-    "checksum": "f6a8314794855d713b28698c8aa83529bf3ee0b0"
+    "checksum": "b9fbb2677729131aad49b6205d13806a2fe62788"
   },
   {
     "path": "api/src/application/token/token.entity.json",
@@ -89,7 +89,7 @@
   },
   {
     "path": "api/src/i18n/sd.generated.ts",
-    "checksum": "bceda146d28ece0cc3a5a0a49212de569f74d892"
+    "checksum": "e6ee7a1eac999a807d300227170a1beef6d68046"
   },
   {
     "path": "api/src/sonamu.config.ts",
@@ -105,7 +105,7 @@
   },
   {
     "path": "web/src/i18n/sd.generated.ts",
-    "checksum": "a35e67bbe27e946b9426cab2a0b514305f06fc1b"
+    "checksum": "0cd5b8d2d796aef228621325377b0a7e7e8adf2b"
   },
   {
     "path": "web/src/services/monit/monit.types.ts",
@@ -133,7 +133,7 @@
   },
   {
     "path": "web/src/services/sonamu.generated.ts",
-    "checksum": "461fdfe6e90596b18126e198262db4113343a102"
+    "checksum": "74f481759427ef88e37793847cc031c9e5edc235"
   },
   {
     "path": "web/src/services/token/token.types.ts",
